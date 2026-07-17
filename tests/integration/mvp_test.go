@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/MSG-CTF/secure-provisioner/mvp/internal/ctfmock"
-	"github.com/MSG-CTF/secure-provisioner/mvp/internal/provisioner"
+	"github.com/MSG-CTF/secure-provisioner/internal/ctfmock"
+	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 )
 
 type testEnvironment struct {

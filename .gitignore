@@ -1,0 +1,19 @@
+# Go build artifacts
+bin/
+*.exe
+*.test
+*.out
+coverage.out
+
+# Local configuration and data
+.env
+.env.local
+data/
+*.db
+*.db-journal
+
+# Editor and operating system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,6 +1,6 @@
 # Secure Provisioner Local MVP
 
-`mvp/`는 운영 코드와 분리한 로컬 실습용 Go 모듈이다. Provisioner의 HTTP API, 비동기 Worker, TTL 정리, 멱등 처리와 간단한 `ctf-mock`을 한 컴퓨터에서 검증한다.
+이 저장소는 Provisioner의 HTTP API, 비동기 Worker, TTL 정리, 멱등 처리와 간단한 `ctf-mock`을 한 컴퓨터에서 검증할 수 있는 Go MVP를 포함한다.
 
 ## 구성
 
@@ -38,14 +38,14 @@ Fake Broker (:18080)
 첫 번째 PowerShell:
 
 ```powershell
-cd C:\Users\RYZEN1\Desktop\msg_ctf\secure-provisioner\mvp
+cd C:\Users\RYZEN1\Desktop\msg_ctf\secure-provisioner
 go run ./cmd/ctf-mock
 ```
 
 두 번째 PowerShell:
 
 ```powershell
-cd C:\Users\RYZEN1\Desktop\msg_ctf\secure-provisioner\mvp
+cd C:\Users\RYZEN1\Desktop\msg_ctf\secure-provisioner
 go run ./cmd/provisioner
 ```
 

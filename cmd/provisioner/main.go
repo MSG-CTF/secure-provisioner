@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/MSG-CTF/secure-provisioner/mvp/internal/provisioner"
+	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 )
 
 func main() {
@@ -47,7 +47,7 @@ func main() {
 		logger.Info("shutdown signal received")
 	case err := <-serverErrors:
 		if !errors.Is(err, http.ErrServerClosed) {
-			logger.Error("MVP provisioner stopped unexpectedly", "error", err)
+			logger.Error("http server stopped unexpectedly", "error", err)
 			os.Exit(1)
 		}
 	}

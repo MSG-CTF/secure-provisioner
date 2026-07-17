@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/MSG-CTF/secure-provisioner/mvp/internal/ctfmock"
+	"github.com/MSG-CTF/secure-provisioner/internal/ctfmock"
 )
 
 func main() {
