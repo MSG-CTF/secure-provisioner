@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/MSG-CTF/secure-provisioner/internal/httpapi"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 )
 
@@ -22,7 +23,7 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	server := &http.Server{
 		Addr:              address,
-		Handler:           provisioner.NewHandler(provisioner.UnavailableCreateWorkloadUseCase{}),
+		Handler:           httpapi.NewHandler(provisioner.UnavailableCreateWorkloadUseCase{}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,

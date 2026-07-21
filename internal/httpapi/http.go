@@ -1,4 +1,4 @@
-package provisioner
+package httpapi
 
 import (
 	"encoding/json"
@@ -6,13 +6,15 @@ import (
 	"io"
 	"mime"
 	"net/http"
+
+	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 )
 
 type API struct {
-	createWorkload CreateWorkloadUseCase
+	createWorkload provisioner.CreateWorkloadUseCase
 }
 
-func NewHandler(createWorkload CreateWorkloadUseCase) http.Handler {
+func NewHandler(createWorkload provisioner.CreateWorkloadUseCase) http.Handler {
 	api := &API{createWorkload: createWorkload}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /internal/v1/instances", api.handleCreateInstance)
@@ -31,14 +33,14 @@ func (api *API) handleCreateInstance(writer http.ResponseWriter, request *http.R
 		writeAPIError(writer, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON request body")
 		return
 	}
-	if err := ValidateCreateWorkloadRequest(createRequest); err != nil {
+	if err := createRequest.Validate(); err != nil {
 		writeAPIError(writer, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 		return
 	}
 
 	result, err := api.createWorkload.CreateWorkload(request.Context(), createRequest.ToCommand())
 	if err != nil {
-		if errors.Is(err, ErrRuntimeUnavailable) {
+		if errors.Is(err, provisioner.ErrRuntimeUnavailable) {
 			writeAPIError(writer, http.StatusServiceUnavailable, "RUNTIME_UNAVAILABLE", "runtime adapter is unavailable")
 			return
 		}
@@ -46,7 +48,7 @@ func (api *API) handleCreateInstance(writer http.ResponseWriter, request *http.R
 		return
 	}
 
-	writeJSON(writer, http.StatusCreated, result)
+	writeJSON(writer, http.StatusCreated, NewCreateWorkloadResponse(result))
 }
 
 func decodeJSON(request *http.Request, destination any) error {
