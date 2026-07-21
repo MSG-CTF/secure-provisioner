@@ -7,7 +7,9 @@ import (
 	"strings"
 )
 
-const RuntimeTypeKubernetes = "KUBERNETES"
+type RuntimeType string
+
+const RuntimeTypeKubernetes RuntimeType = "KUBERNETES"
 
 var ErrRuntimeUnavailable = errors.New("runtime adapter is unavailable")
 
@@ -40,7 +42,7 @@ type CreateWorkloadCommand struct {
 	RequestID      string
 	InstanceID     string
 	TeamID         int64
-	RuntimeType    string
+	RuntimeType    RuntimeType
 	TargetID       string
 	Image          string
 	ContainerPort  int
@@ -67,7 +69,7 @@ func (request CreateWorkloadRequest) ToCommand() CreateWorkloadCommand {
 		RequestID:      request.RequestID,
 		InstanceID:     request.InstanceID,
 		TeamID:         request.TeamID,
-		RuntimeType:    request.Target.RuntimeType,
+		RuntimeType:    RuntimeType(request.Target.RuntimeType),
 		TargetID:       request.Target.TargetID,
 		Image:          request.Workload.Image,
 		ContainerPort:  request.Workload.ContainerPort,
@@ -85,7 +87,7 @@ func ValidateCreateWorkloadRequest(request CreateWorkloadRequest) error {
 	if request.TeamID <= 0 {
 		return fmt.Errorf("team_id must be positive")
 	}
-	if request.Target.RuntimeType != RuntimeTypeKubernetes {
+	if RuntimeType(request.Target.RuntimeType) != RuntimeTypeKubernetes {
 		return fmt.Errorf("runtime_type must be %s", RuntimeTypeKubernetes)
 	}
 	if strings.TrimSpace(request.Target.TargetID) == "" {

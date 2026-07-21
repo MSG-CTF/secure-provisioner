@@ -18,7 +18,7 @@ func TestCreateWorkloadRequestToCommandPreservesSchedulerFields(t *testing.T) {
 	if command.RequestID != request.RequestID || command.InstanceID != request.InstanceID {
 		t.Fatalf("identity fields were not preserved: %#v", command)
 	}
-	if command.TeamID != request.TeamID || command.RuntimeType != request.Target.RuntimeType || command.TargetID != request.Target.TargetID {
+	if command.TeamID != request.TeamID || command.RuntimeType != RuntimeType(request.Target.RuntimeType) || command.TargetID != request.Target.TargetID {
 		t.Fatalf("target fields were not preserved: %#v", command)
 	}
 	if command.Image != request.Workload.Image || command.ContainerPort != request.Workload.ContainerPort {
@@ -70,7 +70,7 @@ func validCreateWorkloadRequest() CreateWorkloadRequest {
 		InstanceID: "018f3f1e-21b8-7a91-a30b-63b3400fd001",
 		TeamID:     1,
 		Target: RuntimeTarget{
-			RuntimeType: RuntimeTypeKubernetes,
+			RuntimeType: string(RuntimeTypeKubernetes),
 			TargetID:    "cluster-main",
 		},
 		Workload: RuntimeWorkload{
