@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"mime"
 	"net/http"
 )
 
@@ -19,9 +20,15 @@ func NewHandler(createWorkload CreateWorkloadUseCase) http.Handler {
 }
 
 func (api *API) handleCreateInstance(writer http.ResponseWriter, request *http.Request) {
+	mediaType, _, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		writeAPIError(writer, http.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE", "Content-Type must be application/json")
+		return
+	}
+
 	var createRequest CreateWorkloadRequest
 	if err := decodeJSON(request, &createRequest); err != nil {
-		writeAPIError(writer, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		writeAPIError(writer, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON request body")
 		return
 	}
 	if err := ValidateCreateWorkloadRequest(createRequest); err != nil {

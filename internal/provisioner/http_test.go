@@ -32,6 +32,7 @@ func TestCreateInstanceAcceptsSchedulerContract(t *testing.T) {
 
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
 	handler.ServeHTTP(response, request)
 
 	if response.Code != http.StatusCreated {
@@ -45,8 +46,16 @@ func TestCreateInstanceAcceptsSchedulerContract(t *testing.T) {
 		t.Fatalf("command = %#v, want %#v", useCase.command, wantCommand)
 	}
 
+	responseBody := append([]byte(nil), response.Body.Bytes()...)
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(responseBody, &fields); err != nil {
+		t.Fatalf("decode response fields: %v", err)
+	}
+	if len(fields) != 2 || fields["runtime_workload_id"] == nil || fields["service_url"] == nil {
+		t.Fatalf("response fields = %v, want exactly runtime_workload_id and service_url", fields)
+	}
 	var result CreateWorkloadResult
-	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(responseBody, &result); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 	if result != useCase.result {
@@ -74,6 +83,10 @@ func TestCreateInstanceRejectsInvalidJSONContracts(t *testing.T) {
 			name: "multiple objects",
 			body: `{}` + "\n" + `{}`,
 		},
+		{
+			name: "wrong field type",
+			body: `{"request_id":"req-secret-value","instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001","team_id":"secret-team"}`,
+		},
 	}
 
 	for _, test := range tests {
@@ -81,6 +94,7 @@ func TestCreateInstanceRejectsInvalidJSONContracts(t *testing.T) {
 			useCase := &recordingCreateUseCase{}
 			response := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(test.body))
+			request.Header.Set("Content-Type", "application/json")
 
 			NewHandler(useCase).ServeHTTP(response, request)
 
@@ -89,6 +103,12 @@ func TestCreateInstanceRejectsInvalidJSONContracts(t *testing.T) {
 			}
 			if useCase.calls != 0 {
 				t.Fatalf("CreateWorkload() calls = %d, want 0", useCase.calls)
+			}
+			if !strings.Contains(response.Body.String(), "invalid JSON request body") {
+				t.Fatalf("response does not use stable decode error: %s", response.Body.String())
+			}
+			if strings.Contains(response.Body.String(), "CreateWorkloadRequest") || strings.Contains(response.Body.String(), "secret-team") {
+				t.Fatalf("response leaked decoder details: %s", response.Body.String())
 			}
 			assertErrorCode(t, response, "INVALID_REQUEST")
 		})
@@ -110,6 +130,7 @@ func TestCreateInstanceRejectsInvalidResourceValues(t *testing.T) {
 	}`
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json; charset=utf-8")
 
 	NewHandler(useCase).ServeHTTP(response, request)
 
@@ -126,6 +147,7 @@ func TestCreateInstanceHidesUseCaseFailureDetails(t *testing.T) {
 	useCase := &recordingCreateUseCase{err: errors.New("kubeconfig contains secret-internal-path")}
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(validCreateRequestJSON()))
+	request.Header.Set("Content-Type", "application/json")
 
 	NewHandler(useCase).ServeHTTP(response, request)
 
@@ -142,6 +164,7 @@ func TestCreateInstanceReportsUnavailableRuntime(t *testing.T) {
 	useCase := &recordingCreateUseCase{err: ErrRuntimeUnavailable}
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(validCreateRequestJSON()))
+	request.Header.Set("Content-Type", "application/json")
 
 	NewHandler(useCase).ServeHTTP(response, request)
 
@@ -149,6 +172,23 @@ func TestCreateInstanceReportsUnavailableRuntime(t *testing.T) {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusServiceUnavailable, response.Body.String())
 	}
 	assertErrorCode(t, response, "RUNTIME_UNAVAILABLE")
+}
+
+func TestCreateInstanceRequiresJSONContentType(t *testing.T) {
+	useCase := &recordingCreateUseCase{}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(validCreateRequestJSON()))
+	request.Header.Set("Content-Type", "text/plain")
+
+	NewHandler(useCase).ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusUnsupportedMediaType, response.Body.String())
+	}
+	if useCase.calls != 0 {
+		t.Fatalf("CreateWorkload() calls = %d, want 0", useCase.calls)
+	}
+	assertErrorCode(t, response, "UNSUPPORTED_MEDIA_TYPE")
 }
 
 type recordingCreateUseCase struct {
