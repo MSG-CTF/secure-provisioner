@@ -39,3 +39,15 @@ func ClassifyExecutionError(err error) (code string, retryable bool) {
 	}
 	return defaultExecutionErrorCode, false
 }
+
+func normalizeStableErrorCode(code string) string {
+	if len(code) == 0 || code[0] < 'A' || code[0] > 'Z' {
+		return defaultExecutionErrorCode
+	}
+	for _, character := range code[1:] {
+		if (character < 'A' || character > 'Z') && (character < '0' || character > '9') && character != '_' {
+			return defaultExecutionErrorCode
+		}
+	}
+	return code
+}

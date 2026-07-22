@@ -61,7 +61,11 @@ func (s *MemoryStore) Next(ctx context.Context) (Operation, error) {
 			operation, ok := s.operations[id]
 			if ok && operation.Status == OperationStatusQueued {
 				copy := copyOperation(*operation)
+				hasQueuedOperation := s.hasQueuedOperation()
 				s.mu.Unlock()
+				if hasQueuedOperation {
+					s.notify()
+				}
 				return copy, nil
 			}
 		}
@@ -117,7 +121,7 @@ func (s *MemoryStore) MarkRetrying(id, errorCode string) (Operation, error) {
 		return Operation{}, ErrInvalidTransition
 	}
 	operation.Status = OperationStatusRetrying
-	operation.LastErrorCode = errorCode
+	operation.LastErrorCode = normalizeStableErrorCode(errorCode)
 	return copyOperation(*operation), nil
 }
 
@@ -165,7 +169,7 @@ func (s *MemoryStore) MarkFailed(id, errorCode string) (Operation, error) {
 		return Operation{}, ErrInvalidTransition
 	}
 	operation.Status = OperationStatusFailed
-	operation.LastErrorCode = errorCode
+	operation.LastErrorCode = normalizeStableErrorCode(errorCode)
 	return copyOperation(*operation), nil
 }
 
@@ -238,6 +242,16 @@ func (s *MemoryStore) removeQueuedID(id string) {
 			return
 		}
 	}
+}
+
+func (s *MemoryStore) hasQueuedOperation() bool {
+	for _, id := range s.queue {
+		operation, ok := s.operations[id]
+		if ok && operation.Status == OperationStatusQueued {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *MemoryStore) notify() {

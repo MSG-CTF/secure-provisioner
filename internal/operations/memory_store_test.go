@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 )
@@ -114,6 +115,54 @@ func TestMemoryStoreNextIsFIFOAndHonorsCancellation(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreDeliversQueuedOperationsToAllWaitingWorkers(t *testing.T) {
+	store := NewMemoryStore(sequenceIDs("op-1", "op-2"))
+	ctx := newWaitingContext(2)
+	type nextResult struct {
+		operation Operation
+		err       error
+	}
+	results := make(chan nextResult, 2)
+	for range 2 {
+		go func() {
+			operation, err := store.Next(ctx)
+			results <- nextResult{operation: operation, err: err}
+		}()
+	}
+	ctx.waitForWaiters(t)
+
+	// A capacity-one channel holds one signal after two consecutive non-blocking
+	// notifications. Populate both operations before releasing that coalesced signal.
+	store.mu.Lock()
+	_, created, err := store.enqueueCreate(validCreateCommand("req-1"), 3)
+	if err != nil || !created {
+		store.mu.Unlock()
+		t.Fatalf("first enqueue: %v %v", created, err)
+	}
+	_, created, err = store.enqueueCreate(validCreateCommand("req-2"), 3)
+	store.mu.Unlock()
+	if err != nil || !created {
+		t.Fatalf("second enqueue: %v %v", created, err)
+	}
+	store.notify()
+
+	seen := make(map[string]bool)
+	for range 2 {
+		select {
+		case result := <-results:
+			if result.err != nil {
+				t.Fatal(result.err)
+			}
+			seen[result.operation.ID] = true
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for queued operation")
+		}
+	}
+	if !seen["op-1"] || !seen["op-2"] {
+		t.Fatalf("got operations %#v", seen)
+	}
+}
+
 func TestMemoryStoreTransitionsAndReturnsCopies(t *testing.T) {
 	store := NewMemoryStore(sequenceIDs("op-1"))
 	original, _, err := store.EnqueueCreate(validCreateCommand("req-1"), 2)
@@ -213,6 +262,23 @@ func TestMemoryStoreStoresStableErrorCodes(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreNormalizesUnsafeErrorCodes(t *testing.T) {
+	store := NewMemoryStore(sequenceIDs("op-1", "op-2"))
+	unsafeCode := "https://user:secret@cluster.example/runtime"
+
+	retrying := enqueueAndStart(t, store, "req-1")
+	updated, err := store.MarkRetrying(retrying.ID, unsafeCode)
+	if err != nil || updated.LastErrorCode != defaultExecutionErrorCode {
+		t.Fatalf("retrying: %#v %v", updated, err)
+	}
+
+	failed := enqueueAndStart(t, store, "req-2")
+	updated, err = store.MarkFailed(failed.ID, unsafeCode)
+	if err != nil || updated.LastErrorCode != defaultExecutionErrorCode {
+		t.Fatalf("failed: %#v %v", updated, err)
+	}
+}
+
 func TestMemoryStoreReturnsNotFoundForUnknownOperation(t *testing.T) {
 	store := NewMemoryStore(sequenceIDs("op-1"))
 	if _, err := store.Get("missing"); !errors.Is(err, ErrOperationNotFound) {
@@ -225,6 +291,48 @@ func validCreateCommand(requestID string) provisioner.CreateWorkloadCommand {
 		RequestID: requestID, InstanceID: "inst-1", TeamID: 7,
 		RuntimeType: provisioner.RuntimeTypeKubernetes, TargetID: "target-1", Image: "nginx:1.27", ContainerPort: 8080,
 		ResourceLimits: provisioner.ResourceLimits{CPUMillicores: 100, MemoryMiB: 128, EphemeralStorageMiB: 256},
+	}
+}
+
+func enqueueAndStart(t *testing.T, store *MemoryStore, requestID string) Operation {
+	t.Helper()
+	operation, _, err := store.EnqueueCreate(validCreateCommand(requestID), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkRunning(operation.ID); err != nil {
+		t.Fatal(err)
+	}
+	return operation
+}
+
+type waitingContext struct {
+	context.Context
+	done    chan struct{}
+	waiters chan struct{}
+}
+
+func newWaitingContext(waiterCount int) *waitingContext {
+	return &waitingContext{
+		Context: context.Background(),
+		done:    make(chan struct{}),
+		waiters: make(chan struct{}, waiterCount),
+	}
+}
+
+func (c *waitingContext) Done() <-chan struct{} {
+	c.waiters <- struct{}{}
+	return c.done
+}
+
+func (c *waitingContext) waitForWaiters(t *testing.T) {
+	t.Helper()
+	for range cap(c.waiters) {
+		select {
+		case <-c.waiters:
+		case <-time.After(time.Second):
+			t.Fatal("worker did not enter Next wait path")
+		}
 	}
 }
 
