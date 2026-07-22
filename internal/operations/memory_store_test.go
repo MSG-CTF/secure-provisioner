@@ -38,6 +38,37 @@ func TestMemoryStoreRejectsIdempotencyConflict(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreRejectsGeneratedOperationIDConflictWithoutOverwritingExistingRequest(t *testing.T) {
+	store := NewMemoryStore(sequenceIDs("op-1", "op-1"))
+	firstCommand := validCreateCommand("req-1")
+	first, created, err := store.EnqueueCreate(firstCommand, 3)
+	if err != nil || !created {
+		t.Fatalf("first enqueue: %#v %v %v", first, created, err)
+	}
+
+	if _, created, err := store.EnqueueCreate(validCreateCommand("req-2"), 3); !errors.Is(err, ErrOperationIDConflict) || created {
+		t.Fatalf("conflicting enqueue: created=%v err=%v", created, err)
+	}
+
+	stored, err := store.Get(first.ID)
+	if err != nil || stored.RequestID != firstCommand.RequestID {
+		t.Fatalf("stored first operation: %#v %v", stored, err)
+	}
+	duplicate, created, err := store.EnqueueCreate(firstCommand, 3)
+	if err != nil || created || duplicate.ID != first.ID {
+		t.Fatalf("first request dedupe: %#v %v %v", duplicate, created, err)
+	}
+	next, err := store.Next(context.Background())
+	if err != nil || next.ID != first.ID {
+		t.Fatalf("first queued operation: %#v %v", next, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := store.Next(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("conflicting enqueue left a queued operation: %v", err)
+	}
+}
+
 func TestMemoryStoreConcurrentDuplicateCreatesOneOperation(t *testing.T) {
 	store := NewMemoryStore(sequenceIDs("op-1", "op-2"))
 	command := validCreateCommand("req-1")
@@ -227,10 +258,56 @@ func TestMemoryStoreRequeueMakesCancelledOperationAvailable(t *testing.T) {
 	if err := store.Requeue(operation.ID); err != nil {
 		t.Fatal(err)
 	}
+	stored, err := store.Get(operation.ID)
+	if err != nil || stored.Attempt != 0 {
+		t.Fatalf("cancelled running operation: %#v %v", stored, err)
+	}
 
 	next, err := store.Next(context.Background())
 	if err != nil || next.ID != operation.ID || next.Status != OperationStatusQueued {
 		t.Fatalf("requeued next: %#v %v", next, err)
+	}
+}
+
+func TestMemoryStoreRejectsInvalidCreateSuccessResult(t *testing.T) {
+	for _, result := range []OperationResult{
+		{},
+		{DeleteCompleted: true},
+	} {
+		store := NewMemoryStore(sequenceIDs("op-1"))
+		operation := enqueueAndStart(t, store, "req-1")
+
+		if _, err := store.MarkSucceeded(operation.ID, result); !errors.Is(err, ErrInvalidOperationResult) {
+			t.Fatalf("MarkSucceeded(%#v) error = %v, want ErrInvalidOperationResult", result, err)
+		}
+		stored, err := store.Get(operation.ID)
+		if err != nil || stored.Status != OperationStatusRunning {
+			t.Fatalf("stored after invalid result: %#v %v", stored, err)
+		}
+	}
+}
+
+func TestMemoryStoreRejectsInvalidDeleteSuccessResult(t *testing.T) {
+	for _, result := range []OperationResult{
+		{},
+		{Create: &provisioner.CreateWorkloadResult{RuntimeWorkloadID: "default/inst-1", ServiceURL: "http://service.example"}},
+	} {
+		store := NewMemoryStore(sequenceIDs("op-1"))
+		operation, _, err := store.EnqueueDelete(validDeleteCommand("req-1"), 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.MarkRunning(operation.ID); err != nil {
+			t.Fatal(err)
+		}
+
+		if _, err := store.MarkSucceeded(operation.ID, result); !errors.Is(err, ErrInvalidOperationResult) {
+			t.Fatalf("MarkSucceeded(%#v) error = %v, want ErrInvalidOperationResult", result, err)
+		}
+		stored, err := store.Get(operation.ID)
+		if err != nil || stored.Status != OperationStatusRunning {
+			t.Fatalf("stored after invalid result: %#v %v", stored, err)
+		}
 	}
 }
 
@@ -248,6 +325,10 @@ func TestMemoryStoreRequeueRestoresClaimedQueuedOperationWithoutDuplicate(t *tes
 	}
 	if err := store.Requeue(operation.ID); err != nil {
 		t.Fatal(err)
+	}
+	stored, err := store.Get(operation.ID)
+	if err != nil || stored.Attempt != 0 {
+		t.Fatalf("requeued claimed operation: %#v %v", stored, err)
 	}
 	next, err := store.Next(context.Background())
 	if err != nil || next.ID != operation.ID {
@@ -275,6 +356,10 @@ func TestMemoryStoreStoresStableErrorCodes(t *testing.T) {
 	}
 	if err := store.Requeue(operation.ID); err != nil {
 		t.Fatal(err)
+	}
+	stored, err := store.Get(operation.ID)
+	if err != nil || stored.Attempt != 1 {
+		t.Fatalf("requeued retrying operation: %#v %v", stored, err)
 	}
 	if _, err := store.Next(context.Background()); err != nil {
 		t.Fatal(err)
@@ -317,6 +402,16 @@ func validCreateCommand(requestID string) provisioner.CreateWorkloadCommand {
 		RequestID: requestID, InstanceID: "inst-1", TeamID: 7,
 		RuntimeType: provisioner.RuntimeTypeKubernetes, TargetID: "target-1", Image: "nginx:1.27", ContainerPort: 8080,
 		ResourceLimits: provisioner.ResourceLimits{CPUMillicores: 100, MemoryMiB: 128, EphemeralStorageMiB: 256},
+	}
+}
+
+func validDeleteCommand(requestID string) provisioner.DeleteWorkloadCommand {
+	return provisioner.DeleteWorkloadCommand{
+		RequestID:   requestID,
+		InstanceID:  "inst-1",
+		TeamID:      7,
+		RuntimeType: provisioner.RuntimeTypeKubernetes,
+		TargetID:    "target-1",
 	}
 }
 

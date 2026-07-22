@@ -136,6 +136,9 @@ func (s *MemoryStore) Requeue(id string) error {
 		s.mu.Unlock()
 		return ErrInvalidTransition
 	}
+	if operation.Status == OperationStatusRunning && operation.Attempt > 0 {
+		operation.Attempt--
+	}
 	operation.Status = OperationStatusQueued
 	shouldNotify := !s.hasQueuedID(id)
 	if shouldNotify {
@@ -157,6 +160,9 @@ func (s *MemoryStore) MarkSucceeded(id string, result OperationResult) (Operatio
 	}
 	if operation.Status != OperationStatusRunning {
 		return Operation{}, ErrInvalidTransition
+	}
+	if !operationResultMatchesType(operation.Type, result) {
+		return Operation{}, ErrInvalidOperationResult
 	}
 	operation.Status = OperationStatusSucceeded
 	operation.Result = copyOperationResult(result)
@@ -189,6 +195,9 @@ func (s *MemoryStore) enqueueCreate(command provisioner.CreateWorkloadCommand, m
 	if err != nil {
 		return Operation{}, false, err
 	}
+	if _, exists := s.operations[id]; exists {
+		return Operation{}, false, ErrOperationIDConflict
+	}
 	operation, err := NewCreateOperation(id, command, maxAttempts)
 	if err != nil {
 		return Operation{}, false, err
@@ -208,6 +217,9 @@ func (s *MemoryStore) enqueueDelete(command provisioner.DeleteWorkloadCommand, m
 	if err != nil {
 		return Operation{}, false, err
 	}
+	if _, exists := s.operations[id]; exists {
+		return Operation{}, false, ErrOperationIDConflict
+	}
 	operation, err := NewDeleteOperation(id, command, maxAttempts)
 	if err != nil {
 		return Operation{}, false, err
@@ -221,6 +233,17 @@ func (s *MemoryStore) add(operation Operation) {
 	s.operations[operation.ID] = &stored
 	s.requestIDs[operation.RequestID] = operation.ID
 	s.queue = append(s.queue, operation.ID)
+}
+
+func operationResultMatchesType(operationType OperationType, result OperationResult) bool {
+	switch operationType {
+	case OperationTypeCreate:
+		return result.Create != nil && !result.DeleteCompleted
+	case OperationTypeDelete:
+		return result.Create == nil && result.DeleteCompleted
+	default:
+		return false
+	}
 }
 
 func (s *MemoryStore) operationForRequest(requestID string) (*Operation, bool) {

@@ -8,9 +8,11 @@ import (
 )
 
 var (
-	ErrOperationNotFound   = errors.New("operation not found")
-	ErrIdempotencyConflict = errors.New("idempotency conflict")
-	ErrInvalidTransition   = errors.New("invalid operation transition")
+	ErrOperationNotFound      = errors.New("operation not found")
+	ErrIdempotencyConflict    = errors.New("idempotency conflict")
+	ErrOperationIDConflict    = errors.New("operation ID conflict")
+	ErrInvalidTransition      = errors.New("invalid operation transition")
+	ErrInvalidOperationResult = errors.New("invalid operation result")
 )
 
 type Store interface {

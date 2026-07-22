@@ -40,7 +40,7 @@ func TestWorkerRetriesOnlyRetryableErrors(t *testing.T) {
 	executor := &scriptedExecutor{results: []execution{
 		{err: NewExecutionError("RUNTIME_TIMEOUT", true, errors.New("secret endpoint"))},
 		{err: NewExecutionError("RUNTIME_TIMEOUT", true, errors.New("secret endpoint"))},
-		{result: OperationResult{DeleteCompleted: true}},
+		{result: successfulCreateResult()},
 	}}
 	worker, err := NewWorker(store, executor, WorkerConfig{Concurrency: 1, Backoff: noBackoff, Sleep: sleepWithContext})
 	if err != nil {
@@ -48,7 +48,7 @@ func TestWorkerRetriesOnlyRetryableErrors(t *testing.T) {
 	}
 	runUntilTerminal(t, worker, store, operation.ID)
 	stored, _ := store.Get(operation.ID)
-	if stored.Status != OperationStatusSucceeded || stored.Attempt != 3 {
+	if stored.Status != OperationStatusSucceeded || stored.Attempt != 3 || stored.Result.Create == nil {
 		t.Fatalf("stored: %#v", stored)
 	}
 }
@@ -164,6 +164,37 @@ func TestWorkerCancellationRequeuesInFlightOperation(t *testing.T) {
 	next, err := store.Next(context.Background())
 	if err != nil || next.ID != operation.ID {
 		t.Fatalf("requeued next: %#v %v", next, err)
+	}
+}
+
+func TestWorkerCancellationDoesNotConsumeAttemptBeforeRestart(t *testing.T) {
+	store := NewMemoryStore(sequenceIDs("op-1"))
+	operation, _, err := store.EnqueueCreate(validCreateCommand("req-1"), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelledExecutor := newCancellationExecutor()
+	firstWorker, err := NewWorker(store, cancelledExecutor, WorkerConfig{Concurrency: 1, Backoff: noBackoff, Sleep: sleepWithContext})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- firstWorker.Run(ctx) }()
+	cancelledExecutor.waitForStarted(t, 1)
+	cancel()
+	if err := receiveRun(t, firstDone); err != nil {
+		t.Fatal(err)
+	}
+
+	secondWorker, err := NewWorker(store, &scriptedExecutor{results: []execution{{result: successfulCreateResult()}}}, WorkerConfig{Concurrency: 1, Backoff: noBackoff, Sleep: sleepWithContext})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runUntilTerminal(t, secondWorker, store, operation.ID)
+	stored, err := store.Get(operation.ID)
+	if err != nil || stored.Status != OperationStatusSucceeded || stored.Attempt != 1 || stored.Attempt > stored.MaxAttempts || stored.Result.Create == nil {
+		t.Fatalf("stored after restart: %#v %v", stored, err)
 	}
 }
 
@@ -317,6 +348,10 @@ func receiveRun(t *testing.T, done <-chan error) error {
 
 func noBackoff(int) time.Duration { return 0 }
 
+func successfulCreateResult() OperationResult {
+	return OperationResult{Create: &provisioner.CreateWorkloadResult{RuntimeWorkloadID: "default/inst-1", ServiceURL: "http://service.example"}}
+}
+
 func sleepWithContext(ctx context.Context, duration time.Duration) error {
 	timer := time.NewTimer(duration)
 	defer timer.Stop()
@@ -376,7 +411,7 @@ func (e *blockingExecutor) Execute(ctx context.Context, operation Operation) (Op
 	e.mu.Lock()
 	e.inFlight--
 	e.mu.Unlock()
-	return OperationResult{DeleteCompleted: true}, nil
+	return successfulCreateResult(), nil
 }
 
 func (e *blockingExecutor) waitForStarted(t *testing.T, want int) {
