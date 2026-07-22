@@ -3,7 +3,9 @@ package k3s
 import (
 	"context"
 	"errors"
+	goruntime "runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -43,6 +45,193 @@ func TestAdapterRoutesEachTargetToItsOwnClient(t *testing.T) {
 	}
 	assertNamespaceCreateCount(t, awsClient, 1)
 	assertNamespaceCreateCount(t, gcpClient, 1)
+}
+
+func TestWorkloadLockSetCancelsSameKeyWaiterAndCleansEntry(t *testing.T) {
+	locks := newWorkloadLockSet()
+	key := workloadLockKey("target", "same-workload")
+	releaseFirst, err := locks.acquire(context.Background(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitCtx, cancelWait := context.WithCancel(context.Background())
+	waitResult := make(chan error, 1)
+	go func() {
+		release, acquireErr := locks.acquire(waitCtx, key)
+		if release != nil {
+			release()
+		}
+		waitResult <- acquireErr
+	}()
+	waitForWorkloadLockRefs(t, locks, key, 2)
+	cancelWait()
+	if err := <-waitResult; !errors.Is(err, context.Canceled) {
+		t.Fatalf("wait error = %v, want context cancellation", err)
+	}
+	releaseFirst()
+	assertWorkloadLockEntries(t, locks, 0)
+}
+
+func TestWorkloadLockSetAllowsDifferentKeysInParallel(t *testing.T) {
+	locks := newWorkloadLockSet()
+	releaseFirst, err := locks.acquire(context.Background(), workloadLockKey("target", "first-workload"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	releaseSecond, err := locks.acquire(ctx, workloadLockKey("target", "second-workload"))
+	if err != nil {
+		t.Fatalf("different key acquisition blocked: %v", err)
+	}
+	releaseSecond()
+	releaseFirst()
+	assertWorkloadLockEntries(t, locks, 0)
+}
+
+func TestAdapterSerializesSameWorkloadThroughFailureRollbackThenSuccess(t *testing.T) {
+	command := validCreateCommand("aws-dev")
+	baseClient := readyClient(t, command)
+	deleteAccepted := make(chan struct{}, 1)
+	postDeleteRead := make(chan struct{}, 1)
+	deletionComplete := make(chan struct{})
+	client := &coreOverrideClient{
+		Interface: baseClient,
+		core: &coreOverride{
+			CoreV1Interface: baseClient.CoreV1(),
+			namespaces: &asynchronousDeleteNamespaces{
+				NamespaceInterface: baseClient.CoreV1().Namespaces(),
+				deleteAccepted:     deleteAccepted,
+				postDeleteRead:     postDeleteRead,
+				deletionComplete:   deletionComplete,
+			},
+		},
+	}
+	firstApplyEntered := make(chan struct{})
+	releaseFirstApply := make(chan struct{})
+	applyFailure := errors.New("first operation deployment failure")
+	var deploymentCreates atomic.Int32
+	baseClient.PrependReactor("create", "deployments", func(k8stesting.Action) (bool, runtime.Object, error) {
+		attempt := deploymentCreates.Add(1)
+		if attempt == 1 {
+			close(firstApplyEntered)
+			<-releaseFirstApply
+		}
+		if attempt <= maxReconcileAttempts {
+			return true, nil, applyFailure
+		}
+		return false, nil, nil
+	})
+	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
+	firstResult := make(chan createResult, 1)
+	go func() {
+		result, err := adapter.CreateWorkload(context.Background(), command)
+		firstResult <- createResult{result: result, err: err}
+	}()
+	<-firstApplyEntered
+
+	secondResult := make(chan createResult, 1)
+	go func() {
+		result, err := adapter.CreateWorkload(context.Background(), command)
+		secondResult <- createResult{result: result, err: err}
+	}()
+	key := workloadLockKey(command.TargetID, command.InstanceID)
+	waitForWorkloadLockRefs(t, adapter.workloadLocks, key, 2)
+	if got := deploymentCreates.Load(); got != 1 {
+		t.Fatalf("deployment creates before first rollback = %d, want 1", got)
+	}
+	close(releaseFirstApply)
+	<-deleteAccepted
+	<-postDeleteRead
+	assertNoCreateResult(t, firstResult)
+	if got := deploymentCreates.Load(); got != maxReconcileAttempts {
+		t.Fatalf("deployment creates before asynchronous rollback completed = %d, want %d", got, maxReconcileAttempts)
+	}
+	close(deletionComplete)
+
+	first := <-firstResult
+	if runtimeErrorCode(t, first.err) != "RESOURCE_APPLY_FAILED" {
+		t.Fatalf("first code = %q, want RESOURCE_APPLY_FAILED", runtimeErrorCode(t, first.err))
+	}
+	second := <-secondResult
+	if second.err != nil {
+		t.Fatal(second.err)
+	}
+	namespace, err := NamespaceForInstance(command.InstanceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.CoreV1().Namespaces().Get(context.Background(), namespace, metav1.GetOptions{}); err != nil {
+		t.Fatalf("successful second operation namespace missing: %v", err)
+	}
+	assertDeleteActionCount(t, baseClient, "namespaces", 1)
+	assertWorkloadLockEntries(t, adapter.workloadLocks, 0)
+}
+
+func TestAdapterAllowsDifferentInstancesToCreateInParallel(t *testing.T) {
+	firstCommand := validCreateCommand("aws-dev")
+	secondCommand := validCreateCommand("aws-dev")
+	secondCommand.InstanceID = "018f3f1e-21b8-7a91-a30b-63b3400fd002"
+	firstResources, err := BuildResourceSet(validCluster("aws-dev"), firstCommand)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondResources, err := BuildResourceSet(validCluster("aws-dev"), secondCommand)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstPod := readyPod(firstResources.Namespace.Name, firstResources.ExpectedSpecHash, "first-pod", "10.0.0.1", firstResources.Deployment.Spec.Template.Labels)
+	secondPod := readyPod(secondResources.Namespace.Name, secondResources.ExpectedSpecHash, "second-pod", "10.0.0.2", secondResources.Deployment.Spec.Template.Labels)
+	baseClient := fake.NewSimpleClientset(firstPod, readyEndpointSlice(firstResources.Namespace.Name, firstPod), secondPod, readyEndpointSlice(secondResources.Namespace.Name, secondPod))
+	installDeploymentController(baseClient, true)
+	firstNamespaceEntered := make(chan struct{})
+	releaseFirstNamespace := make(chan struct{})
+	secondNamespaceEntered := make(chan struct{}, 1)
+	client := &coreOverrideClient{
+		Interface: baseClient,
+		core: &coreOverride{
+			CoreV1Interface: baseClient.CoreV1(),
+			namespaces: &parallelCreateNamespaces{
+				NamespaceInterface:    baseClient.CoreV1().Namespaces(),
+				blockedName:           firstResources.Namespace.Name,
+				parallelName:          secondResources.Namespace.Name,
+				blockedCreateEntered:  firstNamespaceEntered,
+				releaseBlockedCreate:  releaseFirstNamespace,
+				parallelCreateEntered: secondNamespaceEntered,
+			},
+		},
+	}
+	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
+	firstResult := make(chan createResult, 1)
+	go func() {
+		result, createErr := adapter.CreateWorkload(context.Background(), firstCommand)
+		firstResult <- createResult{result: result, err: createErr}
+	}()
+	<-firstNamespaceEntered
+
+	secondCtx, cancelSecond := context.WithTimeout(context.Background(), time.Second)
+	defer cancelSecond()
+	secondResult := make(chan createResult, 1)
+	go func() {
+		result, createErr := adapter.CreateWorkload(secondCtx, secondCommand)
+		secondResult <- createResult{result: result, err: createErr}
+	}()
+	select {
+	case <-secondNamespaceEntered:
+	case got := <-secondResult:
+		close(releaseFirstNamespace)
+		t.Fatalf("different instance did not reach Kubernetes in parallel: %#v", got)
+	}
+	second := <-secondResult
+	if second.err != nil {
+		close(releaseFirstNamespace)
+		t.Fatal(second.err)
+	}
+	close(releaseFirstNamespace)
+	if first := <-firstResult; first.err != nil {
+		t.Fatal(first.err)
+	}
+	assertWorkloadLockEntries(t, adapter.workloadLocks, 0)
 }
 
 func TestAdapterReturnsOnlyAfterReadyPodAndEndpointSlice(t *testing.T) {
@@ -161,6 +350,26 @@ func TestAdapterRejectsEndpointForDifferentReadyPod(t *testing.T) {
 	installDeploymentController(client, true)
 	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
 	assertNotReadyAfterGate(t, adapter, client, command, "list", "endpointslices")
+}
+
+func TestReadyEndpointRequiresNonblankAddressEvenWithMatchingTargetRef(t *testing.T) {
+	command := validCreateCommand("aws-dev")
+	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pod := readyPod(resources.Namespace.Name, resources.ExpectedSpecHash, "ready-pod", "10.0.0.1", resources.Deployment.Spec.Template.Labels)
+	endpointSlice := readyEndpointSlice(resources.Namespace.Name, pod)
+	endpointSlice.Endpoints[0].Addresses = []string{"", "   "}
+	client := fake.NewSimpleClientset(endpointSlice)
+
+	ready, err := hasReadyEndpointForPods(context.Background(), client, resources.Namespace.Name, []corev1.Pod{*pod})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ready {
+		t.Fatal("matching TargetRef without a nonblank address was accepted")
+	}
 }
 
 func TestAdapterAcceptsPodIPMatchedEndpointWithoutTargetRef(t *testing.T) {
@@ -367,8 +576,8 @@ func TestAdapterRetriesRollbackReadAfterNamespaceCommitReadBacksFail(t *testing.
 	if runtimeErrorCode(t, err) != "RESOURCE_APPLY_FAILED" {
 		t.Fatalf("code = %q, want RESOURCE_APPLY_FAILED", runtimeErrorCode(t, err))
 	}
-	if getCount != 5 {
-		t.Fatalf("namespace get actions = %d, want rollback read after 4 reconciliation reads", getCount)
+	if getCount != 6 {
+		t.Fatalf("namespace get actions = %d, want rollback read after 4 reconciliation reads plus deletion confirmation", getCount)
 	}
 	assertDeleteActionCount(t, client, "namespaces", 1)
 }
@@ -462,6 +671,67 @@ func TestAdapterDoesNotRetryOrDeleteForeignDeploymentFromAlreadyExistsRace(t *te
 	}
 	assertCreateActionCount(t, client, "deployments", 1)
 	assertDeleteActionCount(t, client, "namespaces", 0)
+}
+
+func TestAdapterPreflightsForeignServiceAndIngressBeforeAnyChildWrite(t *testing.T) {
+	for _, foreignResource := range []string{"services", "ingresses"} {
+		t.Run(foreignResource, func(t *testing.T) {
+			command := validCreateCommand("aws-dev")
+			resources, err := BuildResourceSet(validCluster("aws-dev"), command)
+			if err != nil {
+				t.Fatal(err)
+			}
+			existingDeployment := resources.Deployment.DeepCopy()
+			existingDeployment.Spec.Template.Spec.Containers[0].Image = "existing-image"
+			objects := []runtime.Object{resources.Namespace, existingDeployment}
+			if foreignResource == "services" {
+				foreignService := resources.Service.DeepCopy()
+				foreignService.Labels["msgctf.io/instance-id"] = "018f3f1e-21b8-7a91-a30b-63b3400fd999"
+				objects = append(objects, foreignService)
+			} else {
+				foreignIngress := resources.Ingress.DeepCopy()
+				foreignIngress.Labels["msgctf.io/instance-id"] = "018f3f1e-21b8-7a91-a30b-63b3400fd999"
+				objects = append(objects, resources.Service, foreignIngress)
+			}
+			client := fake.NewSimpleClientset(objects...)
+			client.ClearActions()
+			adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
+
+			_, err = adapter.CreateWorkload(context.Background(), command)
+			if runtimeErrorCode(t, err) != "RESOURCE_OWNERSHIP_CONFLICT" {
+				t.Fatalf("code = %q, want RESOURCE_OWNERSHIP_CONFLICT", runtimeErrorCode(t, err))
+			}
+			assertNoChildWrites(t, client.Actions())
+			stored, getErr := client.AppsV1().Deployments(resources.Namespace.Name).Get(context.Background(), resourceName, metav1.GetOptions{})
+			if getErr != nil {
+				t.Fatal(getErr)
+			}
+			if got := stored.Spec.Template.Spec.Containers[0].Image; got != "existing-image" {
+				t.Fatalf("existing Deployment image = %q, want unchanged", got)
+			}
+			assertDeleteActionCount(t, client, "namespaces", 0)
+		})
+	}
+}
+
+func TestAdapterPreflightAPIErrorRollsBackWithoutChildWrites(t *testing.T) {
+	command := validCreateCommand("aws-dev")
+	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := fake.NewSimpleClientset(resources.Namespace, resources.Deployment)
+	client.PrependReactor("get", "services", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("service preflight failure")
+	})
+	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
+
+	_, err = adapter.CreateWorkload(context.Background(), command)
+	if runtimeErrorCode(t, err) != "RESOURCE_APPLY_FAILED" {
+		t.Fatalf("code = %q, want RESOURCE_APPLY_FAILED", runtimeErrorCode(t, err))
+	}
+	assertNoChildWrites(t, client.Actions())
+	assertDeleteActionCount(t, client, "namespaces", 1)
 }
 
 func TestAdapterPreservesServiceClusterAllocationOnRetry(t *testing.T) {
@@ -592,6 +862,42 @@ func TestAdapterRollbackFailurePreservesOriginalAndRollbackCauses(t *testing.T) 
 	}
 	if !errors.Is(err, originalCause) || !errors.Is(err, rollbackCause) {
 		t.Fatalf("error chain = %v, want original and rollback causes", err)
+	}
+}
+
+func TestRollbackNamespaceWaitsUntilAsynchronousDeletionCompletes(t *testing.T) {
+	command := validCreateCommand("aws-dev")
+	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := fake.NewSimpleClientset(resources.Namespace)
+	var deleteAccepted atomic.Bool
+	var postDeleteGets atomic.Int32
+	client.PrependReactor("delete", "namespaces", func(k8stesting.Action) (bool, runtime.Object, error) {
+		deleteAccepted.Store(true)
+		return true, nil, nil
+	})
+	client.PrependReactor("get", "namespaces", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if !deleteAccepted.Load() {
+			return false, nil, nil
+		}
+		if postDeleteGets.Add(1) == 1 {
+			terminating := resources.Namespace.DeepCopy()
+			now := metav1.Now()
+			terminating.DeletionTimestamp = &now
+			return true, terminating, nil
+		}
+		return true, nil, apierrors.NewNotFound(schema.GroupResource{Resource: "namespaces"}, resources.Namespace.Name)
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	if err := rollbackNamespace(ctx, client, resources.Namespace, time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	if got := postDeleteGets.Load(); got != 2 {
+		t.Fatalf("post-delete namespace GETs = %d, want 2 through NotFound", got)
 	}
 }
 
@@ -1040,6 +1346,19 @@ func actionCount(client *fake.Clientset, verb, resource string) int {
 	return count
 }
 
+func assertNoChildWrites(t *testing.T, actions []k8stesting.Action) {
+	t.Helper()
+	for _, action := range actions {
+		if action.GetVerb() != "create" && action.GetVerb() != "update" {
+			continue
+		}
+		switch action.GetResource().Resource {
+		case "deployments", "services", "ingresses":
+			t.Fatalf("unexpected child write: %s %s", action.GetVerb(), action.GetResource().Resource)
+		}
+	}
+}
+
 func installCreateErrorAfterCommit(t *testing.T, client *fake.Clientset, resource string, failure func(k8stesting.Action) error) {
 	t.Helper()
 	client.PrependReactor("create", resource, func(action k8stesting.Action) (bool, runtime.Object, error) {
@@ -1049,6 +1368,36 @@ func installCreateErrorAfterCommit(t *testing.T, client *fake.Clientset, resourc
 		}
 		return true, nil, failure(action)
 	})
+}
+
+func waitForWorkloadLockRefs(t *testing.T, locks *workloadLockSet, key workloadKey, want int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		locks.mu.Lock()
+		entry := locks.entries[key]
+		got := 0
+		if entry != nil {
+			got = entry.refs
+		}
+		locks.mu.Unlock()
+		if got == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("lock refs for target/instance = %d, want %d", got, want)
+		}
+		goruntime.Gosched()
+	}
+}
+
+func assertWorkloadLockEntries(t *testing.T, locks *workloadLockSet, want int) {
+	t.Helper()
+	locks.mu.Lock()
+	defer locks.mu.Unlock()
+	if got := len(locks.entries); got != want {
+		t.Fatalf("workload lock entries = %d, want %d", got, want)
+	}
 }
 
 type coreOverrideClient struct {
@@ -1073,6 +1422,73 @@ type deadlineObservingNamespaces struct {
 	typedcorev1.NamespaceInterface
 	getCount int
 	observed chan<- error
+}
+
+type asynchronousDeleteNamespaces struct {
+	typedcorev1.NamespaceInterface
+	deleting         atomic.Bool
+	deleteAccepted   chan<- struct{}
+	postDeleteRead   chan<- struct{}
+	deletionComplete <-chan struct{}
+	deleteOptions    metav1.DeleteOptions
+}
+
+func (n *asynchronousDeleteNamespaces) Delete(_ context.Context, _ string, options metav1.DeleteOptions) error {
+	n.deleteOptions = options
+	n.deleting.Store(true)
+	n.deleteAccepted <- struct{}{}
+	return nil
+}
+
+func (n *asynchronousDeleteNamespaces) Get(ctx context.Context, name string, options metav1.GetOptions) (*corev1.Namespace, error) {
+	if !n.deleting.Load() {
+		return n.NamespaceInterface.Get(ctx, name, options)
+	}
+	select {
+	case <-n.deletionComplete:
+		if n.deleting.CompareAndSwap(true, false) {
+			if err := n.NamespaceInterface.Delete(ctx, name, n.deleteOptions); err != nil {
+				return nil, err
+			}
+		}
+		return n.NamespaceInterface.Get(ctx, name, options)
+	default:
+		current, err := n.NamespaceInterface.Get(ctx, name, options)
+		if err != nil {
+			return nil, err
+		}
+		now := metav1.Now()
+		current.DeletionTimestamp = &now
+		select {
+		case n.postDeleteRead <- struct{}{}:
+		default:
+		}
+		return current, nil
+	}
+}
+
+type parallelCreateNamespaces struct {
+	typedcorev1.NamespaceInterface
+	blockedName           string
+	parallelName          string
+	blockedCreateEntered  chan<- struct{}
+	releaseBlockedCreate  <-chan struct{}
+	parallelCreateEntered chan<- struct{}
+}
+
+func (n *parallelCreateNamespaces) Create(ctx context.Context, namespace *corev1.Namespace, options metav1.CreateOptions) (*corev1.Namespace, error) {
+	switch namespace.Name {
+	case n.blockedName:
+		n.blockedCreateEntered <- struct{}{}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-n.releaseBlockedCreate:
+		}
+	case n.parallelName:
+		n.parallelCreateEntered <- struct{}{}
+	}
+	return n.NamespaceInterface.Create(ctx, namespace, options)
 }
 
 func (n *deadlineObservingNamespaces) Get(ctx context.Context, name string, options metav1.GetOptions) (*corev1.Namespace, error) {

@@ -24,8 +24,9 @@ type AdapterConfig struct {
 }
 
 type Adapter struct {
-	registry *Registry
-	config   AdapterConfig
+	registry      *Registry
+	config        AdapterConfig
+	workloadLocks *workloadLockSet
 }
 
 const (
@@ -40,13 +41,19 @@ func NewAdapter(registry *Registry, config AdapterConfig) (*Adapter, error) {
 	if config.RollbackTimeout == 0 {
 		config.RollbackTimeout = defaultRollbackTimeout
 	}
-	return &Adapter{registry: registry, config: config}, nil
+	return &Adapter{registry: registry, config: config, workloadLocks: newWorkloadLockSet()}, nil
 }
 
 func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.CreateWorkloadCommand) (provisioner.CreateWorkloadResult, error) {
 	if err := ctx.Err(); err != nil {
 		return provisioner.CreateWorkloadResult{}, operationCancelledError(err)
 	}
+	release, err := a.workloadLocks.acquire(ctx, workloadLockKey(command.TargetID, command.InstanceID))
+	if err != nil {
+		return provisioner.CreateWorkloadResult{}, operationCancelledError(err)
+	}
+	defer release()
+
 	cluster, err := a.registry.Lookup(command.TargetID)
 	if err != nil {
 		return provisioner.CreateWorkloadResult{}, err
@@ -134,6 +141,9 @@ func ensureNamespace(ctx context.Context, client kubernetes.Interface, desired *
 }
 
 func applyResourceSet(ctx context.Context, client kubernetes.Interface, resources ResourceSet) (*appsv1.Deployment, error) {
+	if err := preflightResourceSet(ctx, client, resources); err != nil {
+		return nil, err
+	}
 	appliedDeployment, err := upsertDeployment(ctx, client, resources.Deployment)
 	if err != nil {
 		return nil, err
@@ -145,6 +155,36 @@ func applyResourceSet(ctx context.Context, client kubernetes.Interface, resource
 		return nil, err
 	}
 	return appliedDeployment.DeepCopy(), nil
+}
+
+func preflightResourceSet(ctx context.Context, client kubernetes.Interface, resources ResourceSet) error {
+	deployment, err := client.AppsV1().Deployments(resources.Deployment.Namespace).Get(ctx, resources.Deployment.Name, metav1.GetOptions{})
+	if err == nil {
+		if !hasOwnership(deployment.Labels, resources.Deployment.Labels) {
+			return newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
+		}
+	} else if !apierrors.IsNotFound(err) {
+		return applyError(err)
+	}
+
+	service, err := client.CoreV1().Services(resources.Service.Namespace).Get(ctx, resources.Service.Name, metav1.GetOptions{})
+	if err == nil {
+		if !hasOwnership(service.Labels, resources.Service.Labels) {
+			return newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
+		}
+	} else if !apierrors.IsNotFound(err) {
+		return applyError(err)
+	}
+
+	ingress, err := client.NetworkingV1().Ingresses(resources.Ingress.Namespace).Get(ctx, resources.Ingress.Name, metav1.GetOptions{})
+	if err == nil {
+		if !hasOwnership(ingress.Labels, resources.Ingress.Labels) {
+			return newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
+		}
+	} else if !apierrors.IsNotFound(err) {
+		return applyError(err)
+	}
+	return nil
 }
 
 func upsertDeployment(ctx context.Context, client kubernetes.Interface, desired *appsv1.Deployment) (*appsv1.Deployment, error) {
@@ -283,13 +323,13 @@ func (a *Adapter) failWithRollback(client kubernetes.Interface, namespace *corev
 	}
 	rollbackCtx, cancel := context.WithTimeout(context.Background(), a.config.RollbackTimeout)
 	defer cancel()
-	if err := rollbackNamespace(rollbackCtx, client, namespace); err != nil {
+	if err := rollbackNamespace(rollbackCtx, client, namespace, a.config.PollInterval); err != nil {
 		return newRuntimeError("ROLLBACK_FAILED", true, errors.Join(cause, err))
 	}
 	return newRuntimeError(code, code == "RESOURCE_APPLY_FAILED" || code == "WORKLOAD_NOT_READY" || code == "OPERATION_CANCELLED", cause)
 }
 
-func rollbackNamespace(ctx context.Context, client kubernetes.Interface, desired *corev1.Namespace) error {
+func rollbackNamespace(ctx context.Context, client kubernetes.Interface, desired *corev1.Namespace, pollInterval time.Duration) error {
 	existing, err := client.CoreV1().Namespaces().Get(ctx, desired.Name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return nil
@@ -302,10 +342,31 @@ func rollbackNamespace(ctx context.Context, client kubernetes.Interface, desired
 	}
 	propagation := metav1.DeletePropagationBackground
 	preconditions := &metav1.Preconditions{UID: &existing.UID, ResourceVersion: &existing.ResourceVersion}
-	return client.CoreV1().Namespaces().Delete(ctx, desired.Name, metav1.DeleteOptions{
+	if err := client.CoreV1().Namespaces().Delete(ctx, desired.Name, metav1.DeleteOptions{
 		PropagationPolicy: &propagation,
 		Preconditions:     preconditions,
-	})
+	}); err != nil {
+		return err
+	}
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	for {
+		current, getErr := client.CoreV1().Namespaces().Get(ctx, desired.Name, metav1.GetOptions{})
+		if apierrors.IsNotFound(getErr) {
+			return nil
+		}
+		if getErr != nil {
+			return getErr
+		}
+		if current.UID != existing.UID || !hasOwnership(current.Labels, desired.Labels) {
+			return errors.New("namespace ownership cannot be confirmed")
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func hasOwnership(actual, expected map[string]string) bool {
@@ -389,6 +450,16 @@ func hasReadyEndpointForPods(ctx context.Context, client kubernetes.Interface, n
 	for _, endpointSlice := range endpointSlices.Items {
 		for _, endpoint := range endpointSlice.Endpoints {
 			if endpoint.Conditions.Ready != nil && !*endpoint.Conditions.Ready {
+				continue
+			}
+			hasAddress := false
+			for _, address := range endpoint.Addresses {
+				if strings.TrimSpace(address) != "" {
+					hasAddress = true
+					break
+				}
+			}
+			if !hasAddress {
 				continue
 			}
 			for _, pod := range pods {

@@ -56,7 +56,7 @@ func TestK3sIntegrationCreateReadyAndCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal("NewAdapter() failed")
 	}
-	result, err := adapter.CreateWorkload(testCtx, provisioner.CreateWorkloadCommand{
+	command := provisioner.CreateWorkloadCommand{
 		RequestID:     integrationUUID(t),
 		InstanceID:    instanceID,
 		TeamID:        18,
@@ -69,9 +69,17 @@ func TestK3sIntegrationCreateReadyAndCleanup(t *testing.T) {
 			MemoryMiB:           128,
 			EphemeralStorageMiB: 256,
 		},
-	})
+	}
+	result, err := adapter.CreateWorkload(testCtx, command)
 	if err != nil {
 		t.Fatal("CreateWorkload() failed")
+	}
+	retryResult, err := adapter.CreateWorkload(testCtx, command)
+	if err != nil {
+		t.Fatal("second CreateWorkload() failed")
+	}
+	if retryResult != result {
+		t.Fatal("second CreateWorkload() returned a different result")
 	}
 
 	if result.RuntimeWorkloadID != RuntimeWorkloadID(targetID, namespace) {
