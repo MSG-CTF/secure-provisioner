@@ -329,6 +329,46 @@ func TestAdapterClassifiesParentCancellationDuringNamespaceLookup(t *testing.T) 
 	}
 }
 
+func TestAdapterClassifiesPodListDeadlineAsResourceApplyFailure(t *testing.T) {
+	command := validCreateCommand("aws-dev")
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("list", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, context.DeadlineExceeded
+	})
+	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
+
+	_, err := adapter.CreateWorkload(context.Background(), command)
+	assertResourceApplyFailureFromActiveReadyContext(t, err)
+	assertDeleteActionCount(t, client, "namespaces", 1)
+}
+
+func TestAdapterClassifiesEndpointSliceListDeadlineAsResourceApplyFailure(t *testing.T) {
+	command := validCreateCommand("aws-dev")
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("list", "endpointslices", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, context.DeadlineExceeded
+	})
+	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
+
+	_, err := adapter.CreateWorkload(context.Background(), command)
+	assertResourceApplyFailureFromActiveReadyContext(t, err)
+	assertDeleteActionCount(t, client, "namespaces", 1)
+}
+
+func assertResourceApplyFailureFromActiveReadyContext(t *testing.T, err error) {
+	t.Helper()
+	if runtimeErrorCode(t, err) != "RESOURCE_APPLY_FAILED" {
+		t.Fatalf("code = %q, want RESOURCE_APPLY_FAILED", runtimeErrorCode(t, err))
+	}
+	var runtimeErr *RuntimeError
+	if !errors.As(err, &runtimeErr) || !runtimeErr.Retryable() || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want retryable RESOURCE_APPLY_FAILED wrapping List deadline", err)
+	}
+	if err.Error() != "RESOURCE_APPLY_FAILED" {
+		t.Fatalf("Error() = %q, want stable code only", err.Error())
+	}
+}
+
 func TestAdapterDoesNotDeleteNamespaceOwnedByAnotherInstance(t *testing.T) {
 	command := validCreateCommand("aws-dev")
 	namespace, err := NamespaceForInstance(command.InstanceID)

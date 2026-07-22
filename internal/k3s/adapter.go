@@ -71,7 +71,7 @@ func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.Create
 			return provisioner.CreateWorkloadResult{}, a.failWithRollback(cluster.Client, resources.Namespace, "OPERATION_CANCELLED", parentErr)
 		}
 		code := "RESOURCE_APPLY_FAILED"
-		if errors.Is(err, context.DeadlineExceeded) {
+		if readyCtx.Err() == context.DeadlineExceeded {
 			code = "WORKLOAD_NOT_READY"
 		}
 		return provisioner.CreateWorkloadResult{}, a.failWithRollback(cluster.Client, resources.Namespace, code, err)
