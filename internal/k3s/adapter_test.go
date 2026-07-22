@@ -13,6 +13,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
@@ -175,6 +177,80 @@ func TestAdapterRollsBackOwnedNamespaceWhenResourceApplyFails(t *testing.T) {
 	}
 }
 
+func TestAdapterRollbackUsesNamespaceUIDAndResourceVersionPreconditions(t *testing.T) {
+	command := validCreateCommand("aws-dev")
+	namespace, err := NamespaceForInstance(command.InstanceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := fake.NewSimpleClientset()
+	const ownedResourceVersion = "17"
+	ownedUID := types.UID("owned-namespace")
+	client.PrependReactor("create", "namespaces", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		created := action.(k8stesting.CreateAction).GetObject().(*corev1.Namespace)
+		created.UID = ownedUID
+		created.ResourceVersion = ownedResourceVersion
+		return false, nil, nil
+	})
+	client.PrependReactor("create", "deployments", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("deployment apply failure")
+	})
+	foreignUID := types.UID("foreign-namespace")
+	client.PrependReactor("delete", "namespaces", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		options := action.(k8stesting.DeleteAction).GetDeleteOptions()
+		if options.Preconditions == nil || options.Preconditions.UID == nil || *options.Preconditions.UID != ownedUID || options.Preconditions.ResourceVersion == nil || *options.Preconditions.ResourceVersion != ownedResourceVersion {
+			t.Errorf("rollback delete preconditions = %#v, want UID %q and ResourceVersion %q", options.Preconditions, ownedUID, ownedResourceVersion)
+		}
+		foreign := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name:            namespace,
+			UID:             foreignUID,
+			ResourceVersion: "18",
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "secure-provisioner",
+				"app.kubernetes.io/name":       resourceName,
+				"msgctf.io/instance-id":        "018f3f1e-21b8-7a91-a30b-63b3400fd002",
+				"msgctf.io/team-id":            "42",
+			},
+		}}
+		if err := client.Tracker().Update(corev1.SchemeGroupVersion.WithResource("namespaces"), foreign, ""); err != nil {
+			t.Fatal(err)
+		}
+		return true, nil, apierrors.NewConflict(schema.GroupResource{Resource: "namespaces"}, namespace, errors.New("precondition mismatch"))
+	})
+	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
+
+	_, err = adapter.CreateWorkload(context.Background(), command)
+	if runtimeErrorCode(t, err) != "ROLLBACK_FAILED" {
+		t.Fatalf("code = %q, want ROLLBACK_FAILED", runtimeErrorCode(t, err))
+	}
+	remaining, getErr := client.CoreV1().Namespaces().Get(context.Background(), namespace, metav1.GetOptions{})
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if remaining.UID != foreignUID || remaining.ResourceVersion != "18" {
+		t.Fatalf("remaining namespace = UID %q ResourceVersion %q, want foreign namespace", remaining.UID, remaining.ResourceVersion)
+	}
+}
+
+func TestAdapterRollsBackExistingOwnedNamespaceWhenResourceApplyFails(t *testing.T) {
+	command := validCreateCommand("aws-dev")
+	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := fake.NewSimpleClientset(resources.Namespace, resources.Deployment)
+	client.PrependReactor("create", "services", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("service apply failure")
+	})
+	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
+
+	_, err = adapter.CreateWorkload(context.Background(), command)
+	if runtimeErrorCode(t, err) != "RESOURCE_APPLY_FAILED" {
+		t.Fatalf("code = %q, want RESOURCE_APPLY_FAILED", runtimeErrorCode(t, err))
+	}
+	assertDeleteActionCount(t, client, "namespaces", 1)
+}
+
 func TestAdapterRollsBackOwnedNamespaceWhenReadinessTimesOut(t *testing.T) {
 	command := validCreateCommand("aws-dev")
 	client := fake.NewSimpleClientset()
@@ -189,6 +265,68 @@ func TestAdapterRollsBackOwnedNamespaceWhenReadinessTimesOut(t *testing.T) {
 		t.Fatalf("code = %q, want WORKLOAD_NOT_READY", runtimeErrorCode(t, err))
 	}
 	assertDeleteActionCount(t, client, "namespaces", 1)
+}
+
+func TestAdapterRollsBackExistingOwnedNamespaceWhenReadinessTimesOut(t *testing.T) {
+	command := validCreateCommand("aws-dev")
+	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := fake.NewSimpleClientset(resources.Namespace, resources.Deployment)
+	registry := adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client)
+	adapter, err := NewAdapter(registry, AdapterConfig{ReadyTimeout: time.Millisecond, PollInterval: time.Microsecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = adapter.CreateWorkload(context.Background(), command)
+	if runtimeErrorCode(t, err) != "WORKLOAD_NOT_READY" {
+		t.Fatalf("code = %q, want WORKLOAD_NOT_READY", runtimeErrorCode(t, err))
+	}
+	assertDeleteActionCount(t, client, "namespaces", 1)
+}
+
+func TestAdapterClassifiesParentDeadlineAsOperationCancelled(t *testing.T) {
+	command := validCreateCommand("aws-dev")
+	client := fake.NewSimpleClientset()
+	registry := adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client)
+	adapter, err := NewAdapter(registry, AdapterConfig{ReadyTimeout: time.Second, PollInterval: time.Microsecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+
+	_, err = adapter.CreateWorkload(ctx, command)
+	if runtimeErrorCode(t, err) != "OPERATION_CANCELLED" {
+		t.Fatalf("code = %q, want OPERATION_CANCELLED", runtimeErrorCode(t, err))
+	}
+	var runtimeErr *RuntimeError
+	if !errors.As(err, &runtimeErr) || !runtimeErr.Retryable() || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want retryable OPERATION_CANCELLED wrapping parent deadline", err)
+	}
+}
+
+func TestAdapterClassifiesParentCancellationDuringNamespaceLookup(t *testing.T) {
+	command := validCreateCommand("aws-dev")
+	client := fake.NewSimpleClientset()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client.PrependReactor("get", "namespaces", func(k8stesting.Action) (bool, runtime.Object, error) {
+		cancel()
+		return true, nil, context.Canceled
+	})
+	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
+
+	_, err := adapter.CreateWorkload(ctx, command)
+	if runtimeErrorCode(t, err) != "OPERATION_CANCELLED" {
+		t.Fatalf("code = %q, want OPERATION_CANCELLED", runtimeErrorCode(t, err))
+	}
+	var runtimeErr *RuntimeError
+	if !errors.As(err, &runtimeErr) || !runtimeErr.Retryable() || !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want retryable OPERATION_CANCELLED wrapping parent cancellation", err)
+	}
 }
 
 func TestAdapterDoesNotDeleteNamespaceOwnedByAnotherInstance(t *testing.T) {
@@ -254,8 +392,12 @@ func assertNotReadyAfterGate(t *testing.T, adapter *Adapter, client *fake.Client
 	assertNoCreateResult(t, result)
 	cancel()
 	got := <-result
-	if runtimeErrorCode(t, got.err) != "WORKLOAD_NOT_READY" {
-		t.Fatalf("code = %q, want WORKLOAD_NOT_READY", runtimeErrorCode(t, got.err))
+	if runtimeErrorCode(t, got.err) != "OPERATION_CANCELLED" {
+		t.Fatalf("code = %q, want OPERATION_CANCELLED", runtimeErrorCode(t, got.err))
+	}
+	var runtimeErr *RuntimeError
+	if !errors.As(got.err, &runtimeErr) || !runtimeErr.Retryable() || !errors.Is(got.err, context.Canceled) {
+		t.Fatalf("error = %v, want retryable OPERATION_CANCELLED wrapping parent cancellation", got.err)
 	}
 }
 

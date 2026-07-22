@@ -35,6 +35,9 @@ func NewAdapter(registry *Registry, config AdapterConfig) (*Adapter, error) {
 }
 
 func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.CreateWorkloadCommand) (provisioner.CreateWorkloadResult, error) {
+	if err := ctx.Err(); err != nil {
+		return provisioner.CreateWorkloadResult{}, operationCancelledError(err)
+	}
 	cluster, err := a.registry.Lookup(command.TargetID)
 	if err != nil {
 		return provisioner.CreateWorkloadResult{}, err
@@ -47,22 +50,31 @@ func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.Create
 		return provisioner.CreateWorkloadResult{}, newRuntimeError("K3S_UNAVAILABLE", true, nil)
 	}
 
-	createdNamespace, err := ensureNamespace(ctx, cluster.Client, resources.Namespace)
+	_, err = ensureNamespace(ctx, cluster.Client, resources.Namespace)
 	if err != nil {
+		if parentErr := ctx.Err(); parentErr != nil {
+			return provisioner.CreateWorkloadResult{}, operationCancelledError(parentErr)
+		}
 		return provisioner.CreateWorkloadResult{}, err
 	}
 	if err := applyResourceSet(ctx, cluster.Client, resources); err != nil {
-		return provisioner.CreateWorkloadResult{}, a.failWithRollback(cluster.Client, resources.Namespace, createdNamespace, "RESOURCE_APPLY_FAILED", err)
+		if parentErr := ctx.Err(); parentErr != nil {
+			return provisioner.CreateWorkloadResult{}, a.failWithRollback(cluster.Client, resources.Namespace, "OPERATION_CANCELLED", parentErr)
+		}
+		return provisioner.CreateWorkloadResult{}, a.failWithRollback(cluster.Client, resources.Namespace, "RESOURCE_APPLY_FAILED", err)
 	}
 
 	readyCtx, cancel := context.WithTimeout(ctx, a.config.ReadyTimeout)
 	defer cancel()
 	if err := waitUntilReady(readyCtx, cluster.Client, resources.Namespace.Name, a.config.PollInterval); err != nil {
+		if parentErr := ctx.Err(); parentErr != nil {
+			return provisioner.CreateWorkloadResult{}, a.failWithRollback(cluster.Client, resources.Namespace, "OPERATION_CANCELLED", parentErr)
+		}
 		code := "RESOURCE_APPLY_FAILED"
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		if errors.Is(err, context.DeadlineExceeded) {
 			code = "WORKLOAD_NOT_READY"
 		}
-		return provisioner.CreateWorkloadResult{}, a.failWithRollback(cluster.Client, resources.Namespace, createdNamespace, code, err)
+		return provisioner.CreateWorkloadResult{}, a.failWithRollback(cluster.Client, resources.Namespace, code, err)
 	}
 	return provisioner.CreateWorkloadResult{
 		RuntimeWorkloadID: resources.RuntimeWorkloadID,
@@ -159,17 +171,19 @@ func applyError(err error) error {
 	return newRuntimeError("RESOURCE_APPLY_FAILED", true, err)
 }
 
-func (a *Adapter) failWithRollback(client kubernetes.Interface, namespace *corev1.Namespace, createdNamespace bool, code string, cause error) error {
-	if createdNamespace {
-		if err := rollbackNamespace(client, namespace); err != nil {
-			return newRuntimeError("ROLLBACK_FAILED", true, err)
-		}
+func operationCancelledError(cause error) error {
+	return newRuntimeError("OPERATION_CANCELLED", true, cause)
+}
+
+func (a *Adapter) failWithRollback(client kubernetes.Interface, namespace *corev1.Namespace, code string, cause error) error {
+	if err := rollbackNamespace(client, namespace); err != nil {
+		return newRuntimeError("ROLLBACK_FAILED", true, err)
 	}
 	var runtimeErr *RuntimeError
 	if errors.As(cause, &runtimeErr) && runtimeErr.Code() == "RESOURCE_OWNERSHIP_CONFLICT" {
 		return runtimeErr
 	}
-	return newRuntimeError(code, code == "RESOURCE_APPLY_FAILED" || code == "WORKLOAD_NOT_READY", cause)
+	return newRuntimeError(code, code == "RESOURCE_APPLY_FAILED" || code == "WORKLOAD_NOT_READY" || code == "OPERATION_CANCELLED", cause)
 }
 
 func rollbackNamespace(client kubernetes.Interface, desired *corev1.Namespace) error {
@@ -182,7 +196,11 @@ func rollbackNamespace(client kubernetes.Interface, desired *corev1.Namespace) e
 		return errors.New("namespace ownership cannot be confirmed")
 	}
 	propagation := metav1.DeletePropagationBackground
-	return client.CoreV1().Namespaces().Delete(ctx, desired.Name, metav1.DeleteOptions{PropagationPolicy: &propagation})
+	preconditions := &metav1.Preconditions{UID: &existing.UID, ResourceVersion: &existing.ResourceVersion}
+	return client.CoreV1().Namespaces().Delete(ctx, desired.Name, metav1.DeleteOptions{
+		PropagationPolicy: &propagation,
+		Preconditions:     preconditions,
+	})
 }
 
 func hasOwnership(actual, expected map[string]string) bool {
