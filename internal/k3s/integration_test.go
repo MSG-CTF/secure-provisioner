@@ -48,7 +48,11 @@ func TestK3sIntegrationCreateReadyAndCleanup(t *testing.T) {
 	}
 	t.Cleanup(func() { deleteIntegrationNamespace(t, cluster.Client, namespace) })
 
-	adapter, err := NewAdapter(registry, AdapterConfig{ReadyTimeout: 5 * time.Minute, PollInterval: time.Second})
+	adapter, err := NewAdapter(registry, AdapterConfig{
+		ReadyTimeout:    5 * time.Minute,
+		PollInterval:    time.Second,
+		RollbackTimeout: 30 * time.Second,
+	})
 	if err != nil {
 		t.Fatal("NewAdapter() failed")
 	}

@@ -1,6 +1,9 @@
 package k3s
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"math"
 	"strconv"
@@ -15,13 +18,17 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
-const resourceName = "challenge"
+const (
+	resourceName       = "challenge"
+	specHashAnnotation = "msgctf.io/spec-hash"
+)
 
 type ResourceSet struct {
 	Namespace         *corev1.Namespace
 	Deployment        *appsv1.Deployment
 	Service           *corev1.Service
 	Ingress           *networkingv1.Ingress
+	ExpectedSpecHash  string
 	RuntimeWorkloadID string
 	ServiceURL        string
 }
@@ -39,12 +46,16 @@ func RuntimeWorkloadID(targetID, namespace string) string {
 
 func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand) (ResourceSet, error) {
 	if !validWorkloadCommand(cluster, command) {
-		return ResourceSet{}, newRuntimeError("INVALID_WORKLOAD", false, nil)
+		return ResourceSet{}, newRuntimeError("INVALID_CREATE_COMMAND", false, nil)
 	}
 
 	namespace, err := NamespaceForInstance(command.InstanceID)
 	if err != nil {
-		return ResourceSet{}, newRuntimeError("INVALID_WORKLOAD", false, nil)
+		return ResourceSet{}, newRuntimeError("INVALID_CREATE_COMMAND", false, nil)
+	}
+	specHash, err := createCommandSpecHash(command)
+	if err != nil {
+		return ResourceSet{}, newRuntimeError("INVALID_CREATE_COMMAND", false, nil)
 	}
 	labels := ownershipLabels(command)
 	podLabels := copyLabels(labels)
@@ -58,12 +69,20 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 			ObjectMeta: metav1.ObjectMeta{Name: namespace, Labels: copyLabels(labels)},
 		},
 		Deployment: &appsv1.Deployment{
-			ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: namespace, Labels: copyLabels(labels)},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        resourceName,
+				Namespace:   namespace,
+				Labels:      copyLabels(labels),
+				Annotations: map[string]string{specHashAnnotation: specHash},
+			},
 			Spec: appsv1.DeploymentSpec{
 				Replicas: &replicas,
 				Selector: &metav1.LabelSelector{MatchLabels: copyLabels(podLabels)},
 				Template: corev1.PodTemplateSpec{
-					ObjectMeta: metav1.ObjectMeta{Labels: podLabels},
+					ObjectMeta: metav1.ObjectMeta{
+						Labels:      podLabels,
+						Annotations: map[string]string{specHashAnnotation: specHash},
+					},
 					Spec: corev1.PodSpec{Containers: []corev1.Container{{
 						Name:  resourceName,
 						Image: command.Image,
@@ -103,6 +122,7 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 				}},
 			},
 		},
+		ExpectedSpecHash: specHash,
 	}
 	if cluster.Config.IngressClass != "" {
 		resources.Ingress.Spec.IngressClassName = &cluster.Config.IngressClass
@@ -110,6 +130,39 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 	resources.RuntimeWorkloadID = RuntimeWorkloadID(command.TargetID, namespace)
 	resources.ServiceURL = strings.TrimRight(cluster.Config.PublicGateway, "/") + "/instances/" + command.InstanceID
 	return resources, nil
+}
+
+func createCommandSpecHash(command provisioner.CreateWorkloadCommand) (string, error) {
+	spec := struct {
+		InstanceID     string                  `json:"instance_id"`
+		TeamID         int64                   `json:"team_id"`
+		RuntimeType    provisioner.RuntimeType `json:"runtime_type"`
+		TargetID       string                  `json:"target_id"`
+		Image          string                  `json:"image"`
+		ContainerPort  int                     `json:"container_port"`
+		ResourceLimits struct {
+			CPUMillicores       int `json:"cpu_millicores"`
+			MemoryMiB           int `json:"memory_mib"`
+			EphemeralStorageMiB int `json:"ephemeral_storage_mib"`
+		} `json:"resource_limits"`
+	}{
+		InstanceID:    command.InstanceID,
+		TeamID:        command.TeamID,
+		RuntimeType:   command.RuntimeType,
+		TargetID:      command.TargetID,
+		Image:         command.Image,
+		ContainerPort: command.ContainerPort,
+	}
+	spec.ResourceLimits.CPUMillicores = command.ResourceLimits.CPUMillicores
+	spec.ResourceLimits.MemoryMiB = command.ResourceLimits.MemoryMiB
+	spec.ResourceLimits.EphemeralStorageMiB = command.ResourceLimits.EphemeralStorageMiB
+
+	encoded, err := json.Marshal(spec)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:]), nil
 }
 
 func validWorkloadCommand(cluster Cluster, command provisioner.CreateWorkloadCommand) bool {

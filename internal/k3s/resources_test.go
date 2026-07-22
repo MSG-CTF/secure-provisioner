@@ -67,12 +67,55 @@ func TestBuildResourceSetCreatesOwnedKubernetesResources(t *testing.T) {
 		}
 	}
 
+	const wantSpecHash = "ea9e8f4af5eb13c9b5197ee513dbcb937f0895df3b93585dbc4a69789ffec320"
+	if resources.ExpectedSpecHash != wantSpecHash {
+		t.Fatalf("ExpectedSpecHash = %q, want stable SHA-256", resources.ExpectedSpecHash)
+	}
+	for resource, annotations := range map[string]map[string]string{
+		"deployment":   resources.Deployment.Annotations,
+		"pod template": resources.Deployment.Spec.Template.Annotations,
+	} {
+		got := annotations[specHashAnnotation]
+		if got != wantSpecHash {
+			t.Fatalf("%s spec hash = %q, want %q", resource, got, wantSpecHash)
+		}
+		if strings.Contains(got, command.Image) || strings.Contains(got, validCluster("aws-dev").Config.PublicGateway) {
+			t.Fatalf("%s spec hash exposes sensitive input", resource)
+		}
+	}
+
 	path := resources.Ingress.Spec.Rules[0].HTTP.Paths[0]
 	if path.Path != "/instances/"+command.InstanceID {
 		t.Fatalf("path = %q, want instance path", path.Path)
 	}
 	if path.Backend.Service.Name != resourceName || path.Backend.Service.Port.Number != int32(command.ContainerPort) {
 		t.Fatalf("ingress backend = %#v, want challenge:%d", path.Backend.Service, command.ContainerPort)
+	}
+}
+
+func TestBuildResourceSetSpecHashTracksSpecButNotRequestMetadata(t *testing.T) {
+	command := validCreateCommand("aws-dev")
+	first, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	command.RequestID = "a-different-retry-request"
+	retry, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.ExpectedSpecHash != first.ExpectedSpecHash {
+		t.Fatalf("request metadata changed spec hash: %q != %q", retry.ExpectedSpecHash, first.ExpectedSpecHash)
+	}
+
+	command.Image = "registry.example.invalid/challenges/web@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	revision, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revision.ExpectedSpecHash == first.ExpectedSpecHash {
+		t.Fatal("image revision did not change spec hash")
 	}
 }
 
@@ -126,8 +169,8 @@ func TestBuildResourceSetRejectsInvalidCommandWithoutEmbeddingSensitiveData(t *t
 		mutate(&command)
 
 		_, err := BuildResourceSet(validCluster("aws-dev"), command)
-		if runtimeErrorCode(t, err) != "INVALID_WORKLOAD" {
-			t.Fatalf("code = %q, want INVALID_WORKLOAD", runtimeErrorCode(t, err))
+		if runtimeErrorCode(t, err) != "INVALID_CREATE_COMMAND" {
+			t.Fatalf("code = %q, want INVALID_CREATE_COMMAND", runtimeErrorCode(t, err))
 		}
 		if strings.Contains(err.Error(), secretImage) || strings.Contains(err.Error(), command.TargetID) {
 			t.Fatalf("error exposes command input: %v", err)
@@ -147,8 +190,8 @@ func TestBuildResourceSetRejectsResourceValuesThatOverflowByteQuantities(t *test
 		mutate(&command)
 
 		_, err := BuildResourceSet(validCluster("aws-dev"), command)
-		if runtimeErrorCode(t, err) != "INVALID_WORKLOAD" {
-			t.Fatalf("code = %q, want INVALID_WORKLOAD", runtimeErrorCode(t, err))
+		if runtimeErrorCode(t, err) != "INVALID_CREATE_COMMAND" {
+			t.Fatalf("code = %q, want INVALID_CREATE_COMMAND", runtimeErrorCode(t, err))
 		}
 	}
 }
