@@ -30,21 +30,22 @@ func TestBuildResourceSetCreatesOwnedKubernetesResources(t *testing.T) {
 	}
 
 	wantOwnerLabels := map[string]string{
-		"managed-by":  "secure-provisioner",
-		"instance-id": command.InstanceID,
-		"team-id":     "42",
+		"app.kubernetes.io/managed-by": "secure-provisioner",
+		"app.kubernetes.io/name":       resourceName,
+		"msgctf.io/instance-id":        command.InstanceID,
+		"msgctf.io/team-id":            "42",
 	}
 	for resource, labels := range map[string]map[string]string{
-		"namespace":  resources.Namespace.Labels,
-		"deployment": resources.Deployment.Labels,
-		"service":    resources.Service.Labels,
-		"ingress":    resources.Ingress.Labels,
+		"namespace":    resources.Namespace.Labels,
+		"deployment":   resources.Deployment.Labels,
+		"pod template": resources.Deployment.Spec.Template.Labels,
+		"service":      resources.Service.Labels,
+		"ingress":      resources.Ingress.Labels,
 	} {
-		for key, want := range wantOwnerLabels {
-			if got := labels[key]; got != want {
-				t.Fatalf("%s label %q = %q, want %q", resource, key, got, want)
-			}
-		}
+		assertExactOwnershipLabels(t, resource, labels, wantOwnerLabels)
+	}
+	if resources.Deployment.Spec.Replicas == nil || *resources.Deployment.Spec.Replicas != 1 {
+		t.Fatalf("replicas = %v, want explicit 1", resources.Deployment.Spec.Replicas)
 	}
 
 	container := resources.Deployment.Spec.Template.Spec.Containers[0]
@@ -72,6 +73,18 @@ func TestBuildResourceSetCreatesOwnedKubernetesResources(t *testing.T) {
 	}
 	if path.Backend.Service.Name != resourceName || path.Backend.Service.Port.Number != int32(command.ContainerPort) {
 		t.Fatalf("ingress backend = %#v, want challenge:%d", path.Backend.Service, command.ContainerPort)
+	}
+}
+
+func assertExactOwnershipLabels(t *testing.T, resource string, got, want map[string]string) {
+	t.Helper()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%s labels = %#v, want %#v", resource, got, want)
+	}
+	for _, obsoleteKey := range []string{"managed-by", "instance-id", "team-id", "app"} {
+		if _, found := got[obsoleteKey]; found {
+			t.Fatalf("%s has obsolete label %q", resource, obsoleteKey)
+		}
 	}
 }
 

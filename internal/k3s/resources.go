@@ -48,8 +48,8 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 	}
 	labels := ownershipLabels(command)
 	podLabels := copyLabels(labels)
-	podLabels["app"] = resourceName
 	containerPort := int32(command.ContainerPort)
+	replicas := int32(1)
 	quantities := resourceList(command.ResourceLimits)
 	pathType := networkingv1.PathTypePrefix
 
@@ -60,6 +60,7 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 		Deployment: &appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: namespace, Labels: copyLabels(labels)},
 			Spec: appsv1.DeploymentSpec{
+				Replicas: &replicas,
 				Selector: &metav1.LabelSelector{MatchLabels: copyLabels(podLabels)},
 				Template: corev1.PodTemplateSpec{
 					ObjectMeta: metav1.ObjectMeta{Labels: podLabels},
@@ -128,9 +129,10 @@ func validWorkloadCommand(cluster Cluster, command provisioner.CreateWorkloadCom
 
 func ownershipLabels(command provisioner.CreateWorkloadCommand) map[string]string {
 	return map[string]string{
-		"managed-by":  "secure-provisioner",
-		"instance-id": command.InstanceID,
-		"team-id":     strconv.FormatInt(command.TeamID, 10),
+		"app.kubernetes.io/managed-by": "secure-provisioner",
+		"app.kubernetes.io/name":       resourceName,
+		"msgctf.io/instance-id":        command.InstanceID,
+		"msgctf.io/team-id":            strconv.FormatInt(command.TeamID, 10),
 	}
 }
 
