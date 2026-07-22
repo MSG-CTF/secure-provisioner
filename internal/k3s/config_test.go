@@ -33,6 +33,27 @@ func TestLoadRegistryRejectsUnknownFieldsAndMultipleJSONValues(t *testing.T) {
 	}
 }
 
+func TestLoadRegistryRejectsMissingRequiredJSONFields(t *testing.T) {
+	clusterWithoutEnabled := `{"target_id":"aws-dev","provider":"AWS","region":"test-region","architecture":"amd64","kubeconfig_path":"aws-kubeconfig","public_gateway":"https://gateway.example.invalid"}`
+	for _, test := range []struct {
+		name    string
+		content string
+	}{
+		{name: "missing clusters", content: `{}`},
+		{name: "null clusters", content: `{"clusters":null}`},
+		{name: "empty clusters", content: `{"clusters":[]}`},
+		{name: "missing enabled", content: `{"clusters":[` + clusterWithoutEnabled + `]}`},
+		{name: "null enabled", content: `{"clusters":[` + strings.TrimSuffix(clusterWithoutEnabled, "}") + `,"enabled":null}]}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := LoadRegistry(writeRegistryFile(t, test.content), &sequenceFactory{})
+			if runtimeErrorCode(t, err) != "CONFIG_INVALID" {
+				t.Fatalf("code = %q, want CONFIG_INVALID", runtimeErrorCode(t, err))
+			}
+		})
+	}
+}
+
 func TestLoadRegistryDoesNotExposePathOrKubeconfigError(t *testing.T) {
 	registryPath := writeRegistryFile(t, `{"clusters":[{"target_id":"aws-dev","provider":"AWS","region":"test-region","architecture":"amd64","kubeconfig_path":"private-kubeconfig","public_gateway":"https://gateway.example.invalid","enabled":true}]}`)
 	factoryFailure := errors.New("kubeconfig parsing detail")

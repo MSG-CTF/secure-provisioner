@@ -15,6 +15,11 @@ type sequenceFactory struct {
 	calls   int
 }
 
+type unidentifiableClient struct {
+	kubernetes.Interface
+	values []string
+}
+
 func (f *sequenceFactory) FromKubeconfig(string) (kubernetes.Interface, error) {
 	f.calls++
 	if f.err != nil {
@@ -73,6 +78,30 @@ func TestNewRegistryCreatesDistinctClientsPerEnabledTarget(t *testing.T) {
 	}
 	if aws.Config.PublicGateway != "https://gateway.example.invalid" {
 		t.Fatalf("PublicGateway = %q, want trailing slash removed", aws.Config.PublicGateway)
+	}
+}
+
+func TestNewRegistryRejectsSharedClientAcrossEnabledTargets(t *testing.T) {
+	sharedClient := fake.NewSimpleClientset()
+	_, err := NewRegistry([]ClusterConfig{
+		validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig"),
+		validClusterConfig("gcp-dev", ProviderGCP, "gcp-kubeconfig"),
+	}, &sequenceFactory{clients: []kubernetes.Interface{sharedClient, sharedClient}})
+	if runtimeErrorCode(t, err) != "CONFIG_INVALID" {
+		t.Fatalf("code = %q, want CONFIG_INVALID", runtimeErrorCode(t, err))
+	}
+}
+
+func TestNewRegistryRejectsUnidentifiableClientWithoutPanic(t *testing.T) {
+	client := unidentifiableClient{
+		Interface: fake.NewSimpleClientset(),
+		values:    []string{"not comparable"},
+	}
+	_, err := NewRegistry([]ClusterConfig{
+		validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig"),
+	}, &sequenceFactory{clients: []kubernetes.Interface{client}})
+	if runtimeErrorCode(t, err) != "CONFIG_INVALID" {
+		t.Fatalf("code = %q, want CONFIG_INVALID", runtimeErrorCode(t, err))
 	}
 }
 

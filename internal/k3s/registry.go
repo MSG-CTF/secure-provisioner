@@ -2,11 +2,17 @@ package k3s
 
 import (
 	"net/url"
+	"reflect"
 	"strings"
 )
 
 type Registry struct {
 	targets map[string]Cluster
+}
+
+type clientIdentity struct {
+	clientType reflect.Type
+	pointer    uintptr
 }
 
 func NewRegistry(configs []ClusterConfig, factory ClientFactory) (*Registry, error) {
@@ -21,6 +27,7 @@ func NewRegistry(configs []ClusterConfig, factory ClientFactory) (*Registry, err
 	}
 
 	targets := make(map[string]Cluster, len(normalizedConfigs))
+	clientIdentities := make(map[clientIdentity]struct{}, len(normalizedConfigs))
 	for _, config := range normalizedConfigs {
 		cluster := Cluster{Config: config}
 		if config.Enabled {
@@ -31,12 +38,28 @@ func NewRegistry(configs []ClusterConfig, factory ClientFactory) (*Registry, err
 			if err != nil || client == nil {
 				return nil, newRuntimeError("K3S_UNAVAILABLE", true, err)
 			}
+			identity, ok := identifyClient(client)
+			if !ok {
+				return nil, newRuntimeError("CONFIG_INVALID", false, nil)
+			}
+			if _, exists := clientIdentities[identity]; exists {
+				return nil, newRuntimeError("CONFIG_INVALID", false, nil)
+			}
+			clientIdentities[identity] = struct{}{}
 			cluster.Client = client
 		}
 		targets[config.TargetID] = cluster
 	}
 
 	return &Registry{targets: targets}, nil
+}
+
+func identifyClient(client any) (clientIdentity, bool) {
+	value := reflect.ValueOf(client)
+	if !value.IsValid() || value.Kind() != reflect.Ptr || value.IsNil() {
+		return clientIdentity{}, false
+	}
+	return clientIdentity{clientType: value.Type(), pointer: value.Pointer()}, true
 }
 
 func (r *Registry) Lookup(targetID string) (Cluster, error) {
