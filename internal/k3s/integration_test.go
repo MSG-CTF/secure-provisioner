@@ -40,6 +40,8 @@ func TestK3sIntegrationCreateReadyAndCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal("Registry.Lookup() failed")
 	}
+	testCtx, cancel := context.WithTimeout(context.Background(), 7*time.Minute)
+	defer cancel()
 	namespace, err := NamespaceForInstance(instanceID)
 	if err != nil {
 		t.Fatal("NamespaceForInstance() failed")
@@ -50,7 +52,7 @@ func TestK3sIntegrationCreateReadyAndCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal("NewAdapter() failed")
 	}
-	result, err := adapter.CreateWorkload(context.Background(), provisioner.CreateWorkloadCommand{
+	result, err := adapter.CreateWorkload(testCtx, provisioner.CreateWorkloadCommand{
 		RequestID:     integrationUUID(t),
 		InstanceID:    instanceID,
 		TeamID:        18,
@@ -74,23 +76,23 @@ func TestK3sIntegrationCreateReadyAndCleanup(t *testing.T) {
 	if result.ServiceURL != strings.TrimRight(gateway, "/")+"/instances/"+instanceID {
 		t.Fatal("CreateWorkload() returned an unexpected service URL")
 	}
-	if _, err := cluster.Client.CoreV1().Namespaces().Get(context.Background(), namespace, metav1.GetOptions{}); err != nil {
+	if _, err := cluster.Client.CoreV1().Namespaces().Get(testCtx, namespace, metav1.GetOptions{}); err != nil {
 		t.Fatal("created namespace cannot be retrieved")
 	}
-	if _, err := cluster.Client.AppsV1().Deployments(namespace).Get(context.Background(), resourceName, metav1.GetOptions{}); err != nil {
+	if _, err := cluster.Client.AppsV1().Deployments(namespace).Get(testCtx, resourceName, metav1.GetOptions{}); err != nil {
 		t.Fatal("created deployment cannot be retrieved")
 	}
-	if _, err := cluster.Client.CoreV1().Services(namespace).Get(context.Background(), resourceName, metav1.GetOptions{}); err != nil {
+	if _, err := cluster.Client.CoreV1().Services(namespace).Get(testCtx, resourceName, metav1.GetOptions{}); err != nil {
 		t.Fatal("created service cannot be retrieved")
 	}
-	if _, err := cluster.Client.NetworkingV1().Ingresses(namespace).Get(context.Background(), resourceName, metav1.GetOptions{}); err != nil {
+	if _, err := cluster.Client.NetworkingV1().Ingresses(namespace).Get(testCtx, resourceName, metav1.GetOptions{}); err != nil {
 		t.Fatal("created ingress cannot be retrieved")
 	}
-	readyPod, err := hasReadyPod(context.Background(), cluster.Client, namespace)
+	readyPod, err := hasReadyPod(testCtx, cluster.Client, namespace)
 	if err != nil || !readyPod {
 		t.Fatal("ready pod cannot be reconfirmed")
 	}
-	readyEndpoint, err := hasReadyEndpoint(context.Background(), cluster.Client, namespace)
+	readyEndpoint, err := hasReadyEndpoint(testCtx, cluster.Client, namespace)
 	if err != nil || !readyEndpoint {
 		t.Fatal("ready EndpointSlice cannot be reconfirmed")
 	}
