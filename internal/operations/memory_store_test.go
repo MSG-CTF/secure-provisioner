@@ -234,6 +234,32 @@ func TestMemoryStoreRequeueMakesCancelledOperationAvailable(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreRequeueRestoresClaimedQueuedOperationWithoutDuplicate(t *testing.T) {
+	store := NewMemoryStore(sequenceIDs("op-1"))
+	operation, _, err := store.EnqueueCreate(validCreateCommand("req-1"), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Next(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Requeue(operation.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Requeue(operation.ID); err != nil {
+		t.Fatal(err)
+	}
+	next, err := store.Next(context.Background())
+	if err != nil || next.ID != operation.ID {
+		t.Fatalf("requeued next: %#v %v", next, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := store.Next(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("duplicate queued operation: %v", err)
+	}
+}
+
 func TestMemoryStoreStoresStableErrorCodes(t *testing.T) {
 	store := NewMemoryStore(sequenceIDs("op-1"))
 	operation, _, err := store.EnqueueCreate(validCreateCommand("req-1"), 2)

@@ -132,14 +132,19 @@ func (s *MemoryStore) Requeue(id string) error {
 		s.mu.Unlock()
 		return err
 	}
-	if operation.Status != OperationStatusRunning && operation.Status != OperationStatusRetrying {
+	if operation.Status != OperationStatusQueued && operation.Status != OperationStatusRunning && operation.Status != OperationStatusRetrying {
 		s.mu.Unlock()
 		return ErrInvalidTransition
 	}
 	operation.Status = OperationStatusQueued
-	s.queue = append(s.queue, id)
+	shouldNotify := !s.hasQueuedID(id)
+	if shouldNotify {
+		s.queue = append(s.queue, id)
+	}
 	s.mu.Unlock()
-	s.notify()
+	if shouldNotify {
+		s.notify()
+	}
 	return nil
 }
 
@@ -248,6 +253,15 @@ func (s *MemoryStore) hasQueuedOperation() bool {
 	for _, id := range s.queue {
 		operation, ok := s.operations[id]
 		if ok && operation.Status == OperationStatusQueued {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *MemoryStore) hasQueuedID(id string) bool {
+	for _, queuedID := range s.queue {
+		if queuedID == id {
 			return true
 		}
 	}

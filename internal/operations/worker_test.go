@@ -167,6 +167,75 @@ func TestWorkerCancellationRequeuesInFlightOperation(t *testing.T) {
 	}
 }
 
+func TestWorkerCancellationAfterNextRequeuesClaimedOperation(t *testing.T) {
+	memoryStore := NewMemoryStore(sequenceIDs("op-1"))
+	operation, _, err := memoryStore.EnqueueCreate(validCreateCommand("req-1"), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	store := &cancellingNextStore{Store: memoryStore, cancel: cancel}
+	worker, err := NewWorker(store, &scriptedExecutor{}, WorkerConfig{Concurrency: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	type nextResult struct {
+		operation Operation
+		err       error
+	}
+	nextResultC := make(chan nextResult, 1)
+	go func() {
+		next, err := memoryStore.Next(context.Background())
+		nextResultC <- nextResult{operation: next, err: err}
+	}()
+	select {
+	case result := <-nextResultC:
+		if result.err != nil || result.operation.ID != operation.ID {
+			t.Fatalf("requeued next: %#v %v", result.operation, result.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("claimed operation was not requeued")
+	}
+}
+
+func TestWorkerCancellationDuringRetrySleepRequeuesOperation(t *testing.T) {
+	store := NewMemoryStore(sequenceIDs("op-1"))
+	operation, _, err := store.EnqueueCreate(validCreateCommand("req-1"), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sleepStarted := make(chan struct{})
+	sleep := func(ctx context.Context, duration time.Duration) error {
+		close(sleepStarted)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	executor := &scriptedExecutor{results: []execution{{err: NewExecutionError("RUNTIME_TIMEOUT", true, errors.New("secret endpoint"))}}}
+	worker, err := NewWorker(store, executor, WorkerConfig{Concurrency: 1, Backoff: noBackoff, Sleep: sleep})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(ctx) }()
+	select {
+	case <-sleepStarted:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not enter retry sleep")
+	}
+	cancel()
+	if err := receiveRun(t, done); err != nil {
+		t.Fatal(err)
+	}
+	next, err := store.Next(context.Background())
+	if err != nil || next.ID != operation.ID {
+		t.Fatalf("requeued next: %#v %v", next, err)
+	}
+}
+
 func TestWorkerCancellationStopsAllWorkers(t *testing.T) {
 	store := NewMemoryStore(sequenceIDs("op-1"))
 	executor := newCancellationExecutor()
@@ -387,4 +456,17 @@ func (contextErrorStore) MarkSucceeded(string, OperationResult) (Operation, erro
 
 func (contextErrorStore) MarkFailed(string, string) (Operation, error) {
 	return Operation{}, errors.New("not implemented")
+}
+
+type cancellingNextStore struct {
+	Store
+	cancel context.CancelFunc
+}
+
+func (s *cancellingNextStore) Next(ctx context.Context) (Operation, error) {
+	operation, err := s.Store.Next(ctx)
+	if err == nil {
+		s.cancel()
+	}
+	return operation, err
 }

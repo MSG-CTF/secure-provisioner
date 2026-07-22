@@ -98,7 +98,7 @@ func (w *Worker) Run(ctx context.Context) error {
 
 func (w *Worker) process(ctx context.Context, operation Operation) error {
 	if ctx.Err() != nil {
-		return nil
+		return w.store.Requeue(operation.ID)
 	}
 	running, err := w.store.MarkRunning(operation.ID)
 	if err != nil {
