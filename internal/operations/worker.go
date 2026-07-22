@@ -9,6 +9,8 @@ import (
 
 var ErrInvalidWorkerConfig = errors.New("invalid worker configuration")
 
+const invalidOperationResultErrorCode = "INVALID_OPERATION_RESULT"
+
 type BackoffFunc func(attempt int) time.Duration
 
 type SleepFunc func(context.Context, time.Duration) error
@@ -107,6 +109,9 @@ func (w *Worker) process(ctx context.Context, operation Operation) error {
 	result, err := w.executor.Execute(ctx, running)
 	if err == nil {
 		_, err = w.store.MarkSucceeded(running.ID, result)
+		if errors.Is(err, ErrInvalidOperationResult) {
+			_, err = w.store.MarkFailed(running.ID, invalidOperationResultErrorCode)
+		}
 		return err
 	}
 	if ctx.Err() != nil && isContextError(err) {

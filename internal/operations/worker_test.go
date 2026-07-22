@@ -31,6 +31,72 @@ func TestWorkerExecutesAndStoresSuccess(t *testing.T) {
 	}
 }
 
+func TestWorkerExecutesDeleteAndStoresSuccess(t *testing.T) {
+	store := NewMemoryStore(sequenceIDs("op-1"))
+	operation, _, err := store.EnqueueDelete(validDeleteCommand("req-1"), 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := NewWorker(store, &scriptedExecutor{results: []execution{{result: successfulDeleteResult()}}}, WorkerConfig{Concurrency: 1, Backoff: noBackoff, Sleep: sleepWithContext})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runUntilTerminal(t, worker, store, operation.ID)
+	stored, err := store.Get(operation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != OperationStatusSucceeded || stored.Attempt != 1 || stored.Result.Create != nil || !stored.Result.DeleteCompleted {
+		t.Fatalf("stored: %#v", stored)
+	}
+}
+
+func TestWorkerFailsInvalidSuccessResultAndContinues(t *testing.T) {
+	testCases := []struct {
+		name          string
+		operationType OperationType
+		invalidResult OperationResult
+		validResult   OperationResult
+	}{
+		{name: "create empty result", operationType: OperationTypeCreate, validResult: successfulCreateResult()},
+		{name: "create delete result", operationType: OperationTypeCreate, invalidResult: successfulDeleteResult(), validResult: successfulCreateResult()},
+		{name: "delete create result", operationType: OperationTypeDelete, invalidResult: successfulCreateResult(), validResult: successfulDeleteResult()},
+		{name: "delete incomplete result", operationType: OperationTypeDelete, validResult: successfulDeleteResult()},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			store := NewMemoryStore(sequenceIDs("op-1", "op-2"))
+			first := enqueueOperation(t, store, testCase.operationType, "req-1")
+			second := enqueueOperation(t, store, testCase.operationType, "req-2")
+			worker, err := NewWorker(store, &scriptedExecutor{results: []execution{
+				{result: testCase.invalidResult},
+				{result: testCase.validResult},
+			}}, WorkerConfig{Concurrency: 1, Backoff: noBackoff, Sleep: sleepWithContext})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			go func() { done <- worker.Run(ctx) }()
+			waitForTerminalOperations(t, store, 2)
+			cancel()
+			if err := receiveRun(t, done); err != nil {
+				t.Fatal(err)
+			}
+
+			failed, err := store.Get(first.ID)
+			if err != nil || failed.Status != OperationStatusFailed || failed.LastErrorCode != "INVALID_OPERATION_RESULT" {
+				t.Fatalf("failed operation: %#v %v", failed, err)
+			}
+			succeeded, err := store.Get(second.ID)
+			if err != nil || succeeded.Status != OperationStatusSucceeded {
+				t.Fatalf("following operation: %#v %v", succeeded, err)
+			}
+		})
+	}
+}
+
 func TestWorkerRetriesOnlyRetryableErrors(t *testing.T) {
 	store := NewMemoryStore(sequenceIDs("op-1"))
 	operation, _, err := store.EnqueueCreate(validCreateCommand("req-1"), 3)
@@ -317,6 +383,7 @@ func runUntilTerminal(t *testing.T, worker *Worker, store Store, operationID str
 
 func waitForTerminalOperations(t *testing.T, store Store, want int) {
 	t.Helper()
+	timeout := time.After(time.Second)
 	for {
 		terminal := 0
 		for i := 1; i <= want; i++ {
@@ -331,7 +398,11 @@ func waitForTerminalOperations(t *testing.T, store Store, want int) {
 		if terminal == want {
 			return
 		}
-		time.Sleep(time.Millisecond)
+		select {
+		case <-timeout:
+			t.Fatalf("timed out waiting for %d terminal operations", want)
+		case <-time.After(time.Millisecond):
+		}
 	}
 }
 
@@ -350,6 +421,26 @@ func noBackoff(int) time.Duration { return 0 }
 
 func successfulCreateResult() OperationResult {
 	return OperationResult{Create: &provisioner.CreateWorkloadResult{RuntimeWorkloadID: "default/inst-1", ServiceURL: "http://service.example"}}
+}
+
+func successfulDeleteResult() OperationResult {
+	return OperationResult{DeleteCompleted: true}
+}
+
+func enqueueOperation(t *testing.T, store *MemoryStore, operationType OperationType, requestID string) Operation {
+	t.Helper()
+	if operationType == OperationTypeCreate {
+		operation, _, err := store.EnqueueCreate(validCreateCommand(requestID), 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return operation
+	}
+	operation, _, err := store.EnqueueDelete(validDeleteCommand(requestID), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return operation
 }
 
 func sleepWithContext(ctx context.Context, duration time.Duration) error {
