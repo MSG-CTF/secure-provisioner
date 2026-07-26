@@ -12,12 +12,26 @@ import (
 
 type API struct {
 	createWorkload provisioner.CreateWorkloadUseCase
+	runtime        RuntimeUseCase
 }
 
 func NewHandler(createWorkload provisioner.CreateWorkloadUseCase) http.Handler {
-	api := &API{createWorkload: createWorkload}
+	return newHandler(createWorkload, nil)
+}
+
+func NewHandlerWithRuntime(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase) http.Handler {
+	return newHandler(createWorkload, runtime)
+}
+
+func newHandler(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase) http.Handler {
+	api := &API{createWorkload: createWorkload, runtime: runtime}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /internal/v1/instances", api.handleCreateInstance)
+	if runtime != nil {
+		mux.HandleFunc("GET /internal/v1/instances/{instance_id}/runtime-status", api.handleRuntimeStatus)
+		mux.HandleFunc("DELETE /internal/v1/instances/{instance_id}", api.handleDeleteInstance)
+		mux.HandleFunc("GET /internal/v1/operations/{operation_id}", api.handleGetOperation)
+	}
 	return requestSizeLimit(mux)
 }
 
