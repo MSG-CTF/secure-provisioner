@@ -7,6 +7,7 @@ import (
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
+	metricsclient "k8s.io/metrics/pkg/client/clientset/versioned"
 )
 
 type registryFile struct {
@@ -73,10 +74,18 @@ func (c registryClusterConfig) clusterConfig() (ClusterConfig, bool) {
 
 type KubeconfigClientFactory struct{}
 
-func (KubeconfigClientFactory) FromKubeconfig(path string) (kubernetes.Interface, error) {
+func (KubeconfigClientFactory) FromKubeconfig(path string) (ClientSet, error) {
 	config, err := clientcmd.BuildConfigFromFlags("", path)
 	if err != nil {
-		return nil, err
+		return ClientSet{}, err
 	}
-	return kubernetes.NewForConfig(config)
+	kubernetesClient, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return ClientSet{}, err
+	}
+	metrics, err := metricsclient.NewForConfig(config)
+	if err != nil {
+		return ClientSet{}, err
+	}
+	return ClientSet{Kubernetes: kubernetesClient, Metrics: metrics}, nil
 }

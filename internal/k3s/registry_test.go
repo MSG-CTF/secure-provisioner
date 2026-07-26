@@ -7,10 +7,13 @@ import (
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	metricsclient "k8s.io/metrics/pkg/client/clientset/versioned"
+	metricsfake "k8s.io/metrics/pkg/client/clientset/versioned/fake"
 )
 
 type sequenceFactory struct {
 	clients []kubernetes.Interface
+	metrics []metricsclient.Interface
 	err     error
 	calls   int
 }
@@ -20,15 +23,19 @@ type unidentifiableClient struct {
 	values []string
 }
 
-func (f *sequenceFactory) FromKubeconfig(string) (kubernetes.Interface, error) {
+func (f *sequenceFactory) FromKubeconfig(string) (ClientSet, error) {
 	f.calls++
 	if f.err != nil {
-		return nil, f.err
+		return ClientSet{}, f.err
 	}
 	if f.calls > len(f.clients) {
-		return nil, errors.New("unexpected client factory call")
+		return ClientSet{}, errors.New("unexpected client factory call")
 	}
-	return f.clients[f.calls-1], nil
+	metrics := metricsclient.Interface(metricsfake.NewSimpleClientset())
+	if len(f.metrics) >= f.calls && f.metrics[f.calls-1] != nil {
+		metrics = f.metrics[f.calls-1]
+	}
+	return ClientSet{Kubernetes: f.clients[f.calls-1], Metrics: metrics}, nil
 }
 
 func validClusterConfig(targetID string, provider Provider, kubeconfigPath string) ClusterConfig {
@@ -105,27 +112,50 @@ func TestNewRegistryRejectsUnidentifiableClientWithoutPanic(t *testing.T) {
 	}
 }
 
-func TestRegistryRejectsUnknownAndDisabledTargetBeforeClientUse(t *testing.T) {
+func TestRegistryCreateLookupRejectsDisabledButMaintenanceLookupAllowsIt(t *testing.T) {
 	disabled := validClusterConfig("retired", ProviderNCP, "unused-kubeconfig")
 	disabled.Enabled = false
-	factory := &sequenceFactory{}
+	factory := &sequenceFactory{clients: []kubernetes.Interface{fake.NewSimpleClientset()}}
 
 	registry, err := NewRegistry([]ClusterConfig{disabled}, factory)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if factory.calls != 0 {
-		t.Fatalf("factory calls = %d, want 0 for disabled target", factory.calls)
+	if factory.calls != 1 {
+		t.Fatalf("factory calls = %d, want 1 so maintenance remains available", factory.calls)
 	}
 
-	if _, err := registry.Lookup("missing"); runtimeErrorCode(t, err) != "TARGET_NOT_FOUND" {
+	if _, err := registry.LookupForCreate("missing"); runtimeErrorCode(t, err) != "TARGET_NOT_FOUND" {
 		t.Fatalf("unknown target code = %q, want TARGET_NOT_FOUND", runtimeErrorCode(t, err))
 	}
-	if _, err := registry.Lookup("retired"); runtimeErrorCode(t, err) != "TARGET_DISABLED" {
+	if _, err := registry.LookupForCreate("retired"); runtimeErrorCode(t, err) != "TARGET_DISABLED" {
 		t.Fatalf("disabled target code = %q, want TARGET_DISABLED", runtimeErrorCode(t, err))
 	}
-	if factory.calls != 0 {
-		t.Fatalf("factory calls = %d after lookups, want 0", factory.calls)
+	maintenance, err := registry.LookupForMaintenance("retired")
+	if err != nil {
+		t.Fatalf("LookupForMaintenance() error = %v", err)
+	}
+	if maintenance.Client == nil || maintenance.Metrics == nil {
+		t.Fatal("maintenance lookup returned incomplete client pair")
+	}
+	if factory.calls != 1 {
+		t.Fatalf("factory calls = %d after lookups, want cached client pair", factory.calls)
+	}
+}
+
+func TestRegistryUsesDistinctKubeAndMetricsClientsPerTarget(t *testing.T) {
+	awsClient, gcpClient := fake.NewSimpleClientset(), fake.NewSimpleClientset()
+	registry, err := NewRegistry([]ClusterConfig{
+		validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig"),
+		validClusterConfig("gcp-dev", ProviderGCP, "gcp-kubeconfig"),
+	}, &sequenceFactory{clients: []kubernetes.Interface{awsClient, gcpClient}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	aws, _ := registry.LookupForMaintenance("aws-dev")
+	gcp, _ := registry.LookupForMaintenance("gcp-dev")
+	if aws.Client == gcp.Client || aws.Metrics == gcp.Metrics {
+		t.Fatal("targets share a Kubernetes or Metrics client")
 	}
 }
 
