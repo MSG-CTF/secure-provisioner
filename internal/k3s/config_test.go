@@ -98,8 +98,8 @@ users:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first == second {
-		t.Fatal("KubeconfigClientFactory returned a shared client")
+	if first.Kubernetes == second.Kubernetes || first.Metrics == second.Metrics {
+		t.Fatal("KubeconfigClientFactory returned a shared client pair")
 	}
 }
 

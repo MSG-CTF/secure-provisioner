@@ -1236,7 +1236,7 @@ func TestAdapterRejectsUnknownAndDisabledTargetWithoutCallingAnyClient(t *testin
 	registry := adapterRegistry(t, []ClusterConfig{
 		validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig"),
 		disabled,
-	}, activeClient)
+	}, activeClient, fake.NewSimpleClientset())
 	adapter := newTestAdapter(t, registry)
 
 	for _, targetID := range []string{"missing", "retired"} {

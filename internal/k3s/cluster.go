@@ -1,6 +1,7 @@
 package k3s
 
 import "k8s.io/client-go/kubernetes"
+import metricsclient "k8s.io/metrics/pkg/client/clientset/versioned"
 
 type Provider string
 
@@ -22,10 +23,16 @@ type ClusterConfig struct {
 }
 
 type Cluster struct {
-	Config ClusterConfig
-	Client kubernetes.Interface
+	Config  ClusterConfig
+	Client  kubernetes.Interface
+	Metrics metricsclient.Interface
+}
+
+type ClientSet struct {
+	Kubernetes kubernetes.Interface
+	Metrics    metricsclient.Interface
 }
 
 type ClientFactory interface {
-	FromKubeconfig(string) (kubernetes.Interface, error)
+	FromKubeconfig(string) (ClientSet, error)
 }
