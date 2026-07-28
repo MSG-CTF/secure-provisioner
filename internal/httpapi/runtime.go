@@ -30,7 +30,20 @@ type RuntimeStatusResponse struct {
 	EndpointReady     bool                      `json:"endpoint_ready"`
 	MetricsAvailable  bool                      `json:"metrics_available"`
 	ObservedAt        time.Time                 `json:"observed_at"`
+	Node              NodeStatusResponse        `json:"node"`
 	Containers        []ContainerStatusResponse `json:"containers"`
+}
+
+type NodeStatusResponse struct {
+	Ready          bool                   `json:"ready"`
+	MemoryPressure bool                   `json:"memory_pressure"`
+	DiskPressure   bool                   `json:"disk_pressure"`
+	PIDPressure    bool                   `json:"pid_pressure"`
+	Capacity       ResourceValuesResponse `json:"capacity"`
+	Allocatable    ResourceValuesResponse `json:"allocatable"`
+	Requested      ResourceValuesResponse `json:"requested"`
+	Schedulable    ResourceValuesResponse `json:"schedulable"`
+	Usage          *ResourceUsageResponse `json:"usage"`
 }
 
 type ContainerStatusResponse struct {
@@ -84,10 +97,33 @@ func (api *API) handleRuntimeStatus(writer http.ResponseWriter, request *http.Re
 			writeAPIError(writer, http.StatusNotFound, "INSTANCE_NOT_FOUND", "instance runtime binding was not found")
 			return
 		}
+		if writeRuntimeStatusError(writer, err) {
+			return
+		}
 		writeAPIError(writer, http.StatusBadGateway, "RUNTIME_STATUS_FAILED", "runtime status lookup failed")
 		return
 	}
 	writeJSON(writer, http.StatusOK, newRuntimeStatusResponse(status))
+}
+
+func writeRuntimeStatusError(writer http.ResponseWriter, err error) bool {
+	var coded interface{ Code() string }
+	if !errors.As(err, &coded) {
+		return false
+	}
+	switch coded.Code() {
+	case "RUNTIME_OWNERSHIP_MISMATCH":
+		writeAPIError(writer, http.StatusConflict, coded.Code(), "runtime ownership does not match the stored binding")
+	case "TARGET_NOT_FOUND":
+		writeAPIError(writer, http.StatusServiceUnavailable, coded.Code(), "runtime target was not found")
+	case "TARGET_TOPOLOGY_INVALID":
+		writeAPIError(writer, http.StatusServiceUnavailable, coded.Code(), "runtime target must contain exactly one node")
+	case "TARGET_TEMPORARILY_UNAVAILABLE", "K3S_UNAVAILABLE":
+		writeAPIError(writer, http.StatusBadGateway, coded.Code(), "runtime target is temporarily unavailable")
+	default:
+		return false
+	}
+	return true
 }
 
 func (api *API) handleDeleteInstance(writer http.ResponseWriter, request *http.Request) {
@@ -176,7 +212,23 @@ func newRuntimeStatusResponse(status k3s.RuntimeStatus) RuntimeStatusResponse {
 		EndpointReady:     status.EndpointReady,
 		MetricsAvailable:  status.MetricsAvailable,
 		ObservedAt:        status.ObservedAt,
-		Containers:        make([]ContainerStatusResponse, 0, len(status.Containers)),
+		Node: NodeStatusResponse{
+			Ready:          status.Node.Ready,
+			MemoryPressure: status.Node.MemoryPressure,
+			DiskPressure:   status.Node.DiskPressure,
+			PIDPressure:    status.Node.PIDPressure,
+			Capacity:       newResourceValuesResponse(status.Node.Capacity),
+			Allocatable:    newResourceValuesResponse(status.Node.Allocatable),
+			Requested:      newResourceValuesResponse(status.Node.Requested),
+			Schedulable:    newResourceValuesResponse(status.Node.Schedulable),
+		},
+		Containers: make([]ContainerStatusResponse, 0, len(status.Containers)),
+	}
+	if status.Node.Usage != nil {
+		response.Node.Usage = &ResourceUsageResponse{
+			CPUMillicores: status.Node.Usage.CPUMillicores,
+			MemoryMiB:     status.Node.Usage.MemoryMiB,
+		}
 	}
 	for _, container := range status.Containers {
 		item := ContainerStatusResponse{
