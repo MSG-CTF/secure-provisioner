@@ -288,6 +288,11 @@ GET /internal/v1/instances/{instance_id}/runtime-status
 | `schedulable` | `max(allocatable - requested, 0)` |
 | `usage` | Metrics API가 관찰한 현재 CPU·메모리 사용량 |
 
+`requested`는 해당 Node에 배치된 `Succeeded`, `Failed` 이외 Pod를 대상으로
+일반 컨테이너 요청량 합계, init container의 실행 단계별 최대 요청량,
+Pod overhead를 반영한다. 다른 Node에 배치됐거나 아직 Node가 정해지지 않은
+Pod는 포함하지 않는다.
+
 Metrics API를 사용할 수 없으면 `metrics_available`은 `false`이고
 Node·Container의 `usage`는 `null`이다. Core 상태와 배치 가능 공간은
 계속 반환한다.

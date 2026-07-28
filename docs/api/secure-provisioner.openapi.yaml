@@ -393,10 +393,15 @@ components:
           $ref: "#/components/schemas/ResourceValues"
         requested:
           $ref: "#/components/schemas/ResourceValues"
+          description: 미종료 Pod의 컨테이너 요청량, init container 최대 요청량, Pod overhead를 반영한 예약 자원
         schedulable:
           $ref: "#/components/schemas/ResourceValues"
+          description: allocatable에서 requested를 빼고 자원별 최솟값을 0으로 제한한 값
         usage:
-          $ref: "#/components/schemas/ResourceUsage"
+          description: Metrics API가 제공한 노드 사용량이며 Metrics가 없으면 null
+          oneOf:
+            - $ref: "#/components/schemas/ResourceUsage"
+            - type: "null"
     ContainerStatus:
       type: object
       additionalProperties: false
@@ -443,7 +448,10 @@ components:
         limits:
           $ref: "#/components/schemas/ResourceValues"
         usage:
-          $ref: "#/components/schemas/ResourceUsage"
+          description: Metrics API가 제공한 컨테이너 사용량이며 Metrics가 없으면 null
+          oneOf:
+            - $ref: "#/components/schemas/ResourceUsage"
+            - type: "null"
     RuntimeStatusResponse:
       type: object
       additionalProperties: false

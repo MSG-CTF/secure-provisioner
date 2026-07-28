@@ -29,6 +29,14 @@ func TestRuntimeStatusReturnsContainerResourcesWithoutClusterSecrets(t *testing.
 			EndpointReady:     true,
 			MetricsAvailable:  true,
 			ObservedAt:        startedAt.Add(time.Minute),
+			Node: k3s.NodeRuntimeStatus{
+				Ready:       true,
+				Capacity:    k3s.ResourceValues{CPUMillicores: 2000, MemoryMiB: 4096, EphemeralStorageMiB: 20480},
+				Allocatable: k3s.ResourceValues{CPUMillicores: 1800, MemoryMiB: 3584, EphemeralStorageMiB: 18432},
+				Requested:   k3s.ResourceValues{CPUMillicores: 900, MemoryMiB: 1536, EphemeralStorageMiB: 4096},
+				Schedulable: k3s.ResourceValues{CPUMillicores: 900, MemoryMiB: 2048, EphemeralStorageMiB: 14336},
+				Usage:       &k3s.ResourceUsage{CPUMillicores: 640, MemoryMiB: 1720},
+			},
 			Containers: []k3s.ContainerRuntimeStatus{{
 				PodName:      "challenge-76bf",
 				Name:         "challenge",
@@ -59,7 +67,13 @@ func TestRuntimeStatusReturnsContainerResourcesWithoutClusterSecrets(t *testing.
 		Phase            string `json:"phase"`
 		EndpointReady    bool   `json:"endpoint_ready"`
 		MetricsAvailable bool   `json:"metrics_available"`
-		Containers       []struct {
+		Node             struct {
+			Ready       bool                   `json:"ready"`
+			Requested   ResourceValuesResponse `json:"requested"`
+			Schedulable ResourceValuesResponse `json:"schedulable"`
+			Usage       *ResourceUsageResponse `json:"usage"`
+		} `json:"node"`
+		Containers []struct {
 			Name         string `json:"name"`
 			State        string `json:"state"`
 			RestartCount int32  `json:"restart_count"`
@@ -74,7 +88,9 @@ func TestRuntimeStatusReturnsContainerResourcesWithoutClusterSecrets(t *testing.
 	}
 	if payload.InstanceID != runtimeInstanceID || payload.TargetID != "aws-dev" || payload.Phase != "READY" ||
 		!payload.EndpointReady || !payload.MetricsAvailable || len(payload.Containers) != 1 ||
-		payload.Containers[0].RestartCount != 2 || payload.Containers[0].Usage.CPUMillicores != 86 {
+		payload.Containers[0].RestartCount != 2 || payload.Containers[0].Usage.CPUMillicores != 86 ||
+		!payload.Node.Ready || payload.Node.Requested.CPUMillicores != 900 ||
+		payload.Node.Schedulable.MemoryMiB != 2048 || payload.Node.Usage.CPUMillicores != 640 {
 		t.Fatalf("payload = %#v", payload)
 	}
 	body := response.Body.String()
@@ -94,6 +110,31 @@ func TestRuntimeStatusMapsMissingBindingToNotFound(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
 	assertErrorCode(t, response, "INSTANCE_NOT_FOUND")
+}
+
+func TestRuntimeStatusMapsStableK3sErrors(t *testing.T) {
+	for _, test := range []struct {
+		code       string
+		wantStatus int
+	}{
+		{code: "RUNTIME_OWNERSHIP_MISMATCH", wantStatus: http.StatusConflict},
+		{code: "TARGET_NOT_FOUND", wantStatus: http.StatusServiceUnavailable},
+		{code: "TARGET_TOPOLOGY_INVALID", wantStatus: http.StatusServiceUnavailable},
+		{code: "TARGET_TEMPORARILY_UNAVAILABLE", wantStatus: http.StatusBadGateway},
+	} {
+		t.Run(test.code, func(t *testing.T) {
+			runtime := &recordingRuntimeUseCase{statusErr: stableStatusError(test.code)}
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodGet, "/internal/v1/instances/"+runtimeInstanceID+"/runtime-status", nil)
+
+			NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+
+			if response.Code != test.wantStatus {
+				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+			}
+			assertErrorCode(t, response, test.code)
+		})
+	}
 }
 
 func TestDeleteInstanceQueuesBoundRuntimeOperation(t *testing.T) {
@@ -307,3 +348,13 @@ func (useCase *recordingRuntimeUseCase) GetOperation(string) (operations.Operati
 }
 
 var _ RuntimeUseCase = (*recordingRuntimeUseCase)(nil)
+
+type stableStatusError string
+
+func (e stableStatusError) Error() string {
+	return string(e)
+}
+
+func (e stableStatusError) Code() string {
+	return string(e)
+}
