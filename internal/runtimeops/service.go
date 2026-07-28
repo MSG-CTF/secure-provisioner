@@ -52,8 +52,14 @@ func NewService(
 	if create == nil || status == nil || deleteAdapter == nil || bindings == nil || operationStore == nil || config.MaxAttempts <= 0 {
 		return nil, errors.New("runtime service dependencies are required")
 	}
+	recordingCreate := &bindingCreateAdapter{
+		inner:    create,
+		cleanup:  deleteAdapter,
+		bindings: bindings,
+		now:      time.Now,
+	}
 	recordingDelete := &bindingDeleteAdapter{inner: deleteAdapter, bindings: bindings, now: time.Now}
-	executor, err := k3s.NewExecutorWithDelete(create, recordingDelete, bindings)
+	executor, err := k3s.NewExecutorWithDelete(recordingCreate, recordingDelete, bindings)
 	if err != nil {
 		return nil, err
 	}
@@ -71,8 +77,13 @@ func NewService(
 		maxAttempts: config.MaxAttempts,
 		now:         time.Now,
 	}
+	recordingCreate.now = func() time.Time { return service.now() }
 	recordingDelete.now = func() time.Time { return service.now() }
 	return service, nil
+}
+
+func (s *Service) EnqueueCreate(command provisioner.CreateWorkloadCommand) (operations.Operation, bool, error) {
+	return s.operations.EnqueueCreate(command, s.maxAttempts)
 }
 
 func (s *Service) CreateWorkload(ctx context.Context, command provisioner.CreateWorkloadCommand) (provisioner.CreateWorkloadResult, error) {
@@ -96,6 +107,51 @@ func (s *Service) CreateWorkload(ctx context.Context, command provisioner.Create
 		UpdatedAt:         now,
 	})
 	if err != nil {
+		return provisioner.CreateWorkloadResult{}, err
+	}
+	return result, nil
+}
+
+type bindingCreateAdapter struct {
+	inner    CreateAdapter
+	cleanup  DeleteAdapter
+	bindings runtimebinding.Store
+	now      func() time.Time
+}
+
+func (a *bindingCreateAdapter) CreateWorkload(ctx context.Context, command provisioner.CreateWorkloadCommand) (provisioner.CreateWorkloadResult, error) {
+	result, err := a.inner.CreateWorkload(ctx, command)
+	if err != nil {
+		return provisioner.CreateWorkloadResult{}, err
+	}
+	namespace, err := k3s.NamespaceForInstance(command.InstanceID)
+	if err != nil {
+		return provisioner.CreateWorkloadResult{}, err
+	}
+	now := a.now().UTC()
+	binding := runtimebinding.Binding{
+		InstanceID:        command.InstanceID,
+		TeamID:            command.TeamID,
+		TargetID:          command.TargetID,
+		Namespace:         namespace,
+		RuntimeWorkloadID: result.RuntimeWorkloadID,
+		State:             runtimebinding.StateCreated,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+	if _, _, err := a.bindings.SaveCreated(binding); err != nil {
+		cleanupErr := a.cleanup.DeleteWorkload(ctx, provisioner.DeleteWorkloadCommand{
+			RequestID:         command.RequestID,
+			InstanceID:        command.InstanceID,
+			TeamID:            command.TeamID,
+			RuntimeType:       command.RuntimeType,
+			TargetID:          command.TargetID,
+			RuntimeWorkloadID: result.RuntimeWorkloadID,
+			Reason:            provisioner.DeleteReasonCreateFailedCleanup,
+		}, binding)
+		if cleanupErr != nil {
+			return provisioner.CreateWorkloadResult{}, errors.Join(err, cleanupErr)
+		}
 		return provisioner.CreateWorkloadResult{}, err
 	}
 	return result, nil

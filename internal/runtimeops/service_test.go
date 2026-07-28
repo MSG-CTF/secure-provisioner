@@ -12,7 +12,7 @@ import (
 	"github.com/MSG-CTF/secure-provisioner/internal/runtimebinding"
 )
 
-func TestServiceRecordsBindingAfterSuccessfulCreate(t *testing.T) {
+func TestServiceEnqueuesCreateIdempotently(t *testing.T) {
 	bindings := runtimebinding.NewMemoryStore()
 	create := &recordingCreate{result: provisioner.CreateWorkloadResult{
 		RuntimeWorkloadID: "aws-dev/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge",
@@ -21,35 +21,107 @@ func TestServiceRecordsBindingAfterSuccessfulCreate(t *testing.T) {
 	service := newTestService(t, create, &recordingStatus{}, &recordingDelete{}, bindings)
 	command := createCommand()
 
-	result, err := service.CreateWorkload(context.Background(), command)
-	if err != nil {
-		t.Fatal(err)
+	first, created, err := service.EnqueueCreate(command)
+	if err != nil || !created {
+		t.Fatalf("first EnqueueCreate() = (%#v, %t, %v)", first, created, err)
 	}
-	if result != create.result {
-		t.Fatalf("result = %#v", result)
+	second, created, err := service.EnqueueCreate(command)
+	if err != nil || created {
+		t.Fatalf("second EnqueueCreate() = (%#v, %t, %v)", second, created, err)
 	}
-	binding, err := bindings.Get(command.InstanceID)
-	if err != nil {
-		t.Fatal(err)
+	if first.ID != second.ID || first.Status != operations.OperationStatusQueued {
+		t.Fatalf("operations = %#v, %#v", first, second)
 	}
-	if binding.TargetID != command.TargetID || binding.TeamID != command.TeamID ||
-		binding.Namespace != "ctf-018f3f1e21b87a91a30b63b3400fd001" ||
-		binding.RuntimeWorkloadID != result.RuntimeWorkloadID {
-		t.Fatalf("binding = %#v", binding)
+	if create.calls != 0 {
+		t.Fatalf("create calls before worker = %d", create.calls)
 	}
 }
 
-func TestServiceDoesNotRecordBindingAfterFailedCreate(t *testing.T) {
+func TestServiceProcessesCreateAndRecordsBinding(t *testing.T) {
+	bindings := runtimebinding.NewMemoryStore()
+	create := &recordingCreate{result: provisioner.CreateWorkloadResult{
+		RuntimeWorkloadID: "aws-dev/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge",
+		ServiceURL:        "https://gateway.example.invalid/instances/018f3f1e-21b8-7a91-a30b-63b3400fd001",
+	}}
+	service := newTestService(t, create, &recordingStatus{}, &recordingDelete{}, bindings)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	workerDone := make(chan error, 1)
+	go func() { workerDone <- service.Run(ctx) }()
+
+	operation, created, err := service.EnqueueCreate(createCommand())
+	if err != nil || !created {
+		t.Fatalf("EnqueueCreate() = (%#v, %t, %v)", operation, created, err)
+	}
+	operation = waitForOperationStatus(t, service, operation.ID, operations.OperationStatusSucceeded)
+	if operation.Result.Create == nil || *operation.Result.Create != create.result {
+		t.Fatalf("operation result = %#v", operation.Result)
+	}
+	binding, err := bindings.Get(createCommand().InstanceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binding.TargetID != createCommand().TargetID || binding.TeamID != createCommand().TeamID ||
+		binding.Namespace != "ctf-018f3f1e21b87a91a30b63b3400fd001" ||
+		binding.RuntimeWorkloadID != create.result.RuntimeWorkloadID {
+		t.Fatalf("binding = %#v", binding)
+	}
+	stopWorker(t, cancel, workerDone)
+}
+
+func TestServiceCreateFailureDoesNotRecordBinding(t *testing.T) {
 	bindings := runtimebinding.NewMemoryStore()
 	create := &recordingCreate{err: errors.New("create failed")}
 	service := newTestService(t, create, &recordingStatus{}, &recordingDelete{}, bindings)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	workerDone := make(chan error, 1)
+	go func() { workerDone <- service.Run(ctx) }()
 
-	if _, err := service.CreateWorkload(context.Background(), createCommand()); err == nil {
-		t.Fatal("CreateWorkload() error = nil")
+	operation, _, err := service.EnqueueCreate(createCommand())
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation = waitForOperationStatus(t, service, operation.ID, operations.OperationStatusFailed)
+	if operation.LastErrorCode != "EXECUTION_FAILED" {
+		t.Fatalf("operation = %#v", operation)
 	}
 	if _, err := bindings.Get(createCommand().InstanceID); !errors.Is(err, runtimebinding.ErrNotFound) {
 		t.Fatalf("binding Get() error = %v", err)
 	}
+	stopWorker(t, cancel, workerDone)
+}
+
+func TestServiceCleansUpNamespaceWhenBindingSaveFails(t *testing.T) {
+	store := &failingSaveBindingStore{
+		Store: runtimebinding.NewMemoryStore(),
+		err:   runtimebinding.ErrConflict,
+	}
+	create := &recordingCreate{result: provisioner.CreateWorkloadResult{
+		RuntimeWorkloadID: "aws-dev/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge",
+		ServiceURL:        "https://gateway.example.invalid/instances/018f3f1e-21b8-7a91-a30b-63b3400fd001",
+	}}
+	deleteAdapter := &recordingDelete{}
+	service := newTestService(t, create, &recordingStatus{}, deleteAdapter, store)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	workerDone := make(chan error, 1)
+	go func() { workerDone <- service.Run(ctx) }()
+
+	operation, _, err := service.EnqueueCreate(createCommand())
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForOperationStatus(t, service, operation.ID, operations.OperationStatusFailed)
+	if deleteAdapter.calls != 1 {
+		t.Fatalf("cleanup delete calls = %d", deleteAdapter.calls)
+	}
+	if deleteAdapter.command.Reason != provisioner.DeleteReasonCreateFailedCleanup ||
+		deleteAdapter.command.RuntimeWorkloadID != create.result.RuntimeWorkloadID ||
+		deleteAdapter.binding.Namespace != "ctf-018f3f1e21b87a91a30b63b3400fd001" {
+		t.Fatalf("cleanup command = %#v, binding = %#v", deleteAdapter.command, deleteAdapter.binding)
+	}
+	stopWorker(t, cancel, workerDone)
 }
 
 func TestServiceReadsStatusFromStoredTarget(t *testing.T) {
@@ -97,20 +169,7 @@ func TestServiceProcessesDeleteAndMarksBindingDeleted(t *testing.T) {
 	if err != nil || !created {
 		t.Fatalf("EnqueueDelete() = (%#v, %t, %v)", operation, created, err)
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		operation, err = service.GetOperation(operation.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if operation.Status == operations.OperationStatusSucceeded {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("operation did not succeed: %#v", operation)
-		}
-		time.Sleep(time.Millisecond)
-	}
+	operation = waitForOperationStatus(t, service, operation.ID, operations.OperationStatusSucceeded)
 	deleted, err := bindings.Get(binding.InstanceID)
 	if err != nil {
 		t.Fatal(err)
@@ -119,6 +178,32 @@ func TestServiceProcessesDeleteAndMarksBindingDeleted(t *testing.T) {
 		t.Fatalf("deleted binding = %#v, calls = %d", deleted, deleteAdapter.calls)
 	}
 
+	stopWorker(t, cancel, workerDone)
+}
+
+func waitForOperationStatus(t *testing.T, service *Service, operationID string, want operations.OperationStatus) operations.Operation {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		operation, err := service.GetOperation(operationID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if operation.Status == want {
+			return operation
+		}
+		if operation.Status == operations.OperationStatusFailed && want != operations.OperationStatusFailed {
+			t.Fatalf("operation failed: %#v", operation)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("operation did not reach %s: %#v", want, operation)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func stopWorker(t *testing.T, cancel context.CancelFunc, workerDone <-chan error) {
+	t.Helper()
 	cancel()
 	select {
 	case err := <-workerDone:
@@ -160,12 +245,14 @@ func newTestService(
 }
 
 type recordingCreate struct {
+	calls   int
 	result  provisioner.CreateWorkloadResult
 	err     error
 	command provisioner.CreateWorkloadCommand
 }
 
 func (a *recordingCreate) CreateWorkload(_ context.Context, command provisioner.CreateWorkloadCommand) (provisioner.CreateWorkloadResult, error) {
+	a.calls++
 	a.command = command
 	return a.result, a.err
 }
@@ -193,6 +280,15 @@ func (a *recordingDelete) DeleteWorkload(_ context.Context, command provisioner.
 	a.command = command
 	a.binding = binding
 	return a.err
+}
+
+type failingSaveBindingStore struct {
+	runtimebinding.Store
+	err error
+}
+
+func (s *failingSaveBindingStore) SaveCreated(runtimebinding.Binding) (runtimebinding.Binding, bool, error) {
+	return runtimebinding.Binding{}, false, s.err
 }
 
 func createCommand() provisioner.CreateWorkloadCommand {
