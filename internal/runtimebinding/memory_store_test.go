@@ -108,6 +108,28 @@ func TestMemoryStoreRejectsDeletingToCreatedRegression(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreRestoresCreatedAfterDeleteReservationFailure(t *testing.T) {
+	store := NewMemoryStore()
+	createdAt := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	binding := validBinding(createdAt)
+	if _, _, err := store.SaveCreated(binding); err != nil {
+		t.Fatal(err)
+	}
+	deletingAt := createdAt.Add(time.Minute)
+	if _, err := store.MarkDeleting(binding.InstanceID, deletingAt); err != nil {
+		t.Fatal(err)
+	}
+	restoredAt := deletingAt.Add(time.Minute)
+
+	restored, err := store.RestoreCreated(binding.InstanceID, restoredAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.State != StateCreated || !restored.UpdatedAt.Equal(restoredAt) || restored.DeletedAt != nil {
+		t.Fatalf("restored = %#v", restored)
+	}
+}
+
 func validBinding(now time.Time) Binding {
 	return Binding{
 		InstanceID:        "018f3f1e-21b8-7a91-a30b-63b3400fd001",

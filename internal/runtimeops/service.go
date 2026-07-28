@@ -3,6 +3,7 @@ package runtimeops
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/MSG-CTF/secure-provisioner/internal/k3s"
@@ -39,6 +40,7 @@ type Service struct {
 	worker      *operations.Worker
 	maxAttempts int
 	now         func() time.Time
+	enqueueMu   sync.Mutex
 }
 
 func NewService(
@@ -83,6 +85,8 @@ func NewService(
 }
 
 func (s *Service) EnqueueCreate(command provisioner.CreateWorkloadCommand) (operations.Operation, bool, error) {
+	s.enqueueMu.Lock()
+	defer s.enqueueMu.Unlock()
 	return s.operations.EnqueueCreate(command, s.maxAttempts)
 }
 
@@ -176,6 +180,22 @@ func (s *Service) GetRuntimeStatus(ctx context.Context, instanceID string) (k3s.
 }
 
 func (s *Service) EnqueueDelete(command provisioner.DeleteWorkloadCommand) (operations.Operation, bool, error) {
+	s.enqueueMu.Lock()
+	defer s.enqueueMu.Unlock()
+
+	existing, err := s.operations.GetByRequestID(command.RequestID)
+	if err == nil {
+		if existing.Type == operations.OperationTypeDelete &&
+			existing.DeleteCommand != nil &&
+			*existing.DeleteCommand == command {
+			return existing, false, nil
+		}
+		return operations.Operation{}, false, operations.ErrIdempotencyConflict
+	}
+	if !errors.Is(err, operations.ErrOperationNotFound) {
+		return operations.Operation{}, false, err
+	}
+
 	binding, err := s.bindings.Get(command.InstanceID)
 	if err != nil {
 		return operations.Operation{}, false, err
@@ -186,10 +206,20 @@ func (s *Service) EnqueueDelete(command provisioner.DeleteWorkloadCommand) (oper
 	if binding.State == runtimebinding.StateDeleted {
 		return operations.Operation{}, false, runtimebinding.ErrInvalidTransition
 	}
+	transitioned := binding.State == runtimebinding.StateCreated
 	if _, err := s.bindings.MarkDeleting(binding.InstanceID, s.now().UTC()); err != nil {
 		return operations.Operation{}, false, err
 	}
-	return s.operations.EnqueueDelete(command, s.maxAttempts)
+	operation, created, err := s.operations.EnqueueDelete(command, s.maxAttempts)
+	if err == nil {
+		return operation, created, nil
+	}
+	if transitioned {
+		if _, restoreErr := s.bindings.RestoreCreated(binding.InstanceID, s.now().UTC()); restoreErr != nil {
+			return operations.Operation{}, false, errors.Join(err, restoreErr)
+		}
+	}
+	return operations.Operation{}, false, err
 }
 
 func (s *Service) GetOperation(operationID string) (operations.Operation, error) {

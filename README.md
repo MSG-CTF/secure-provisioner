@@ -31,6 +31,7 @@ API 계약은 [런타임 API 명세](docs/api/runtime-operations.md)와
 | `PROVISIONER_POLL_INTERVAL` | `1s` | K3s 상태 확인 간격 |
 | `PROVISIONER_ROLLBACK_TIMEOUT` | `30s` | 생성 실패 rollback 제한 시간 |
 | `PROVISIONER_DELETE_TIMEOUT` | `1m` | Namespace 삭제 완료 제한 시간 |
+| `PROVISIONER_WORKER_SHUTDOWN_TIMEOUT` | rollback + `10s` | 종료 시 Worker cleanup 대기 시간 |
 
 Registry 예시:
 

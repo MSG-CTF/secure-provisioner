@@ -72,6 +72,29 @@ func (s *MemoryStore) MarkDeleting(instanceID string, updatedAt time.Time) (Bind
 	return copyBinding(binding), nil
 }
 
+func (s *MemoryStore) RestoreCreated(instanceID string, updatedAt time.Time) (Binding, error) {
+	if updatedAt.IsZero() {
+		return Binding{}, ErrInvalidTransition
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	binding, found := s.bindings[instanceID]
+	if !found {
+		return Binding{}, ErrNotFound
+	}
+	switch binding.State {
+	case StateDeleting:
+		binding.State = StateCreated
+		binding.UpdatedAt = updatedAt
+		binding.DeletedAt = nil
+		s.bindings[instanceID] = binding
+	case StateCreated:
+	default:
+		return Binding{}, ErrInvalidTransition
+	}
+	return copyBinding(binding), nil
+}
+
 func (s *MemoryStore) MarkDeleted(instanceID string, deletedAt time.Time) (Binding, error) {
 	if deletedAt.IsZero() {
 		return Binding{}, ErrInvalidTransition

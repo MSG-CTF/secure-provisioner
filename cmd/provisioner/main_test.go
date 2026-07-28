@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -28,21 +31,23 @@ func TestLoadConfigRequiresRegistryAndUsesSafeDefaults(t *testing.T) {
 	if config.Address != "127.0.0.1:8080" || config.RegistryPath != "clusters.json" ||
 		config.WorkerConcurrency != 4 || config.MaxAttempts != 3 ||
 		config.ReadyTimeout != 2*time.Minute || config.PollInterval != time.Second ||
-		config.RollbackTimeout != 30*time.Second || config.DeleteTimeout != time.Minute {
+		config.RollbackTimeout != 30*time.Second || config.DeleteTimeout != time.Minute ||
+		config.WorkerShutdownTimeout != 40*time.Second {
 		t.Fatalf("config = %#v", config)
 	}
 }
 
 func TestLoadConfigParsesRuntimeSettingsAndRejectsInvalidValues(t *testing.T) {
 	config, err := loadConfig(environment(map[string]string{
-		"PROVISIONER_ADDR":               "0.0.0.0:9090",
-		"PROVISIONER_CLUSTER_REGISTRY":   "clusters.json",
-		"PROVISIONER_WORKER_CONCURRENCY": "2",
-		"PROVISIONER_MAX_ATTEMPTS":       "5",
-		"PROVISIONER_READY_TIMEOUT":      "90s",
-		"PROVISIONER_POLL_INTERVAL":      "250ms",
-		"PROVISIONER_ROLLBACK_TIMEOUT":   "20s",
-		"PROVISIONER_DELETE_TIMEOUT":     "45s",
+		"PROVISIONER_ADDR":                    "0.0.0.0:9090",
+		"PROVISIONER_CLUSTER_REGISTRY":        "clusters.json",
+		"PROVISIONER_WORKER_CONCURRENCY":      "2",
+		"PROVISIONER_MAX_ATTEMPTS":            "5",
+		"PROVISIONER_READY_TIMEOUT":           "90s",
+		"PROVISIONER_POLL_INTERVAL":           "250ms",
+		"PROVISIONER_ROLLBACK_TIMEOUT":        "20s",
+		"PROVISIONER_DELETE_TIMEOUT":          "45s",
+		"PROVISIONER_WORKER_SHUTDOWN_TIMEOUT": "35s",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +55,7 @@ func TestLoadConfigParsesRuntimeSettingsAndRejectsInvalidValues(t *testing.T) {
 	if config.Address != "0.0.0.0:9090" || config.WorkerConcurrency != 2 ||
 		config.MaxAttempts != 5 || config.ReadyTimeout != 90*time.Second ||
 		config.PollInterval != 250*time.Millisecond || config.RollbackTimeout != 20*time.Second ||
-		config.DeleteTimeout != 45*time.Second {
+		config.DeleteTimeout != 45*time.Second || config.WorkerShutdownTimeout != 35*time.Second {
 		t.Fatalf("config = %#v", config)
 	}
 
@@ -61,6 +66,7 @@ func TestLoadConfigParsesRuntimeSettingsAndRejectsInvalidValues(t *testing.T) {
 		"PROVISIONER_POLL_INTERVAL",
 		"PROVISIONER_ROLLBACK_TIMEOUT",
 		"PROVISIONER_DELETE_TIMEOUT",
+		"PROVISIONER_WORKER_SHUTDOWN_TIMEOUT",
 	} {
 		t.Run(key, func(t *testing.T) {
 			values := map[string]string{
@@ -71,6 +77,14 @@ func TestLoadConfigParsesRuntimeSettingsAndRejectsInvalidValues(t *testing.T) {
 				t.Fatal("loadConfig() error = nil")
 			}
 		})
+	}
+
+	if _, err := loadConfig(environment(map[string]string{
+		"PROVISIONER_CLUSTER_REGISTRY":        "clusters.json",
+		"PROVISIONER_ROLLBACK_TIMEOUT":        "30s",
+		"PROVISIONER_WORKER_SHUTDOWN_TIMEOUT": "20s",
+	})); err == nil {
+		t.Fatal("loadConfig() accepts worker shutdown shorter than rollback")
 	}
 }
 
@@ -113,6 +127,47 @@ func TestNewApplicationQueuesCreateThroughRuntimeService(t *testing.T) {
 	}
 }
 
+func TestRunApplicationWaitsForWorkerCleanupAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	worker := &cleanupWorker{
+		started:  make(chan struct{}),
+		finished: make(chan struct{}),
+		delay:    50 * time.Millisecond,
+	}
+	app := &application{
+		handler:   http.NewServeMux(),
+		runWorker: worker.Run,
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	result := make(chan error, 1)
+	go func() {
+		result <- runApplication(ctx, appConfig{
+			Address:               "127.0.0.1:0",
+			WorkerShutdownTimeout: 200 * time.Millisecond,
+		}, app, logger)
+	}()
+	select {
+	case <-worker.started:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not start")
+	}
+	cancel()
+
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("runApplication() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runApplication() did not wait for cleanup")
+	}
+	select {
+	case <-worker.finished:
+	default:
+		t.Fatal("worker cleanup was not allowed to finish")
+	}
+}
+
 func environment(values map[string]string) func(string) string {
 	return func(key string) string {
 		return values[key]
@@ -126,4 +181,18 @@ func (fakeClientFactory) FromKubeconfig(string) (k3s.ClientSet, error) {
 		Kubernetes: fake.NewSimpleClientset(),
 		Metrics:    metricsfake.NewSimpleClientset(),
 	}, nil
+}
+
+type cleanupWorker struct {
+	started  chan struct{}
+	finished chan struct{}
+	delay    time.Duration
+}
+
+func (w *cleanupWorker) Run(ctx context.Context) error {
+	close(w.started)
+	<-ctx.Done()
+	time.Sleep(w.delay)
+	close(w.finished)
+	return nil
 }
