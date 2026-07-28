@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -214,6 +215,38 @@ func TestDeleteInstanceMapsBindingConflictWithoutLeakingDetails(t *testing.T) {
 	assertErrorCode(t, response, "INSTANCE_BINDING_MISMATCH")
 }
 
+func TestDeleteInstanceMapsQueueErrorsWithoutLeakingDetails(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantCode   string
+	}{
+		{name: "missing binding", err: runtimebinding.ErrNotFound, wantStatus: http.StatusNotFound, wantCode: "INSTANCE_NOT_FOUND"},
+		{name: "binding mismatch", err: runtimeops.ErrBindingMismatch, wantStatus: http.StatusConflict, wantCode: "INSTANCE_BINDING_MISMATCH"},
+		{name: "request ID conflict", err: operations.ErrIdempotencyConflict, wantStatus: http.StatusConflict, wantCode: "REQUEST_ID_CONFLICT"},
+		{name: "invalid transition", err: runtimebinding.ErrInvalidTransition, wantStatus: http.StatusConflict, wantCode: "INSTANCE_STATE_CONFLICT"},
+		{name: "store failure", err: errors.New("private operation store detail"), wantStatus: http.StatusBadGateway, wantCode: "DELETE_QUEUE_FAILED"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runtime := &recordingRuntimeUseCase{deleteErr: test.err}
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodDelete, "/internal/v1/instances/"+runtimeInstanceID, strings.NewReader(validDeleteRequestJSON()))
+			request.Header.Set("Content-Type", "application/json")
+
+			NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+
+			if response.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d; body = %s", response.Code, test.wantStatus, response.Body.String())
+			}
+			assertErrorCode(t, response, test.wantCode)
+			if strings.Contains(response.Body.String(), "private operation store detail") {
+				t.Fatalf("response leaked queue error details: %s", response.Body.String())
+			}
+		})
+	}
+}
+
 func TestGetOperationReturnsProgress(t *testing.T) {
 	runtime := &recordingRuntimeUseCase{
 		operation: operations.Operation{
@@ -302,6 +335,34 @@ func TestGetOperationReturnsCreateAndDeleteResults(t *testing.T) {
 			}
 			if response.Header().Get("Retry-After") != "" {
 				t.Fatalf("terminal Retry-After = %q", response.Header().Get("Retry-After"))
+			}
+		})
+	}
+}
+
+func TestGetOperationMapsLookupErrorsWithoutLeakingDetails(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantCode   string
+	}{
+		{name: "operation not found", err: operations.ErrOperationNotFound, wantStatus: http.StatusNotFound, wantCode: "OPERATION_NOT_FOUND"},
+		{name: "store failure", err: errors.New("private operation store detail"), wantStatus: http.StatusInternalServerError, wantCode: "OPERATION_LOOKUP_FAILED"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runtime := &recordingRuntimeUseCase{operationErr: test.err}
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodGet, "/internal/v1/operations/operation-01", nil)
+
+			NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+
+			if response.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d; body = %s", response.Code, test.wantStatus, response.Body.String())
+			}
+			assertErrorCode(t, response, test.wantCode)
+			if strings.Contains(response.Body.String(), "private operation store detail") {
+				t.Fatalf("response leaked operation lookup details: %s", response.Body.String())
 			}
 		})
 	}

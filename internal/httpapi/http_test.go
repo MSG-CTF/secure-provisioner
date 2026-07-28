@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -166,6 +167,23 @@ func TestCreateInstanceRejectsRequestIDConflict(t *testing.T) {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusConflict, response.Body.String())
 	}
 	assertErrorCode(t, response, "REQUEST_ID_CONFLICT")
+}
+
+func TestCreateInstanceMapsQueueFailureWithoutLeakingStoreDetails(t *testing.T) {
+	runtime := &recordingRuntimeUseCase{createErr: errors.New("private operation store detail")}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(validCreateRequestJSON()))
+	request.Header.Set("Content-Type", "application/json")
+
+	NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusBadGateway, response.Body.String())
+	}
+	assertErrorCode(t, response, "CREATE_QUEUE_FAILED")
+	if strings.Contains(response.Body.String(), "private operation store detail") {
+		t.Fatalf("response leaked queue error details: %s", response.Body.String())
+	}
 }
 
 func TestCreateInstanceRequiresJSONContentType(t *testing.T) {
