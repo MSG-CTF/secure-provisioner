@@ -7,6 +7,7 @@ import (
 	"mime"
 	"net/http"
 
+	"github.com/MSG-CTF/secure-provisioner/internal/operations"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 )
 
@@ -49,6 +50,20 @@ func (api *API) handleCreateInstance(writer http.ResponseWriter, request *http.R
 	}
 	if err := createRequest.Validate(); err != nil {
 		writeAPIError(writer, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		return
+	}
+
+	if api.runtime != nil {
+		operation, created, err := api.runtime.EnqueueCreate(createRequest.ToCommand())
+		if err != nil {
+			if errors.Is(err, operations.ErrIdempotencyConflict) {
+				writeAPIError(writer, http.StatusConflict, "REQUEST_ID_CONFLICT", "request_id is already used by another operation")
+				return
+			}
+			writeAPIError(writer, http.StatusBadGateway, "CREATE_QUEUE_FAILED", "workload creation could not be queued")
+			return
+		}
+		writeAcceptedOperation(writer, operation, created)
 		return
 	}
 

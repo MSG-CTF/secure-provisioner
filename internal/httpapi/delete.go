@@ -24,7 +24,7 @@ type DeleteWorkloadRequest struct {
 	TeamID            int64         `json:"team_id"`
 	Target            RuntimeTarget `json:"target"`
 	RuntimeWorkloadID string        `json:"runtime_workload_id"`
-	Reason            DeleteReason  `json:"reason"`
+	Reason            DeleteReason  `json:"delete_reason"`
 }
 
 type DeleteWorkloadResponse struct {
@@ -52,7 +52,7 @@ func (request DeleteWorkloadRequest) Validate() error {
 		return fmt.Errorf("runtime_workload_id is required")
 	}
 	if !request.Reason.isValid() {
-		return fmt.Errorf("reason is invalid")
+		return fmt.Errorf("delete_reason is invalid")
 	}
 	return nil
 }

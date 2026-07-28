@@ -9,7 +9,7 @@ import (
 )
 
 func TestDeleteWorkloadRequestDecodesAndConvertsSchedulerContract(t *testing.T) {
-	body := `{"request_id":"req-delete-01","instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001","team_id":1,"target":{"runtime_type":"KUBERNETES","target_id":"cluster-main"},"runtime_workload_id":"cluster-main/ns-team-1/workload-abc","reason":"TTL_EXPIRED"}`
+	body := `{"request_id":"req-delete-01","instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001","team_id":1,"target":{"runtime_type":"KUBERNETES","target_id":"cluster-main"},"runtime_workload_id":"cluster-main/ns-team-1/workload-abc","delete_reason":"TTL_EXPIRED"}`
 	var request DeleteWorkloadRequest
 	if err := json.Unmarshal([]byte(body), &request); err != nil {
 		t.Fatal(err)
@@ -26,12 +26,12 @@ func TestDeleteWorkloadRequestDecodesAndConvertsSchedulerContract(t *testing.T) 
 	}
 }
 
-func TestDeleteWorkloadRequestUsesReasonField(t *testing.T) {
+func TestDeleteWorkloadRequestUsesDeleteReasonField(t *testing.T) {
 	encoded, err := json.Marshal(validDeleteWorkloadRequest())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(encoded), `"reason":"USER_REQUESTED"`) || strings.Contains(string(encoded), "delete_reason") {
+	if !strings.Contains(string(encoded), `"delete_reason":"USER_REQUESTED"`) || strings.Contains(string(encoded), `"reason"`) {
 		t.Fatalf("json = %s", encoded)
 	}
 }

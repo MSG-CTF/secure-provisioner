@@ -5,6 +5,7 @@ import (
 	"errors"
 	"mime"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/MSG-CTF/secure-provisioner/internal/k3s"
@@ -15,6 +16,7 @@ import (
 )
 
 type RuntimeUseCase interface {
+	EnqueueCreate(provisioner.CreateWorkloadCommand) (operations.Operation, bool, error)
 	GetRuntimeStatus(context.Context, string) (k3s.RuntimeStatus, error)
 	EnqueueDelete(provisioner.DeleteWorkloadCommand) (operations.Operation, bool, error)
 	GetOperation(string) (operations.Operation, error)
@@ -58,13 +60,21 @@ type ResourceUsageResponse struct {
 }
 
 type OperationResponse struct {
-	OperationID   string `json:"operation_id"`
-	Type          string `json:"type"`
-	Status        string `json:"status"`
-	Attempt       int    `json:"attempt"`
-	MaxAttempts   int    `json:"max_attempts"`
-	LastErrorCode string `json:"last_error_code,omitempty"`
-	Created       bool   `json:"created,omitempty"`
+	OperationID   string                   `json:"operation_id"`
+	RequestID     string                   `json:"request_id"`
+	Type          string                   `json:"type"`
+	Status        string                   `json:"status"`
+	Attempt       int                      `json:"attempt"`
+	MaxAttempts   int                      `json:"max_attempts"`
+	LastErrorCode string                   `json:"last_error_code,omitempty"`
+	Created       *bool                    `json:"created,omitempty"`
+	Result        *OperationResultResponse `json:"result,omitempty"`
+}
+
+type OperationResultResponse struct {
+	RuntimeWorkloadID string `json:"runtime_workload_id"`
+	ServiceURL        string `json:"service_url,omitempty"`
+	Status            string `json:"status,omitempty"`
 }
 
 func (api *API) handleRuntimeStatus(writer http.ResponseWriter, request *http.Request) {
@@ -106,9 +116,7 @@ func (api *API) handleDeleteInstance(writer http.ResponseWriter, request *http.R
 		writeDeleteError(writer, err)
 		return
 	}
-	response := newOperationResponse(operation)
-	response.Created = created
-	writeJSON(writer, http.StatusAccepted, response)
+	writeAcceptedOperation(writer, operation, created)
 }
 
 func (api *API) handleGetOperation(writer http.ResponseWriter, request *http.Request) {
@@ -121,7 +129,27 @@ func (api *API) handleGetOperation(writer http.ResponseWriter, request *http.Req
 		writeAPIError(writer, http.StatusInternalServerError, "OPERATION_LOOKUP_FAILED", "operation lookup failed")
 		return
 	}
+	if operationNeedsPolling(operation.Status) {
+		writer.Header().Set("Retry-After", "2")
+	}
 	writeJSON(writer, http.StatusOK, newOperationResponse(operation))
+}
+
+func writeAcceptedOperation(writer http.ResponseWriter, operation operations.Operation, created bool) {
+	writer.Header().Set("Location", "/internal/v1/operations/"+url.PathEscape(operation.ID))
+	writer.Header().Set("Retry-After", "2")
+	response := newOperationResponse(operation)
+	response.Created = &created
+	writeJSON(writer, http.StatusAccepted, response)
+}
+
+func operationNeedsPolling(status operations.OperationStatus) bool {
+	switch status {
+	case operations.OperationStatusQueued, operations.OperationStatusRunning, operations.OperationStatusRetrying:
+		return true
+	default:
+		return false
+	}
 }
 
 func writeDeleteError(writer http.ResponseWriter, err error) {
@@ -186,10 +214,38 @@ func newResourceValuesResponse(values k3s.ResourceValues) ResourceValuesResponse
 func newOperationResponse(operation operations.Operation) OperationResponse {
 	return OperationResponse{
 		OperationID:   operation.ID,
+		RequestID:     operation.RequestID,
 		Type:          string(operation.Type),
 		Status:        string(operation.Status),
 		Attempt:       operation.Attempt,
 		MaxAttempts:   operation.MaxAttempts,
 		LastErrorCode: operation.LastErrorCode,
+		Result:        newOperationResultResponse(operation),
+	}
+}
+
+func newOperationResultResponse(operation operations.Operation) *OperationResultResponse {
+	if operation.Status != operations.OperationStatusSucceeded {
+		return nil
+	}
+	switch operation.Type {
+	case operations.OperationTypeCreate:
+		if operation.Result.Create == nil {
+			return nil
+		}
+		return &OperationResultResponse{
+			RuntimeWorkloadID: operation.Result.Create.RuntimeWorkloadID,
+			ServiceURL:        operation.Result.Create.ServiceURL,
+		}
+	case operations.OperationTypeDelete:
+		if !operation.Result.DeleteCompleted || operation.DeleteCommand == nil {
+			return nil
+		}
+		return &OperationResultResponse{
+			RuntimeWorkloadID: operation.DeleteCommand.RuntimeWorkloadID,
+			Status:            "SUCCESS",
+		}
+	default:
+		return nil
 	}
 }

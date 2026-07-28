@@ -100,6 +100,7 @@ func TestDeleteInstanceQueuesBoundRuntimeOperation(t *testing.T) {
 	runtime := &recordingRuntimeUseCase{
 		operation: operations.Operation{
 			ID:          "operation-delete-01",
+			RequestID:   "req-delete-01",
 			Type:        operations.OperationTypeDelete,
 			Status:      operations.OperationStatusQueued,
 			Attempt:     0,
@@ -126,8 +127,18 @@ func TestDeleteInstanceQueuesBoundRuntimeOperation(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.OperationID != "operation-delete-01" || payload.Status != "QUEUED" || !payload.Created {
+	if payload.OperationID != "operation-delete-01" || payload.Status != "QUEUED" ||
+		payload.Created == nil || !*payload.Created {
 		t.Fatalf("payload = %#v", payload)
+	}
+	if payload.RequestID != "req-delete-01" {
+		t.Fatalf("request id = %q", payload.RequestID)
+	}
+	if got := response.Header().Get("Location"); got != "/internal/v1/operations/operation-delete-01" {
+		t.Fatalf("Location = %q", got)
+	}
+	if got := response.Header().Get("Retry-After"); got != "2" {
+		t.Fatalf("Retry-After = %q", got)
 	}
 }
 
@@ -189,10 +200,74 @@ func TestGetOperationReturnsProgress(t *testing.T) {
 		payload.Attempt != 1 || payload.MaxAttempts != 3 || payload.LastErrorCode != "TARGET_TEMPORARILY_UNAVAILABLE" {
 		t.Fatalf("payload = %#v", payload)
 	}
+	if response.Header().Get("Retry-After") != "2" {
+		t.Fatalf("Retry-After = %q", response.Header().Get("Retry-After"))
+	}
+}
+
+func TestGetOperationReturnsCreateAndDeleteResults(t *testing.T) {
+	tests := []struct {
+		name      string
+		operation operations.Operation
+		want      OperationResultResponse
+	}{
+		{
+			name: "create",
+			operation: operations.Operation{
+				ID:        "operation-create-01",
+				RequestID: "req-create-01",
+				Type:      operations.OperationTypeCreate,
+				Status:    operations.OperationStatusSucceeded,
+				Result: operations.OperationResult{Create: &provisioner.CreateWorkloadResult{
+					RuntimeWorkloadID: "aws-dev/ns/challenge",
+					ServiceURL:        "https://challenge.example.test",
+				}},
+			},
+			want: OperationResultResponse{
+				RuntimeWorkloadID: "aws-dev/ns/challenge",
+				ServiceURL:        "https://challenge.example.test",
+			},
+		},
+		{
+			name: "delete",
+			operation: operations.Operation{
+				ID:            "operation-delete-01",
+				RequestID:     "req-delete-01",
+				Type:          operations.OperationTypeDelete,
+				Status:        operations.OperationStatusSucceeded,
+				DeleteCommand: &provisioner.DeleteWorkloadCommand{RuntimeWorkloadID: "aws-dev/ns/challenge"},
+				Result:        operations.OperationResult{DeleteCompleted: true},
+			},
+			want: OperationResultResponse{
+				RuntimeWorkloadID: "aws-dev/ns/challenge",
+				Status:            "SUCCESS",
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runtime := &recordingRuntimeUseCase{operation: test.operation}
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodGet, "/internal/v1/operations/"+test.operation.ID, nil)
+
+			NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+
+			var payload OperationResponse
+			if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.Result == nil || *payload.Result != test.want {
+				t.Fatalf("result = %#v, want %#v", payload.Result, test.want)
+			}
+			if response.Header().Get("Retry-After") != "" {
+				t.Fatalf("terminal Retry-After = %q", response.Header().Get("Retry-After"))
+			}
+		})
+	}
 }
 
 func validDeleteRequestJSON() string {
-	return `{"request_id":"req-delete-01","instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001","team_id":1,"target":{"runtime_type":"KUBERNETES","target_id":"aws-dev"},"runtime_workload_id":"aws-dev/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge","reason":"USER_REQUESTED"}`
+	return `{"request_id":"req-delete-01","instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001","team_id":1,"target":{"runtime_type":"KUBERNETES","target_id":"aws-dev"},"runtime_workload_id":"aws-dev/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge","delete_reason":"USER_REQUESTED"}`
 }
 
 type recordingRuntimeUseCase struct {
@@ -205,6 +280,9 @@ type recordingRuntimeUseCase struct {
 	deleteCommand    provisioner.DeleteWorkloadCommand
 	deleteCalls      int
 	operationErr     error
+	createErr        error
+	createCommand    provisioner.CreateWorkloadCommand
+	createCalls      int
 }
 
 func (useCase *recordingRuntimeUseCase) GetRuntimeStatus(_ context.Context, instanceID string) (k3s.RuntimeStatus, error) {
@@ -216,6 +294,12 @@ func (useCase *recordingRuntimeUseCase) EnqueueDelete(command provisioner.Delete
 	useCase.deleteCalls++
 	useCase.deleteCommand = command
 	return useCase.operation, useCase.created, useCase.deleteErr
+}
+
+func (useCase *recordingRuntimeUseCase) EnqueueCreate(command provisioner.CreateWorkloadCommand) (operations.Operation, bool, error) {
+	useCase.createCalls++
+	useCase.createCommand = command
+	return useCase.operation, useCase.created, useCase.createErr
 }
 
 func (useCase *recordingRuntimeUseCase) GetOperation(string) (operations.Operation, error) {
