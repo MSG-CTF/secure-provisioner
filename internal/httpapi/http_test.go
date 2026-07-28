@@ -228,6 +228,7 @@ func assertErrorCode(t *testing.T, response *httptest.ResponseRecorder, want str
 
 func assertPublicErrorMessage(t *testing.T, response *httptest.ResponseRecorder, wantCode, privateDetail string) {
 	t.Helper()
+	rawBody := response.Body.String()
 	payload := assertAPIErrorEnvelope(t, response, wantCode)
 	if payload.Error.Message == nil {
 		t.Fatal("error message is missing")
@@ -235,8 +236,8 @@ func assertPublicErrorMessage(t *testing.T, response *httptest.ResponseRecorder,
 	if strings.TrimSpace(*payload.Error.Message) == "" {
 		t.Fatal("error message is empty")
 	}
-	if strings.Contains(*payload.Error.Message, privateDetail) {
-		t.Fatalf("response leaked private error detail in message: %q", *payload.Error.Message)
+	if strings.Contains(rawBody, privateDetail) {
+		t.Fatalf("response leaked private error detail: %s", rawBody)
 	}
 }
 
