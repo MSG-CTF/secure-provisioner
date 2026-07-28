@@ -1,83 +1,84 @@
-# Async Delete and Runtime Status API Design
+# 비동기 삭제 및 런타임 상태 조회 API 설계
 
-## Status
+## 문서 상태
 
-- Date: 2026-07-28
-- Repository: `MSG-CTF/secure-provisioner`
-- Related issues: #16, #25
-- Related runtime work: #17, #18, #24
+- 작성일: 2026-07-28
+- 저장소: `MSG-CTF/secure-provisioner`
+- 관련 이슈: #16, #25
+- 관련 런타임 작업: #17, #18, #24
 
-## Purpose
+## 목적
 
-Secure Provisioner will expose an asynchronous, idempotent deletion API and an
-Operation polling API. It will also expose a separate runtime status API that
-reports the real state of an instance's containers and the scheduling capacity
-of the single-node K3s target selected by `target_id`.
+Secure Provisioner에 비동기·멱등 삭제 API와 Operation 폴링 API를
+제공한다. 별도의 런타임 상태 API에서는 인스턴스 컨테이너의 실제 상태와
+`target_id`가 가리키는 단일 노드 K3s의 배치 가능 자원을 함께 제공한다.
 
-The implementation is local to Secure Provisioner. The Instance Scheduler
-repository is a contract reference only and must not be modified.
+이번 구현은 Secure Provisioner 저장소로 한정한다. Instance Scheduler
+저장소는 API 계약을 확인하는 용도로만 사용하며 수정하지 않는다.
 
-## Decisions
+## 확정 사항
 
-1. The existing create API remains synchronous in this scope. Converting create
-   to an asynchronous API requires a separate Scheduler contract decision.
-2. Delete requests are asynchronous. A successful submission returns HTTP 202
-   and an Operation identifier.
-3. Operation waiting uses `QUEUED`. `WAITING` remains a container state and is
-   not used as an Operation state.
-4. Delete request JSON follows the existing Scheduler DTO, including
-   `delete_reason`.
-5. The final successful delete Operation result preserves the Scheduler's
-   existing semantic result: `runtime_workload_id` and `status: SUCCESS`.
-6. Runtime status is looked up by `instance_id`. The stored Binding determines
-   `target_id`; callers cannot redirect a lookup to another target.
-7. A target represents one VM running one single-node K3s cluster.
-8. Scheduling space is calculated from Kubernetes `allocatable - requested`.
-   Instantaneous CPU and memory usage are observational data, not the placement
-   authority.
-9. AWS EC2/CloudWatch and GCP Compute/Monitoring data are phase-two work and are
-   excluded.
-10. The local dashboard remains local-only and is not part of the publishable
-    API implementation.
+1. 기존 생성 API는 이번 범위에서 동기식으로 유지한다. 생성 API를
+   비동기로 변경하려면 Scheduler 팀과 별도의 API 계약 합의가 필요하다.
+2. 삭제 요청은 비동기로 처리한다. 정상 접수되면 HTTP 202와
+   `operation_id`를 반환한다.
+3. Operation 대기 상태는 `QUEUED`를 사용한다. `WAITING`은 컨테이너
+   상태로만 사용하며 Operation 상태에는 사용하지 않는다.
+4. 삭제 요청 JSON은 기존 Scheduler DTO에 맞춰 `delete_reason` 필드를
+   사용한다.
+5. 삭제 성공 Operation의 최종 결과는 Scheduler가 기존에 기대하던
+   `runtime_workload_id`와 `status: SUCCESS` 의미를 유지한다.
+6. 런타임 상태는 `instance_id`로 조회한다. 저장된 Binding에서
+   `target_id`를 결정하므로 호출자가 다른 target으로 조회를 우회할 수
+   없다.
+7. 하나의 target은 VM 한 대에서 실행되는 단일 노드 K3s 하나를
+   의미한다.
+8. 컨테이너 추가 배치 가능 공간은 Kubernetes의
+   `allocatable - requested`로 계산한다. 순간 CPU·메모리 사용량은
+   관찰용 보조 정보이며 배치 판단의 기준으로 사용하지 않는다.
+9. AWS EC2·CloudWatch와 GCP Compute·Monitoring 정보는 2차 작업으로
+   분리하며 이번 범위에서 제외한다.
+10. 로컬 대시보드는 계속 로컬 전용으로 유지하며 배포 가능한 API 구현에
+    포함하지 않는다.
 
-## Scope
+## 작업 범위
 
-### Included
+### 포함
 
-- Scheduler-compatible delete request decoding and validation
-- Asynchronous delete submission
-- Idempotency by `request_id`
-- Operation polling and terminal result payloads
-- Exact `target_id` routing through the Cluster Registry
-- Binding and Kubernetes ownership validation
-- Foreground Namespace deletion
-- Already-absent Namespace success
-- Retry classification and bounded retries
-- Container lifecycle, requests, limits, and Metrics API usage
-- Single-node K3s health, capacity, allocatable, requested, schedulable, and
-  Metrics API usage
-- OpenAPI 3.1 contract and Markdown request/response examples
-- Fake Kubernetes and Metrics Client tests
-- Local HTTP polling test
+- Scheduler 호환 삭제 요청 디코딩과 검증
+- 비동기 삭제 접수
+- `request_id` 기반 멱등 처리
+- Operation 폴링과 최종 결과 응답
+- Cluster Registry를 이용한 정확한 `target_id` 라우팅
+- Binding과 Kubernetes 리소스 소유권 검증
+- Foreground 방식 Namespace 삭제
+- 이미 없는 Namespace의 성공 처리
+- 오류 재시도 가능 여부 분류와 제한된 재시도
+- 컨테이너 생명주기, requests, limits와 Metrics API 사용량 조회
+- 단일 노드 K3s 건강 상태, capacity, allocatable, requested,
+  schedulable과 Metrics API 사용량 조회
+- OpenAPI 3.1 명세와 Markdown 요청·응답 예제
+- Fake Kubernetes·Metrics Client 테스트
+- 로컬 HTTP 폴링 테스트
 
-### Excluded
+### 제외
 
-- Changes to `MSG-CTF/instance-scheduler`
-- Asynchronous create API
-- Scheduler DB state changes or polling worker
-- Operation and Binding database persistence
-- TTL detection
-- AWS/GCP VM creation or deletion
-- Cloud-provider power, network, and disk I/O monitoring
-- Multi-node K3s targets
-- Target selection or scheduling policy
-- Publishing or deploying the local dashboard
+- `MSG-CTF/instance-scheduler` 변경
+- 생성 API의 비동기 전환
+- Scheduler DB 상태 변경 또는 폴링 Worker
+- Operation·Binding의 운영 DB 영속화
+- TTL 감지
+- AWS/GCP VM 생성과 삭제
+- 클라우드 Provider의 VM 전원, 네트워크, 디스크 I/O 조회
+- 멀티노드 K3s target
+- target 선택 또는 스케줄링 정책
+- 로컬 대시보드 배포와 GitHub 업로드
 
-## Architecture
+## 아키텍처
 
-### Runtime Binding
+### 런타임 Binding
 
-`InstanceRuntimeBinding` is the authority for workload placement:
+`InstanceRuntimeBinding`은 workload 실행 위치의 기준 정보다.
 
 ```text
 instance_id
@@ -88,45 +89,47 @@ instance_id
   -> lifecycle state
 ```
 
-Delete and status requests load this Binding once and resolve exactly one
-Cluster Registry entry. Neither path scans other AWS, GCP, or NCP targets.
+삭제와 상태 조회는 Binding을 한 번 읽고 Cluster Registry에서 정확히
+하나의 target만 해석한다. AWS, GCP 또는 NCP의 다른 target을 순회하지
+않는다.
 
-The in-memory Binding Store remains an adapter behind an interface. Production
-persistence is explicitly deferred, so process restart recovery is not claimed
-by this implementation.
+인메모리 Binding Store는 인터페이스 뒤의 Adapter로 유지한다. 운영
+영속화는 이번 작업에서 제외하므로 프로세스 재시작 후 복구를 지원한다고
+표현하지 않는다.
 
-### Asynchronous Delete
+### 비동기 삭제
 
-The delete HTTP handler validates the path and Scheduler-compatible request,
-then calls `RuntimeService.EnqueueDelete`.
+삭제 HTTP Handler는 경로와 Scheduler 호환 요청을 검증한 다음
+`RuntimeService.EnqueueDelete`를 호출한다.
 
-The service:
+서비스 처리 순서는 다음과 같다.
 
-1. loads the Binding by `instance_id`;
-2. compares instance, team, target, runtime type, and workload identifiers;
-3. marks the Binding `DELETING`;
-4. enqueues an idempotent DELETE Operation;
-5. returns the Operation without waiting for K3s.
+1. `instance_id`로 Binding을 조회한다.
+2. 인스턴스, 팀, target, runtime type과 workload 식별자를 비교한다.
+3. Binding을 `DELETING`으로 변경한다.
+4. 멱등 DELETE Operation을 등록한다.
+5. K3s 삭제 완료를 기다리지 않고 Operation을 반환한다.
 
-If enqueue fails after a newly created Binding transition, the transition is
-restored so a request-id conflict or store error does not strand the Binding in
-`DELETING`. A repeated identical request keeps the existing transition and
-returns the same Operation.
+새로운 Binding 상태 전이 후 Operation 등록이 실패하면 상태를 복구한다.
+따라서 `request_id` 충돌이나 Store 오류가 Binding을 `DELETING`에
+고립시키지 않는다. 동일 요청의 재전송은 기존 상태를 유지하고 같은
+Operation을 반환한다.
 
-The Worker:
+Worker 처리 순서는 다음과 같다.
 
-1. loads the Binding;
-2. resolves its exact `target_id` with maintenance lookup;
-3. verifies Namespace ownership labels;
-4. requests Foreground Namespace deletion;
-5. waits for Namespace `NotFound` within the bounded adapter timeout;
-6. treats an already absent Namespace as success;
-7. records a Scheduler-compatible delete result;
-8. marks the Binding `DELETED`.
+1. Binding을 조회한다.
+2. Binding의 `target_id`로 정확한 K3s Client 하나를 선택한다.
+3. Namespace의 소유권 Label을 확인한다.
+4. Foreground 방식으로 Namespace 삭제를 요청한다.
+5. Adapter 제한 시간 안에서 Namespace가 `NotFound`가 될 때까지
+   확인한다.
+6. Namespace가 이미 없다면 성공으로 처리한다.
+7. Scheduler 호환 삭제 결과를 Operation에 저장한다.
+8. Binding을 `DELETED`로 변경한다.
 
 ### Operation Store
 
-The Operation Store owns the following state machine:
+Operation Store는 다음 상태 전이를 관리한다.
 
 ```text
 QUEUED -> RUNNING -> SUCCEEDED
@@ -134,47 +137,48 @@ QUEUED -> RUNNING -> SUCCEEDED
                   -> FAILED
 ```
 
-`request_id` is the idempotency key:
+`request_id`는 멱등 키다.
 
-- same `request_id` and same command: return the existing Operation;
-- same `request_id` and a different command: return `REQUEST_ID_CONFLICT`;
-- an existing terminal Operation is returned unchanged.
+- 같은 `request_id`와 같은 명령: 기존 Operation 반환
+- 같은 `request_id`와 다른 명령: `REQUEST_ID_CONFLICT`
+- 이미 완료된 Operation: 저장된 최종 상태 그대로 반환
 
-The local implementation uses the current in-memory Store. The API and Store
-interfaces must not imply restart durability.
+로컬 구현은 현재 인메모리 Store를 사용한다. API와 Store 인터페이스는
+프로세스 재시작 후에도 Operation이 유지된다고 보장하지 않는다.
 
-### Runtime Status Reader
+### 런타임 상태 조회
 
-The status service loads the Binding, resolves one target, verifies Namespace
-ownership, and reads:
+상태 조회 서비스는 Binding을 읽고 정확히 하나의 target을 선택한 다음
+Namespace 소유권을 검증한다. 이후 다음 정보를 조회한다.
 
-- instance Pods and container statuses from the Kubernetes Core API;
-- Pod CPU and memory usage from the Metrics API;
-- the target's single Node and Node conditions from the Core API;
-- Node CPU and memory usage from the Metrics API;
-- all non-terminal Pods assigned to that Node to calculate requested resources.
+- Kubernetes Core API의 인스턴스 Pod와 컨테이너 상태
+- Metrics API의 Pod별 CPU·메모리 사용량
+- Core API의 단일 Node와 Node Condition
+- Metrics API의 Node CPU·메모리 사용량
+- 해당 Node에 배치된 전체 미종료 Pod의 자원 요청량
 
-Exactly one Node must be present. Zero or multiple Nodes return
-`TARGET_TOPOLOGY_INVALID`, because this design treats a target as a single VM.
+Node는 반드시 하나여야 한다. Node가 없거나 둘 이상이면 이번 설계의
+단일 VM 조건과 다르므로 `TARGET_TOPOLOGY_INVALID`를 반환한다.
 
-Pod requested resources use Kubernetes scheduling semantics: regular container
-requests are summed, init-container maxima and Pod overhead are included, and
-terminal Pods are excluded. Schedulable values are clamped at zero:
+Pod 자원 요청량은 Kubernetes 스케줄링 규칙에 맞춰 계산한다. 일반
+컨테이너 requests의 합, init container의 최댓값과 Pod overhead를
+포함하고 종료된 Pod는 제외한다. 배치 가능 값은 음수가 되지 않도록
+0에서 제한한다.
 
 ```text
 schedulable = max(allocatable - requested, 0)
 ```
 
-CPU is represented in millicores. Memory and ephemeral storage are represented
-in MiB.
+CPU는 millicore, 메모리와 ephemeral storage는 MiB 단위로 반환한다.
 
-Metrics failures are degraded observations, not total status failures. Core API
-status, capacity, allocatable, requested, and conditions remain available;
-usage fields become `null` and metrics availability becomes false.
+Metrics 조회 실패는 상태 전체의 실패로 처리하지 않는다. Core API에서
+얻는 상태, capacity, allocatable, requested와 Condition은 그대로
+반환한다. 사용량 필드는 `null`, Metrics 사용 가능 여부는 `false`로
+표시한다.
 
 ## HTTP API
 
-### Submit Delete
+### 삭제 접수
 
 ```http
 DELETE /internal/v1/instances/{instance_id}
@@ -195,7 +199,7 @@ Content-Type: application/json
 }
 ```
 
-Response:
+응답:
 
 ```http
 HTTP/1.1 202 Accepted
@@ -215,16 +219,16 @@ Retry-After: 2
 }
 ```
 
-For an identical repeated request, `created` is false and the current existing
-Operation state is returned.
+동일한 요청을 반복하면 `created`가 `false`이고 기존 Operation의 현재
+상태가 반환된다.
 
-### Poll Operation
+### Operation 폴링
 
 ```http
 GET /internal/v1/operations/{operation_id}
 ```
 
-Non-terminal response:
+처리 중 응답:
 
 ```json
 {
@@ -237,10 +241,10 @@ Non-terminal response:
 }
 ```
 
-When the state is `QUEUED`, `RUNNING`, or `RETRYING`, the response includes a
-`Retry-After` header.
+상태가 `QUEUED`, `RUNNING` 또는 `RETRYING`이면 응답에 `Retry-After`
+Header를 포함한다.
 
-Successful delete response:
+삭제 성공 응답:
 
 ```json
 {
@@ -257,7 +261,7 @@ Successful delete response:
 }
 ```
 
-Terminal failure response:
+최종 실패 응답:
 
 ```json
 {
@@ -271,13 +275,13 @@ Terminal failure response:
 }
 ```
 
-### Get Runtime Status
+### 런타임 상태 조회
 
 ```http
 GET /internal/v1/instances/{instance_id}/runtime-status
 ```
 
-The response has this shape:
+응답 구조는 다음과 같다.
 
 ```json
 {
@@ -344,9 +348,9 @@ The response has this shape:
 }
 ```
 
-## Error Contract
+## 오류 계약
 
-API errors use the existing stable envelope:
+API 오류는 기존의 안정적인 Envelope를 사용한다.
 
 ```json
 {
@@ -357,68 +361,68 @@ API errors use the existing stable envelope:
 }
 ```
 
-Required stable cases:
+반드시 제공할 오류는 다음과 같다.
 
-| HTTP | Code | Meaning |
+| HTTP | Code | 의미 |
 |---|---|---|
-| 400 | `INVALID_REQUEST` | Invalid JSON, UUID, enum, or required field |
-| 404 | `INSTANCE_NOT_FOUND` | No Binding for the instance |
-| 404 | `OPERATION_NOT_FOUND` | Unknown Operation |
-| 409 | `INSTANCE_BINDING_MISMATCH` | Request identifiers differ from Binding |
-| 409 | `REQUEST_ID_CONFLICT` | Idempotency key reused for another command |
-| 409 | `INSTANCE_STATE_CONFLICT` | Delete is invalid for the Binding state |
-| 409 | `RUNTIME_OWNERSHIP_MISMATCH` | Kubernetes ownership labels do not match |
-| 502 | `RUNTIME_STATUS_FAILED` | Target status could not be read |
-| 503 | `TARGET_NOT_FOUND` | Registry has no target |
-| 503 | `TARGET_TOPOLOGY_INVALID` | Target is not a single-node K3s |
+| 400 | `INVALID_REQUEST` | 잘못된 JSON, UUID, enum 또는 필수 필드 |
+| 404 | `INSTANCE_NOT_FOUND` | 인스턴스 Binding 없음 |
+| 404 | `OPERATION_NOT_FOUND` | Operation 없음 |
+| 409 | `INSTANCE_BINDING_MISMATCH` | 요청 식별자가 Binding과 다름 |
+| 409 | `REQUEST_ID_CONFLICT` | 멱등 키를 다른 명령에 재사용 |
+| 409 | `INSTANCE_STATE_CONFLICT` | 현재 Binding 상태에서 삭제 불가 |
+| 409 | `RUNTIME_OWNERSHIP_MISMATCH` | Kubernetes 소유권 Label 불일치 |
+| 502 | `RUNTIME_STATUS_FAILED` | target 상태 조회 실패 |
+| 503 | `TARGET_NOT_FOUND` | Registry에 target 없음 |
+| 503 | `TARGET_TOPOLOGY_INVALID` | target이 단일 노드 K3s가 아님 |
 
-Kubeconfig contents, Kubernetes API addresses, credentials, container
-environment variables, and underlying client errors are never returned.
+kubeconfig 내용, Kubernetes API 주소, 자격 증명, 컨테이너 환경변수와
+내부 Client 오류는 응답에 포함하지 않는다.
 
-## Concurrency and Failure Handling
+## 동시성과 실패 처리
 
-- Delete uses the existing `(target_id, instance_id)` workload lock.
-- Create and delete for the same workload cannot mutate Kubernetes resources at
-  the same time.
-- Foreground Namespace deletion has a bounded timeout and poll interval.
-- Only classified transient errors are retryable.
-- A client disconnect does not change Operation ownership or create a second
-  Operation.
-- A duplicate request observes the existing Operation.
-- Ownership mismatch is terminal and never retried.
-- Metrics errors do not trigger delete or lifecycle changes.
+- 삭제는 기존 `(target_id, instance_id)` workload lock을 사용한다.
+- 같은 workload의 생성과 삭제가 Kubernetes 리소스를 동시에 변경하지
+  못하게 한다.
+- Foreground Namespace 삭제는 제한된 timeout과 poll interval을
+  사용한다.
+- 명시적으로 분류된 일시 오류만 재시도한다.
+- Client 연결이 끊겨도 Operation 소유권은 바뀌지 않으며 새 Operation을
+  만들지 않는다.
+- 중복 요청은 기존 Operation을 조회한다.
+- 소유권 불일치는 최종 오류이며 재시도하지 않는다.
+- Metrics 오류는 삭제나 생명주기 상태 변경을 유발하지 않는다.
 
-The memory Store cannot provide crash recovery. The API documentation must call
-this out as a local implementation limitation rather than promising durable
-Operations.
+인메모리 Store는 프로세스 장애 후 복구를 제공하지 못한다. API 문서에서는
+이를 로컬 구현의 제한으로 명시하고 영속 Operation을 보장하지 않는다.
 
-## Testing
+## 테스트
 
-### Delete
+### 삭제
 
-- valid request returns 202, Location, Retry-After, and `QUEUED`;
-- duplicate identical request returns the same Operation;
-- duplicate conflicting request returns 409;
-- path/body instance mismatch returns 409;
-- worker moves through RUNNING to SUCCEEDED;
-- retryable error exposes RETRYING and later succeeds;
-- terminal error exposes FAILED and stable code;
-- missing Namespace succeeds;
-- ownership mismatch does not issue delete;
-- successful result contains Scheduler-compatible fields.
+- 정상 요청이 202, Location, Retry-After와 `QUEUED`를 반환한다.
+- 같은 요청을 반복하면 같은 Operation을 반환한다.
+- 같은 `request_id`의 다른 요청은 409를 반환한다.
+- 경로와 본문의 instance가 다르면 409를 반환한다.
+- Worker가 RUNNING을 거쳐 SUCCEEDED가 된다.
+- 재시도 가능한 오류가 RETRYING을 거쳐 성공한다.
+- 최종 오류가 FAILED와 안정 오류 코드를 반환한다.
+- Namespace가 이미 없으면 성공한다.
+- 소유권이 다르면 삭제 요청을 보내지 않는다.
+- 성공 결과가 Scheduler 호환 필드를 포함한다.
 
-### Runtime Status
+### 런타임 상태 조회
 
-- correct Binding routes to only its target Client;
-- container lifecycle and usage are mapped correctly;
-- one Node returns conditions and resources;
-- requested resources include all non-terminal Pods on that Node;
-- schedulable resources never become negative;
-- missing Metrics API produces core status with null usage;
-- zero or multiple Nodes return `TARGET_TOPOLOGY_INVALID`;
-- Namespace ownership mismatch is rejected.
+- Binding의 target Client 하나만 사용한다.
+- 컨테이너 생명주기와 사용량이 정확히 매핑된다.
+- Node 하나의 Condition과 자원 상태가 반환된다.
+- 해당 Node의 모든 미종료 Pod requests가 합산된다.
+- schedulable 자원이 음수가 되지 않는다.
+- Metrics API가 없으면 usage가 `null`인 Core 상태를 반환한다.
+- Node가 없거나 둘 이상이면 `TARGET_TOPOLOGY_INVALID`를 반환한다.
+- Namespace 소유권 불일치를 거부한다.
 
-### Verification
+### 검증 명령
 
 ```text
 go test -count=1 ./...
@@ -427,15 +431,15 @@ go build ./...
 git diff --check
 ```
 
-The local HTTP test starts the Provisioner-compatible demo service on loopback,
-submits a delete, polls until `SUCCEEDED`, and confirms runtime status output
-before deletion. It does not publish the dashboard or use real credentials.
+로컬 HTTP 테스트는 loopback에서 Provisioner 호환 데모 서비스를
+실행한다. 삭제를 접수하고 `SUCCEEDED`까지 폴링하며, 삭제 전에 런타임
+상태 응답을 확인한다. 대시보드를 배포하거나 실제 자격 증명을 사용하지
+않는다.
 
-## Documentation Deliverables
+## API 문서 산출물
 
 - `docs/api/runtime-operations.md`
 - `docs/api/secure-provisioner.openapi.yaml`
 
-Both documents cover the asynchronous delete, Operation polling, runtime status
-response, stable errors, idempotency, and the local in-memory durability
-limitation.
+두 문서는 비동기 삭제, Operation 폴링, 런타임 상태 응답, 안정 오류,
+멱등 처리와 로컬 인메모리 Store의 영속성 제한을 포함한다.
