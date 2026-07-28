@@ -217,16 +217,17 @@ func TestDeleteInstanceMapsBindingConflictWithoutLeakingDetails(t *testing.T) {
 
 func TestDeleteInstanceMapsQueueErrorsWithoutLeakingDetails(t *testing.T) {
 	for _, test := range []struct {
-		name       string
-		err        error
-		wantStatus int
-		wantCode   string
+		name          string
+		err           error
+		wantStatus    int
+		wantCode      string
+		privateDetail string
 	}{
 		{name: "missing binding", err: runtimebinding.ErrNotFound, wantStatus: http.StatusNotFound, wantCode: "INSTANCE_NOT_FOUND"},
 		{name: "binding mismatch", err: runtimeops.ErrBindingMismatch, wantStatus: http.StatusConflict, wantCode: "INSTANCE_BINDING_MISMATCH"},
 		{name: "request ID conflict", err: operations.ErrIdempotencyConflict, wantStatus: http.StatusConflict, wantCode: "REQUEST_ID_CONFLICT"},
 		{name: "invalid transition", err: runtimebinding.ErrInvalidTransition, wantStatus: http.StatusConflict, wantCode: "INSTANCE_STATE_CONFLICT"},
-		{name: "store failure", err: errors.New("private operation store detail"), wantStatus: http.StatusBadGateway, wantCode: "DELETE_QUEUE_FAILED"},
+		{name: "store failure", err: errors.New("private operation store detail"), wantStatus: http.StatusBadGateway, wantCode: "DELETE_QUEUE_FAILED", privateDetail: "private operation store detail"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runtime := &recordingRuntimeUseCase{deleteErr: test.err}
@@ -239,9 +240,10 @@ func TestDeleteInstanceMapsQueueErrorsWithoutLeakingDetails(t *testing.T) {
 			if response.Code != test.wantStatus {
 				t.Fatalf("status = %d, want %d; body = %s", response.Code, test.wantStatus, response.Body.String())
 			}
-			assertErrorCode(t, response, test.wantCode)
-			if strings.Contains(response.Body.String(), "private operation store detail") {
-				t.Fatalf("response leaked queue error details: %s", response.Body.String())
+			if test.privateDetail != "" {
+				assertPublicErrorMessage(t, response, test.wantCode, test.privateDetail)
+			} else {
+				assertErrorCode(t, response, test.wantCode)
 			}
 		})
 	}
@@ -342,13 +344,14 @@ func TestGetOperationReturnsCreateAndDeleteResults(t *testing.T) {
 
 func TestGetOperationMapsLookupErrorsWithoutLeakingDetails(t *testing.T) {
 	for _, test := range []struct {
-		name       string
-		err        error
-		wantStatus int
-		wantCode   string
+		name          string
+		err           error
+		wantStatus    int
+		wantCode      string
+		privateDetail string
 	}{
 		{name: "operation not found", err: operations.ErrOperationNotFound, wantStatus: http.StatusNotFound, wantCode: "OPERATION_NOT_FOUND"},
-		{name: "store failure", err: errors.New("private operation store detail"), wantStatus: http.StatusInternalServerError, wantCode: "OPERATION_LOOKUP_FAILED"},
+		{name: "store failure", err: errors.New("private operation store detail"), wantStatus: http.StatusInternalServerError, wantCode: "OPERATION_LOOKUP_FAILED", privateDetail: "private operation store detail"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runtime := &recordingRuntimeUseCase{operationErr: test.err}
@@ -360,9 +363,10 @@ func TestGetOperationMapsLookupErrorsWithoutLeakingDetails(t *testing.T) {
 			if response.Code != test.wantStatus {
 				t.Fatalf("status = %d, want %d; body = %s", response.Code, test.wantStatus, response.Body.String())
 			}
-			assertErrorCode(t, response, test.wantCode)
-			if strings.Contains(response.Body.String(), "private operation store detail") {
-				t.Fatalf("response leaked operation lookup details: %s", response.Body.String())
+			if test.privateDetail != "" {
+				assertPublicErrorMessage(t, response, test.wantCode, test.privateDetail)
+			} else {
+				assertErrorCode(t, response, test.wantCode)
 			}
 		})
 	}

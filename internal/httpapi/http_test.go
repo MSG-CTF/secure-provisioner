@@ -180,10 +180,7 @@ func TestCreateInstanceMapsQueueFailureWithoutLeakingStoreDetails(t *testing.T) 
 	if response.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusBadGateway, response.Body.String())
 	}
-	assertErrorCode(t, response, "CREATE_QUEUE_FAILED")
-	if strings.Contains(response.Body.String(), "private operation store detail") {
-		t.Fatalf("response leaked queue error details: %s", response.Body.String())
-	}
+	assertPublicErrorMessage(t, response, "CREATE_QUEUE_FAILED", "private operation store detail")
 }
 
 func TestCreateInstanceRequiresJSONContentType(t *testing.T) {
@@ -217,17 +214,40 @@ func (useCase *recordingCreateUseCase) CreateWorkload(_ context.Context, command
 	return useCase.result, useCase.err
 }
 
+type apiErrorEnvelope struct {
+	Error struct {
+		Code    string  `json:"code"`
+		Message *string `json:"message"`
+	} `json:"error"`
+}
+
 func assertErrorCode(t *testing.T, response *httptest.ResponseRecorder, want string) {
 	t.Helper()
-	var payload struct {
-		Error struct {
-			Code string `json:"code"`
-		} `json:"error"`
+	_ = assertAPIErrorEnvelope(t, response, want)
+}
+
+func assertPublicErrorMessage(t *testing.T, response *httptest.ResponseRecorder, wantCode, privateDetail string) {
+	t.Helper()
+	payload := assertAPIErrorEnvelope(t, response, wantCode)
+	if payload.Error.Message == nil {
+		t.Fatal("error message is missing")
 	}
+	if strings.TrimSpace(*payload.Error.Message) == "" {
+		t.Fatal("error message is empty")
+	}
+	if strings.Contains(*payload.Error.Message, privateDetail) {
+		t.Fatalf("response leaked private error detail in message: %q", *payload.Error.Message)
+	}
+}
+
+func assertAPIErrorEnvelope(t *testing.T, response *httptest.ResponseRecorder, wantCode string) apiErrorEnvelope {
+	t.Helper()
+	var payload apiErrorEnvelope
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode error response: %v", err)
 	}
-	if payload.Error.Code != want {
-		t.Fatalf("error code = %q, want %q", payload.Error.Code, want)
+	if payload.Error.Code != wantCode {
+		t.Fatalf("error code = %q, want %q", payload.Error.Code, wantCode)
 	}
+	return payload
 }
