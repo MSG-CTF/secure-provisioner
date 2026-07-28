@@ -39,6 +39,18 @@ type ContainerRuntimeStatus struct {
 	Usage        *ResourceUsage
 }
 
+type NodeRuntimeStatus struct {
+	Ready          bool
+	MemoryPressure bool
+	DiskPressure   bool
+	PIDPressure    bool
+	Capacity       ResourceValues
+	Allocatable    ResourceValues
+	Requested      ResourceValues
+	Schedulable    ResourceValues
+	Usage          *ResourceUsage
+}
+
 type RuntimeStatus struct {
 	InstanceID        string
 	TargetID          string
@@ -47,6 +59,7 @@ type RuntimeStatus struct {
 	EndpointReady     bool
 	MetricsAvailable  bool
 	ObservedAt        time.Time
+	Node              NodeRuntimeStatus
 	Containers        []ContainerRuntimeStatus
 }
 
@@ -67,6 +80,15 @@ func (r *StatusReader) Get(ctx context.Context, binding runtimebinding.Binding) 
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
+	nodes, err := cluster.Client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return RuntimeStatus{}, newRuntimeError("TARGET_TEMPORARILY_UNAVAILABLE", true, err)
+	}
+	if len(nodes.Items) != 1 {
+		return RuntimeStatus{}, newRuntimeError("TARGET_TOPOLOGY_INVALID", false, nil)
+	}
+	node := &nodes.Items[0]
+
 	namespace, err := cluster.Client.CoreV1().Namespaces().Get(ctx, binding.Namespace, metav1.GetOptions{})
 	if err != nil {
 		return RuntimeStatus{}, newRuntimeError("TARGET_TEMPORARILY_UNAVAILABLE", true, err)
@@ -87,12 +109,25 @@ func (r *StatusReader) Get(ctx context.Context, binding runtimebinding.Binding) 
 	}
 	sort.Slice(pods.Items, func(i, j int) bool { return pods.Items[i].Name < pods.Items[j].Name })
 
+	allPods, err := cluster.Client.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return RuntimeStatus{}, newRuntimeError("TARGET_TEMPORARILY_UNAVAILABLE", true, err)
+	}
+
 	metricsByPod := make(map[string]metricsv1beta1.PodMetrics)
+	var nodeUsage *ResourceUsage
+	metricsAvailable := false
 	if cluster.Metrics != nil {
-		metrics, metricsErr := cluster.Metrics.MetricsV1beta1().PodMetricses(binding.Namespace).List(ctx, metav1.ListOptions{})
-		if metricsErr == nil {
+		metrics, podMetricsErr := cluster.Metrics.MetricsV1beta1().PodMetricses(binding.Namespace).List(ctx, metav1.ListOptions{})
+		nodeMetrics, nodeMetricsErr := cluster.Metrics.MetricsV1beta1().NodeMetricses().Get(ctx, node.Name, metav1.GetOptions{})
+		if podMetricsErr == nil && nodeMetricsErr == nil {
+			metricsAvailable = true
 			for _, metric := range metrics.Items {
 				metricsByPod[metric.Name] = metric
+			}
+			nodeUsage = &ResourceUsage{
+				CPUMillicores: resourceMilliValue(nodeMetrics.Usage, corev1.ResourceCPU),
+				MemoryMiB:     resourceMiBValue(nodeMetrics.Usage, corev1.ResourceMemory),
 			}
 		}
 	}
@@ -101,14 +136,16 @@ func (r *StatusReader) Get(ctx context.Context, binding runtimebinding.Binding) 
 		InstanceID:        binding.InstanceID,
 		TargetID:          binding.TargetID,
 		RuntimeWorkloadID: binding.RuntimeWorkloadID,
+		MetricsAvailable:  metricsAvailable,
 		ObservedAt:        r.now().UTC(),
+		Node:              mapNodeRuntimeStatus(*node, allPods.Items, nodeUsage),
 		Containers:        make([]ContainerRuntimeStatus, 0),
 	}
 	for index := range pods.Items {
 		pod := &pods.Items[index]
 		podMetrics, hasMetrics := metricsByPod[pod.Name]
 		usageByContainer := make(map[string]corev1.ResourceList)
-		if hasMetrics {
+		if metricsAvailable && hasMetrics {
 			for _, container := range podMetrics.Containers {
 				usageByContainer[container.Name] = container.Usage
 			}
@@ -124,7 +161,6 @@ func (r *StatusReader) Get(ctx context.Context, binding runtimebinding.Binding) 
 					CPUMillicores: resourceMilliValue(usage, corev1.ResourceCPU),
 					MemoryMiB:     resourceMiBValue(usage, corev1.ResourceMemory),
 				}
-				status.MetricsAvailable = true
 			}
 			status.Containers = append(status.Containers, observed)
 		}
@@ -136,6 +172,85 @@ func (r *StatusReader) Get(ctx context.Context, binding runtimebinding.Binding) 
 	}
 	status.Phase = deriveRuntimePhase(binding.State, status.Containers, status.EndpointReady)
 	return status, nil
+}
+
+func mapNodeRuntimeStatus(node corev1.Node, pods []corev1.Pod, usage *ResourceUsage) NodeRuntimeStatus {
+	requested := ResourceValues{}
+	for index := range pods {
+		pod := &pods[index]
+		if pod.Spec.NodeName != node.Name || pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+			continue
+		}
+		requested = addResourceValues(requested, podRequestedResources(*pod))
+	}
+	allocatable := resourceValues(node.Status.Allocatable)
+	return NodeRuntimeStatus{
+		Ready:          nodeConditionTrue(node.Status.Conditions, corev1.NodeReady),
+		MemoryPressure: nodeConditionTrue(node.Status.Conditions, corev1.NodeMemoryPressure),
+		DiskPressure:   nodeConditionTrue(node.Status.Conditions, corev1.NodeDiskPressure),
+		PIDPressure:    nodeConditionTrue(node.Status.Conditions, corev1.NodePIDPressure),
+		Capacity:       resourceValues(node.Status.Capacity),
+		Allocatable:    allocatable,
+		Requested:      requested,
+		Schedulable:    subtractResourceValuesWithFloor(allocatable, requested),
+		Usage:          usage,
+	}
+}
+
+func nodeConditionTrue(conditions []corev1.NodeCondition, conditionType corev1.NodeConditionType) bool {
+	for _, condition := range conditions {
+		if condition.Type == conditionType {
+			return condition.Status == corev1.ConditionTrue
+		}
+	}
+	return false
+}
+
+func podRequestedResources(pod corev1.Pod) ResourceValues {
+	regular := ResourceValues{}
+	for _, container := range pod.Spec.Containers {
+		regular = addResourceValues(regular, resourceValues(container.Resources.Requests))
+	}
+
+	restartableInit := ResourceValues{}
+	initMaximum := ResourceValues{}
+	for _, container := range pod.Spec.InitContainers {
+		requests := resourceValues(container.Resources.Requests)
+		if container.RestartPolicy != nil && *container.RestartPolicy == corev1.ContainerRestartPolicyAlways {
+			regular = addResourceValues(regular, requests)
+			restartableInit = addResourceValues(restartableInit, requests)
+			initMaximum = maxResourceValues(initMaximum, restartableInit)
+			continue
+		}
+		initMaximum = maxResourceValues(initMaximum, addResourceValues(restartableInit, requests))
+	}
+
+	requested := maxResourceValues(regular, initMaximum)
+	return addResourceValues(requested, resourceValues(pod.Spec.Overhead))
+}
+
+func addResourceValues(first, second ResourceValues) ResourceValues {
+	return ResourceValues{
+		CPUMillicores:       first.CPUMillicores + second.CPUMillicores,
+		MemoryMiB:           first.MemoryMiB + second.MemoryMiB,
+		EphemeralStorageMiB: first.EphemeralStorageMiB + second.EphemeralStorageMiB,
+	}
+}
+
+func maxResourceValues(first, second ResourceValues) ResourceValues {
+	return ResourceValues{
+		CPUMillicores:       max(first.CPUMillicores, second.CPUMillicores),
+		MemoryMiB:           max(first.MemoryMiB, second.MemoryMiB),
+		EphemeralStorageMiB: max(first.EphemeralStorageMiB, second.EphemeralStorageMiB),
+	}
+}
+
+func subtractResourceValuesWithFloor(first, second ResourceValues) ResourceValues {
+	return ResourceValues{
+		CPUMillicores:       max(first.CPUMillicores-second.CPUMillicores, 0),
+		MemoryMiB:           max(first.MemoryMiB-second.MemoryMiB, 0),
+		EphemeralStorageMiB: max(first.EphemeralStorageMiB-second.EphemeralStorageMiB, 0),
+	}
 }
 
 func mapContainerStatus(podName string, container corev1.Container, observed corev1.ContainerStatus) ContainerRuntimeStatus {
