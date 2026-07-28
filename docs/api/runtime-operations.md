@@ -386,13 +386,17 @@ Scheduler가 처리한 비동기 Operation의 최종 실패는 서로 다른 계
 시도 실패는 `FAILED`가 된다. `INVALID_OPERATION_RESULT`는 Worker가 성공 결과를 저장하지
 못할 때 직접 `FAILED`로 기록한다.
 
+`OPERATION_CANCELLED`은 Scheduler가 처리할 실패 code가 아니다. Worker 종료 또는 취소 중
+`context.Canceled`/`context.DeadlineExceeded` chain이 반환되면 Worker는
+`MarkRetrying`이나 `MarkFailed` 전에 Operation을 재queue한다. 따라서 이 비종결 내부 경로는
+영속 `last_error_code`로 기록되지 않는다.
+
 | Operation | `last_error_code` | 조건 | Worker 처리 |
 |---|---|---|---|
 | `CREATE` | `TARGET_NOT_FOUND` | 생성 target이 Registry에 없음 | 즉시 `FAILED` |
 | `CREATE` | `TARGET_DISABLED` | 생성 target이 비활성화됨 | 즉시 `FAILED` |
 | `CREATE` | `K3S_UNAVAILABLE` | K3s client를 사용할 수 없음 | 재시도 후 한도 도달 시 `FAILED` |
 | `CREATE` | `INVALID_CREATE_COMMAND` | Worker가 받은 생성 명령으로 리소스를 구성할 수 없음 | 즉시 `FAILED` |
-| `CREATE` | `OPERATION_CANCELLED` | 작업 context가 취소됨 | 재시도 후 한도 도달 시 `FAILED` |
 | `CREATE` | `RESOURCE_OWNERSHIP_CONFLICT` | 기존 Namespace, Deployment, Service 또는 Ingress의 소유권이 다름 | 즉시 `FAILED` |
 | `CREATE` | `RESOURCE_APPLY_FAILED` | Kubernetes 리소스 적용에 실패함 | 재시도 후 한도 도달 시 `FAILED` |
 | `CREATE` | `WORKLOAD_NOT_READY` | 준비 시간 안에 Workload가 ready가 되지 않음 | 재시도 후 한도 도달 시 `FAILED` |
@@ -403,7 +407,6 @@ Scheduler가 처리한 비동기 Operation의 최종 실패는 서로 다른 계
 | `DELETE` | `INSTANCE_BINDING_MISMATCH` | 삭제 명령이 Binding과 일치하지 않음 | 즉시 `FAILED` |
 | `DELETE` | `TARGET_NOT_FOUND` | 유지보수 target이 Registry에 없음 | 즉시 `FAILED` |
 | `DELETE` | `K3S_UNAVAILABLE` | K3s client를 사용할 수 없음 | 재시도 후 한도 도달 시 `FAILED` |
-| `DELETE` | `OPERATION_CANCELLED` | 작업 context가 취소됨 | 재시도 후 한도 도달 시 `FAILED` |
 | `DELETE` | `RUNTIME_OWNERSHIP_MISMATCH` | Namespace 소유권이 Binding과 다름 | 즉시 `FAILED` |
 | `DELETE` | `TARGET_TEMPORARILY_UNAVAILABLE` | Kubernetes API 호출이 일시적으로 실패함 | 재시도 후 한도 도달 시 `FAILED` |
 | `DELETE` | `NAMESPACE_DELETE_TIMEOUT` | Namespace 삭제 완료 대기 시간이 초과됨 | 재시도 후 한도 도달 시 `FAILED` |
