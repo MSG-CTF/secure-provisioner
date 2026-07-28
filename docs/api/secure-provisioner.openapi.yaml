@@ -1,0 +1,507 @@
+openapi: 3.1.0
+info:
+  title: Secure Provisioner Internal Runtime API
+  version: 1.0.0-draft
+  description: 비동기 생성·삭제 Operation과 단일 노드 K3s 런타임 상태 조회 API
+  license:
+    name: Internal use only
+    identifier: LicenseRef-Internal
+servers:
+  - url: http://{host}:{port}
+    description: 로컬 및 내부 서비스 주소
+    variables:
+      host:
+        default: 127.0.0.1
+      port:
+        default: "8080"
+security: []
+paths:
+  /internal/v1/instances:
+    post:
+      summary: 인스턴스 생성 Operation 접수
+      operationId: enqueueCreateInstance
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateInstanceRequest"
+      responses:
+        "202":
+          $ref: "#/components/responses/OperationAccepted"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /internal/v1/instances/{instance_id}:
+    delete:
+      summary: 인스턴스 삭제 Operation 접수
+      operationId: enqueueDeleteInstance
+      parameters:
+        - $ref: "#/components/parameters/InstanceID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteInstanceRequest"
+      responses:
+        "202":
+          $ref: "#/components/responses/OperationAccepted"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /internal/v1/operations/{operation_id}:
+    get:
+      summary: Operation 상태 조회
+      operationId: getOperation
+      parameters:
+        - $ref: "#/components/parameters/OperationID"
+      responses:
+        "200":
+          description: Operation의 현재 상태
+          headers:
+            Retry-After:
+              $ref: "#/components/headers/RetryAfter"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /internal/v1/instances/{instance_id}/runtime-status:
+    get:
+      summary: 컨테이너와 단일 노드 K3s 상태 조회
+      operationId: getRuntimeStatus
+      parameters:
+        - $ref: "#/components/parameters/InstanceID"
+      responses:
+        "200":
+          description: 런타임 상태
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuntimeStatusResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+components:
+  parameters:
+    InstanceID:
+      name: instance_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    OperationID:
+      name: operation_id
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+  headers:
+    Location:
+      description: Operation 상태 조회 경로
+      schema:
+        type: string
+    RetryAfter:
+      description: 다음 조회까지 기다릴 시간(초)
+      schema:
+        type: integer
+        minimum: 1
+        example: 2
+  responses:
+    OperationAccepted:
+      description: Operation 접수 성공
+      headers:
+        Location:
+          $ref: "#/components/headers/Location"
+        Retry-After:
+          $ref: "#/components/headers/RetryAfter"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/OperationResponse"
+    BadRequest:
+      description: 요청 검증 실패
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: 리소스 없음
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Conflict:
+      description: 멱등 키, Binding 또는 상태 충돌
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    BadGateway:
+      description: K3s 상태 조회 실패
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    ServiceUnavailable:
+      description: target을 사용할 수 없음
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+  schemas:
+    RuntimeTarget:
+      type: object
+      additionalProperties: false
+      required:
+        - runtime_type
+        - target_id
+      properties:
+        runtime_type:
+          type: string
+          enum:
+            - KUBERNETES
+        target_id:
+          type: string
+          minLength: 1
+    ResourceValues:
+      type: object
+      additionalProperties: false
+      required:
+        - cpu_millicores
+        - memory_mib
+        - ephemeral_storage_mib
+      properties:
+        cpu_millicores:
+          type: integer
+          format: int64
+          minimum: 0
+        memory_mib:
+          type: integer
+          format: int64
+          minimum: 0
+        ephemeral_storage_mib:
+          type: integer
+          format: int64
+          minimum: 0
+    ResourceUsage:
+      type:
+        - object
+        - "null"
+      additionalProperties: false
+      required:
+        - cpu_millicores
+        - memory_mib
+      properties:
+        cpu_millicores:
+          type: integer
+          format: int64
+          minimum: 0
+        memory_mib:
+          type: integer
+          format: int64
+          minimum: 0
+    ResourceLimits:
+      allOf:
+        - $ref: "#/components/schemas/ResourceValues"
+    Workload:
+      type: object
+      additionalProperties: false
+      required:
+        - image
+        - container_port
+        - resource_limits
+      properties:
+        image:
+          type: string
+          minLength: 1
+        container_port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        resource_limits:
+          $ref: "#/components/schemas/ResourceLimits"
+    CreateInstanceRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - request_id
+        - instance_id
+        - team_id
+        - target
+        - workload
+      properties:
+        request_id:
+          type: string
+          minLength: 1
+        instance_id:
+          type: string
+          format: uuid
+        team_id:
+          type: integer
+          format: int64
+          minimum: 1
+        target:
+          $ref: "#/components/schemas/RuntimeTarget"
+        workload:
+          $ref: "#/components/schemas/Workload"
+    DeleteReason:
+      type: string
+      enum:
+        - USER_REQUESTED
+        - TTL_EXPIRED
+        - IDLE_EXPIRED
+        - HARD_TIMEOUT_EXPIRED
+        - CREATE_FAILED_CLEANUP
+        - ADMIN_FORCED
+    DeleteInstanceRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - request_id
+        - instance_id
+        - team_id
+        - target
+        - runtime_workload_id
+        - delete_reason
+      properties:
+        request_id:
+          type: string
+          minLength: 1
+        instance_id:
+          type: string
+          format: uuid
+        team_id:
+          type: integer
+          format: int64
+          minimum: 1
+        target:
+          $ref: "#/components/schemas/RuntimeTarget"
+        runtime_workload_id:
+          type: string
+          minLength: 1
+        delete_reason:
+          $ref: "#/components/schemas/DeleteReason"
+    OperationType:
+      type: string
+      enum:
+        - CREATE
+        - DELETE
+    OperationStatus:
+      type: string
+      enum:
+        - QUEUED
+        - RUNNING
+        - RETRYING
+        - SUCCEEDED
+        - FAILED
+    CreateOperationResult:
+      type: object
+      additionalProperties: false
+      required:
+        - runtime_workload_id
+        - service_url
+      properties:
+        runtime_workload_id:
+          type: string
+        service_url:
+          type: string
+          format: uri
+    DeleteOperationResult:
+      type: object
+      additionalProperties: false
+      required:
+        - runtime_workload_id
+        - status
+      properties:
+        runtime_workload_id:
+          type: string
+        status:
+          type: string
+          const: SUCCESS
+    OperationResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - operation_id
+        - request_id
+        - type
+        - status
+        - attempt
+        - max_attempts
+      properties:
+        operation_id:
+          type: string
+        request_id:
+          type: string
+        type:
+          $ref: "#/components/schemas/OperationType"
+        status:
+          $ref: "#/components/schemas/OperationStatus"
+        attempt:
+          type: integer
+          minimum: 0
+        max_attempts:
+          type: integer
+          minimum: 1
+        created:
+          type: boolean
+        last_error_code:
+          type: string
+        result:
+          oneOf:
+            - $ref: "#/components/schemas/CreateOperationResult"
+            - $ref: "#/components/schemas/DeleteOperationResult"
+    NodeStatus:
+      type: object
+      additionalProperties: false
+      required:
+        - ready
+        - memory_pressure
+        - disk_pressure
+        - pid_pressure
+        - capacity
+        - allocatable
+        - requested
+        - schedulable
+        - usage
+      properties:
+        ready:
+          type: boolean
+        memory_pressure:
+          type: boolean
+        disk_pressure:
+          type: boolean
+        pid_pressure:
+          type: boolean
+        capacity:
+          $ref: "#/components/schemas/ResourceValues"
+        allocatable:
+          $ref: "#/components/schemas/ResourceValues"
+        requested:
+          $ref: "#/components/schemas/ResourceValues"
+        schedulable:
+          $ref: "#/components/schemas/ResourceValues"
+        usage:
+          $ref: "#/components/schemas/ResourceUsage"
+    ContainerStatus:
+      type: object
+      additionalProperties: false
+      required:
+        - pod_name
+        - name
+        - state
+        - ready
+        - restart_count
+        - requests
+        - limits
+        - usage
+      properties:
+        pod_name:
+          type: string
+        name:
+          type: string
+        state:
+          type: string
+          enum:
+            - RUNNING
+            - WAITING
+            - TERMINATED
+            - UNKNOWN
+        ready:
+          type: boolean
+        restart_count:
+          type: integer
+          format: int32
+          minimum: 0
+        reason:
+          type: string
+        exit_code:
+          type: integer
+          format: int32
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+        requests:
+          $ref: "#/components/schemas/ResourceValues"
+        limits:
+          $ref: "#/components/schemas/ResourceValues"
+        usage:
+          $ref: "#/components/schemas/ResourceUsage"
+    RuntimeStatusResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - instance_id
+        - target_id
+        - runtime_workload_id
+        - phase
+        - endpoint_ready
+        - metrics_available
+        - observed_at
+        - node
+        - containers
+      properties:
+        instance_id:
+          type: string
+          format: uuid
+        target_id:
+          type: string
+        runtime_workload_id:
+          type: string
+        phase:
+          type: string
+          enum:
+            - PROVISIONING
+            - READY
+            - DEGRADED
+            - TERMINATING
+            - TERMINATED
+        endpoint_ready:
+          type: boolean
+        metrics_available:
+          type: boolean
+        observed_at:
+          type: string
+          format: date-time
+        node:
+          $ref: "#/components/schemas/NodeStatus"
+        containers:
+          type: array
+          items:
+            $ref: "#/components/schemas/ContainerStatus"
+    APIError:
+      type: object
+      additionalProperties: false
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - error
+      properties:
+        error:
+          $ref: "#/components/schemas/APIError"
