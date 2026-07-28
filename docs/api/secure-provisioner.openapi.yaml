@@ -30,9 +30,53 @@ paths:
         "202":
           $ref: "#/components/responses/OperationAccepted"
         "400":
-          $ref: "#/components/responses/BadRequest"
+          description: Request validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                InvalidRequest:
+                  value:
+                    error:
+                      code: INVALID_REQUEST
+                      message: invalid JSON request body
         "409":
-          $ref: "#/components/responses/Conflict"
+          description: Idempotency request conflict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                RequestIDConflict:
+                  value:
+                    error:
+                      code: REQUEST_ID_CONFLICT
+                      message: request_id is already used by another operation
+        "415":
+          description: Unsupported request media type
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                UnsupportedMediaType:
+                  value:
+                    error:
+                      code: UNSUPPORTED_MEDIA_TYPE
+                      message: Content-Type must be application/json
+        "502":
+          description: Create operation could not be queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                CreateQueueFailed:
+                  value:
+                    error:
+                      code: CREATE_QUEUE_FAILED
+                      message: workload creation could not be queued
   /internal/v1/instances/{instance_id}:
     delete:
       summary: 인스턴스 삭제 Operation 접수
@@ -49,11 +93,75 @@ paths:
         "202":
           $ref: "#/components/responses/OperationAccepted"
         "400":
-          $ref: "#/components/responses/BadRequest"
+          description: Request validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                InvalidRequest:
+                  value:
+                    error:
+                      code: INVALID_REQUEST
+                      message: instance_id must be a UUID
         "404":
-          $ref: "#/components/responses/NotFound"
+          description: Instance runtime binding was not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                InstanceNotFound:
+                  value:
+                    error:
+                      code: INSTANCE_NOT_FOUND
+                      message: instance runtime binding was not found
         "409":
-          $ref: "#/components/responses/Conflict"
+          description: Instance binding, idempotency, or lifecycle conflict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                InstanceBindingMismatch:
+                  value:
+                    error:
+                      code: INSTANCE_BINDING_MISMATCH
+                      message: request does not match the stored runtime binding
+                RequestIDConflict:
+                  value:
+                    error:
+                      code: REQUEST_ID_CONFLICT
+                      message: request_id is already used by another operation
+                InstanceStateConflict:
+                  value:
+                    error:
+                      code: INSTANCE_STATE_CONFLICT
+                      message: instance cannot be deleted from its current state
+        "415":
+          description: Unsupported request media type
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                UnsupportedMediaType:
+                  value:
+                    error:
+                      code: UNSUPPORTED_MEDIA_TYPE
+                      message: Content-Type must be application/json
+        "502":
+          description: Delete operation could not be queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                DeleteQueueFailed:
+                  value:
+                    error:
+                      code: DELETE_QUEUE_FAILED
+                      message: workload deletion could not be queued
   /internal/v1/operations/{operation_id}:
     get:
       summary: Operation 상태 조회
@@ -70,8 +178,79 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/OperationResponse"
+              examples:
+                Queued:
+                  value:
+                    operation_id: op-create-123
+                    request_id: runtime-create-018f3f1e
+                    type: CREATE
+                    status: QUEUED
+                    attempt: 0
+                    max_attempts: 3
+                CreateSucceeded:
+                  value:
+                    operation_id: op-create-123
+                    request_id: runtime-create-018f3f1e
+                    type: CREATE
+                    status: SUCCEEDED
+                    attempt: 1
+                    max_attempts: 3
+                    result:
+                      runtime_workload_id: aws-k3s-001/ctf-018f3f1e/challenge
+                      service_url: https://challenge.example.com
+                DeleteSucceeded:
+                  value:
+                    operation_id: op-delete-123
+                    request_id: runtime-delete-018f3f1e
+                    type: DELETE
+                    status: SUCCEEDED
+                    attempt: 1
+                    max_attempts: 3
+                    result:
+                      runtime_workload_id: aws-k3s-001/ctf-018f3f1e/challenge
+                      status: SUCCESS
+                CreateFailed:
+                  value:
+                    operation_id: op-create-123
+                    request_id: runtime-create-018f3f1e
+                    type: CREATE
+                    status: FAILED
+                    attempt: 3
+                    max_attempts: 3
+                    last_error_code: TARGET_TEMPORARILY_UNAVAILABLE
+                DeleteFailed:
+                  value:
+                    operation_id: op-delete-123
+                    request_id: runtime-delete-018f3f1e
+                    type: DELETE
+                    status: FAILED
+                    attempt: 3
+                    max_attempts: 3
+                    last_error_code: TARGET_TEMPORARILY_UNAVAILABLE
         "404":
-          $ref: "#/components/responses/NotFound"
+          description: Operation was not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                OperationNotFound:
+                  value:
+                    error:
+                      code: OPERATION_NOT_FOUND
+                      message: operation was not found
+        "500":
+          description: Operation lookup failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                OperationLookupFailed:
+                  value:
+                    error:
+                      code: OPERATION_LOOKUP_FAILED
+                      message: operation lookup failed
   /internal/v1/instances/{instance_id}/runtime-status:
     get:
       summary: 컨테이너와 단일 노드 K3s 상태 조회
@@ -86,13 +265,68 @@ paths:
               schema:
                 $ref: "#/components/schemas/RuntimeStatusResponse"
         "404":
-          $ref: "#/components/responses/NotFound"
+          description: Instance runtime binding was not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                InstanceNotFound:
+                  value:
+                    error:
+                      code: INSTANCE_NOT_FOUND
+                      message: instance runtime binding was not found
         "409":
-          $ref: "#/components/responses/Conflict"
+          description: Runtime ownership does not match the stored binding
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                RuntimeOwnershipMismatch:
+                  value:
+                    error:
+                      code: RUNTIME_OWNERSHIP_MISMATCH
+                      message: runtime ownership does not match the stored binding
         "502":
-          $ref: "#/components/responses/BadGateway"
+          description: Runtime target or status lookup failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                TargetUnavailable:
+                  value:
+                    error:
+                      code: TARGET_TEMPORARILY_UNAVAILABLE
+                      message: runtime target is temporarily unavailable
+                K3sUnavailable:
+                  value:
+                    error:
+                      code: K3S_UNAVAILABLE
+                      message: runtime target is temporarily unavailable
+                RuntimeStatusFailed:
+                  value:
+                    error:
+                      code: RUNTIME_STATUS_FAILED
+                      message: runtime status lookup failed
         "503":
-          $ref: "#/components/responses/ServiceUnavailable"
+          description: Runtime target is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                TargetNotFound:
+                  value:
+                    error:
+                      code: TARGET_NOT_FOUND
+                      message: runtime target was not found
+                TargetTopologyInvalid:
+                  value:
+                    error:
+                      code: TARGET_TOPOLOGY_INVALID
+                      message: runtime target must contain exactly one node
 components:
   parameters:
     InstanceID:
@@ -132,36 +366,25 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/OperationResponse"
-    BadRequest:
-      description: 요청 검증 실패
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorResponse"
-    NotFound:
-      description: 리소스 없음
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorResponse"
-    Conflict:
-      description: 멱등 키, Binding 또는 상태 충돌
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorResponse"
-    BadGateway:
-      description: K3s 상태 조회 실패
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorResponse"
-    ServiceUnavailable:
-      description: target을 사용할 수 없음
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            CreateAccepted:
+              value:
+                operation_id: op-create-123
+                request_id: runtime-create-018f3f1e
+                type: CREATE
+                status: QUEUED
+                attempt: 0
+                max_attempts: 3
+                created: true
+            DeleteAccepted:
+              value:
+                operation_id: op-delete-123
+                request_id: runtime-delete-018f3f1e
+                type: DELETE
+                status: QUEUED
+                attempt: 0
+                max_attempts: 3
+                created: true
   schemas:
     RuntimeTarget:
       type: object
