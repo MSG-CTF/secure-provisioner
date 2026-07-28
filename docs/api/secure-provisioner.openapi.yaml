@@ -399,9 +399,7 @@ components:
           description: allocatable에서 requested를 빼고 자원별 최솟값을 0으로 제한한 값
         usage:
           description: Metrics API가 제공한 노드 사용량이며 Metrics가 없으면 null
-          oneOf:
-            - $ref: "#/components/schemas/ResourceUsage"
-            - type: "null"
+          $ref: "#/components/schemas/ResourceUsage"
     ContainerStatus:
       type: object
       additionalProperties: false
@@ -449,9 +447,7 @@ components:
           $ref: "#/components/schemas/ResourceValues"
         usage:
           description: Metrics API가 제공한 컨테이너 사용량이며 Metrics가 없으면 null
-          oneOf:
-            - $ref: "#/components/schemas/ResourceUsage"
-            - type: "null"
+          $ref: "#/components/schemas/ResourceUsage"
     RuntimeStatusResponse:
       type: object
       additionalProperties: false

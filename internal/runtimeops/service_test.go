@@ -178,7 +178,60 @@ func TestServiceProcessesDeleteAndMarksBindingDeleted(t *testing.T) {
 		t.Fatalf("deleted binding = %#v, calls = %d", deleted, deleteAdapter.calls)
 	}
 
+	replayed, created, err := service.EnqueueDelete(deleteCommand(binding))
+	if err != nil || created || replayed.ID != operation.ID ||
+		replayed.Status != operations.OperationStatusSucceeded {
+		t.Fatalf("replayed EnqueueDelete() = (%#v, %t, %v)", replayed, created, err)
+	}
+	if deleteAdapter.calls != 1 {
+		t.Fatalf("delete calls after replay = %d", deleteAdapter.calls)
+	}
+
 	stopWorker(t, cancel, workerDone)
+}
+
+func TestServiceRestoresCreatedBindingWhenDeleteQueueFails(t *testing.T) {
+	bindings := runtimebinding.NewMemoryStore()
+	binding := savedBinding(t, bindings)
+	store := &failingDeleteOperationStore{
+		Store: operations.NewMemoryStore(nil),
+		err:   errors.New("queue unavailable"),
+	}
+	service := newTestServiceWithOperationStore(t, &recordingCreate{}, &recordingStatus{}, &recordingDelete{}, bindings, store)
+
+	if _, _, err := service.EnqueueDelete(deleteCommand(binding)); err == nil {
+		t.Fatal("EnqueueDelete() error = nil")
+	}
+	restored, err := bindings.Get(binding.InstanceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.State != runtimebinding.StateCreated {
+		t.Fatalf("binding state = %s", restored.State)
+	}
+}
+
+func TestServiceRejectsDeleteRequestIDConflictWithoutChangingBinding(t *testing.T) {
+	bindings := runtimebinding.NewMemoryStore()
+	binding := savedBinding(t, bindings)
+	store := operations.NewMemoryStore(func() (string, error) { return "operation-create", nil })
+	conflictingCreate := createCommand()
+	conflictingCreate.RequestID = deleteCommand(binding).RequestID
+	if _, _, err := store.EnqueueCreate(conflictingCreate, 2); err != nil {
+		t.Fatal(err)
+	}
+	service := newTestServiceWithOperationStore(t, &recordingCreate{}, &recordingStatus{}, &recordingDelete{}, bindings, store)
+
+	if _, _, err := service.EnqueueDelete(deleteCommand(binding)); !errors.Is(err, operations.ErrIdempotencyConflict) {
+		t.Fatalf("EnqueueDelete() error = %v", err)
+	}
+	unchanged, err := bindings.Get(binding.InstanceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.State != runtimebinding.StateCreated {
+		t.Fatalf("binding state = %s", unchanged.State)
+	}
 }
 
 func waitForOperationStatus(t *testing.T, service *Service, operationID string, want operations.OperationStatus) operations.Operation {
@@ -223,12 +276,31 @@ func newTestService(
 	bindings runtimebinding.Store,
 ) *Service {
 	t.Helper()
-	service, err := NewService(
+	return newTestServiceWithOperationStore(
+		t,
 		create,
 		status,
 		deleteAdapter,
 		bindings,
 		operations.NewMemoryStore(func() (string, error) { return "operation-01", nil }),
+	)
+}
+
+func newTestServiceWithOperationStore(
+	t *testing.T,
+	create CreateAdapter,
+	status StatusSource,
+	deleteAdapter DeleteAdapter,
+	bindings runtimebinding.Store,
+	operationStore operations.Store,
+) *Service {
+	t.Helper()
+	service, err := NewService(
+		create,
+		status,
+		deleteAdapter,
+		bindings,
+		operationStore,
 		Config{
 			MaxAttempts: 2,
 			Worker: operations.WorkerConfig{
@@ -289,6 +361,15 @@ type failingSaveBindingStore struct {
 
 func (s *failingSaveBindingStore) SaveCreated(runtimebinding.Binding) (runtimebinding.Binding, bool, error) {
 	return runtimebinding.Binding{}, false, s.err
+}
+
+type failingDeleteOperationStore struct {
+	operations.Store
+	err error
+}
+
+func (s *failingDeleteOperationStore) EnqueueDelete(provisioner.DeleteWorkloadCommand, int) (operations.Operation, bool, error) {
+	return operations.Operation{}, false, s.err
 }
 
 func createCommand() provisioner.CreateWorkloadCommand {

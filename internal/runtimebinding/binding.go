@@ -37,6 +37,7 @@ type Store interface {
 	SaveCreated(Binding) (Binding, bool, error)
 	Get(string) (Binding, error)
 	MarkDeleting(string, time.Time) (Binding, error)
+	RestoreCreated(string, time.Time) (Binding, error)
 	MarkDeleted(string, time.Time) (Binding, error)
 }
 

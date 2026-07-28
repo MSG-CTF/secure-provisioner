@@ -566,6 +566,10 @@ func (contextErrorStore) Get(string) (Operation, error) {
 	return Operation{}, errors.New("not implemented")
 }
 
+func (contextErrorStore) GetByRequestID(string) (Operation, error) {
+	return Operation{}, errors.New("not implemented")
+}
+
 func (contextErrorStore) MarkRunning(string) (Operation, error) {
 	return Operation{}, errors.New("not implemented")
 }

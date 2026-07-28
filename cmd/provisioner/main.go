@@ -21,19 +21,20 @@ import (
 )
 
 type appConfig struct {
-	Address           string
-	RegistryPath      string
-	WorkerConcurrency int
-	MaxAttempts       int
-	ReadyTimeout      time.Duration
-	PollInterval      time.Duration
-	RollbackTimeout   time.Duration
-	DeleteTimeout     time.Duration
+	Address               string
+	RegistryPath          string
+	WorkerConcurrency     int
+	MaxAttempts           int
+	ReadyTimeout          time.Duration
+	PollInterval          time.Duration
+	RollbackTimeout       time.Duration
+	DeleteTimeout         time.Duration
+	WorkerShutdownTimeout time.Duration
 }
 
 type application struct {
-	handler http.Handler
-	service *runtimeops.Service
+	handler   http.Handler
+	runWorker func(context.Context) error
 }
 
 func main() {
@@ -93,6 +94,17 @@ func loadConfig(getenv func(string) string) (appConfig, error) {
 	}
 	if config.DeleteTimeout, err = positiveDurationSetting(getenv, "PROVISIONER_DELETE_TIMEOUT", config.DeleteTimeout); err != nil {
 		return appConfig{}, err
+	}
+	config.WorkerShutdownTimeout = config.RollbackTimeout + 10*time.Second
+	if config.WorkerShutdownTimeout, err = positiveDurationSetting(
+		getenv,
+		"PROVISIONER_WORKER_SHUTDOWN_TIMEOUT",
+		config.WorkerShutdownTimeout,
+	); err != nil {
+		return appConfig{}, err
+	}
+	if config.WorkerShutdownTimeout < config.RollbackTimeout {
+		return appConfig{}, errors.New("PROVISIONER_WORKER_SHUTDOWN_TIMEOUT must be at least PROVISIONER_ROLLBACK_TIMEOUT")
 	}
 	return config, nil
 }
@@ -170,8 +182,8 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 		return nil, err
 	}
 	return &application{
-		handler: httpapi.NewHandlerWithRuntime(service, service),
-		service: service,
+		handler:   httpapi.NewHandlerWithRuntime(service, service),
+		runWorker: service.Run,
 	}, nil
 }
 
@@ -184,7 +196,7 @@ func operationBackoff(attempt int) time.Duration {
 }
 
 func runApplication(ctx context.Context, config appConfig, app *application, logger *slog.Logger) error {
-	if ctx == nil || app == nil || app.handler == nil || app.service == nil || logger == nil {
+	if ctx == nil || app == nil || app.handler == nil || app.runWorker == nil || logger == nil {
 		return errors.New("application dependencies are required")
 	}
 	runCtx, cancel := context.WithCancel(ctx)
@@ -200,7 +212,7 @@ func runApplication(ctx context.Context, config appConfig, app *application, log
 	serverErrors := make(chan error, 1)
 	workerErrors := make(chan error, 1)
 	go func() { serverErrors <- server.ListenAndServe() }()
-	go func() { workerErrors <- app.service.Run(runCtx) }()
+	go func() { workerErrors <- app.runWorker(runCtx) }()
 	logger.Info("starting secure provisioner", "address", config.Address)
 
 	var runErr error
@@ -222,18 +234,20 @@ func runApplication(ctx context.Context, config appConfig, app *application, log
 	}
 
 	cancel()
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer shutdownCancel()
-	if err := server.Shutdown(shutdownCtx); err != nil {
+	httpShutdownCtx, httpShutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer httpShutdownCancel()
+	if err := server.Shutdown(httpShutdownCtx); err != nil {
 		runErr = errors.Join(runErr, fmt.Errorf("graceful shutdown: %w", err))
 	}
 	if !workerStopped {
+		workerShutdownCtx, workerShutdownCancel := context.WithTimeout(context.Background(), config.WorkerShutdownTimeout)
+		defer workerShutdownCancel()
 		select {
 		case err := <-workerErrors:
 			if err != nil {
 				runErr = errors.Join(runErr, fmt.Errorf("runtime worker shutdown: %w", err))
 			}
-		case <-shutdownCtx.Done():
+		case <-workerShutdownCtx.Done():
 			runErr = errors.Join(runErr, errors.New("runtime worker shutdown timed out"))
 		}
 	}

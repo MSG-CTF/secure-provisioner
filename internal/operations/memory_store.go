@@ -92,6 +92,16 @@ func (s *MemoryStore) Get(id string) (Operation, error) {
 	return copyOperation(*operation), nil
 }
 
+func (s *MemoryStore) GetByRequestID(requestID string) (Operation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	operation, found := s.operationForRequest(requestID)
+	if !found {
+		return Operation{}, ErrOperationNotFound
+	}
+	return copyOperation(*operation), nil
+}
+
 func (s *MemoryStore) MarkRunning(id string) (Operation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

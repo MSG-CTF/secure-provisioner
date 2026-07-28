@@ -397,6 +397,26 @@ func TestMemoryStoreReturnsNotFoundForUnknownOperation(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreGetsOperationByRequestID(t *testing.T) {
+	store := NewMemoryStore(sequenceIDs("op-1"))
+	enqueued, _, err := store.EnqueueDelete(validDeleteCommand("req-1"), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found, err := store.GetByRequestID("req-1")
+	if err != nil || found.ID != enqueued.ID {
+		t.Fatalf("GetByRequestID() = (%#v, %v)", found, err)
+	}
+	found.DeleteCommand.TargetID = "mutated"
+	again, err := store.GetByRequestID("req-1")
+	if err != nil || again.DeleteCommand.TargetID != enqueued.DeleteCommand.TargetID {
+		t.Fatalf("stored operation was mutated: %#v, %v", again, err)
+	}
+	if _, err := store.GetByRequestID("missing"); !errors.Is(err, ErrOperationNotFound) {
+		t.Fatalf("missing error = %v", err)
+	}
+}
+
 func validCreateCommand(requestID string) provisioner.CreateWorkloadCommand {
 	return provisioner.CreateWorkloadCommand{
 		RequestID: requestID, InstanceID: "inst-1", TeamID: 7,
