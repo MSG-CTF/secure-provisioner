@@ -1,32 +1,33 @@
-# 비동기 삭제 및 런타임 상태 조회 API 설계
+# 비동기 생성·삭제 및 런타임 상태 조회 API 설계
 
 ## 문서 상태
 
 - 작성일: 2026-07-28
 - 저장소: `MSG-CTF/secure-provisioner`
-- 관련 이슈: #16, #25
+- 관련 이슈: #16, #25, #26
 - 관련 런타임 작업: #17, #18, #24
 
 ## 목적
 
-Secure Provisioner에 비동기·멱등 삭제 API와 Operation 폴링 API를
-제공한다. 별도의 런타임 상태 API에서는 인스턴스 컨테이너의 실제 상태와
-`target_id`가 가리키는 단일 노드 K3s의 배치 가능 자원을 함께 제공한다.
+Secure Provisioner에 비동기·멱등 생성·삭제 API와 공통 Operation 폴링
+API를 제공한다. 별도의 런타임 상태 API에서는 인스턴스 컨테이너의 실제
+상태와 `target_id`가 가리키는 단일 노드 K3s의 배치 가능 자원을 함께
+제공한다.
 
 이번 구현은 Secure Provisioner 저장소로 한정한다. Instance Scheduler
 저장소는 API 계약을 확인하는 용도로만 사용하며 수정하지 않는다.
 
 ## 확정 사항
 
-1. 기존 생성 API는 이번 범위에서 동기식으로 유지한다. 생성 API를
-   비동기로 변경하려면 Scheduler 팀과 별도의 API 계약 합의가 필요하다.
-2. 삭제 요청은 비동기로 처리한다. 정상 접수되면 HTTP 202와
+1. 생성과 삭제 요청을 모두 비동기로 처리한다. 정상 접수되면 HTTP 202와
    `operation_id`를 반환한다.
+2. 생성과 삭제는 같은 Operation 상태 모델과 폴링 API를 사용한다.
 3. Operation 대기 상태는 `QUEUED`를 사용한다. `WAITING`은 컨테이너
    상태로만 사용하며 Operation 상태에는 사용하지 않는다.
 4. 삭제 요청 JSON은 기존 Scheduler DTO에 맞춰 `delete_reason` 필드를
    사용한다.
-5. 삭제 성공 Operation의 최종 결과는 Scheduler가 기존에 기대하던
+5. 생성 성공 Operation은 `runtime_workload_id`와 `service_url`을 최종
+   결과로 제공한다. 삭제 성공 Operation은 Scheduler가 기존에 기대하던
    `runtime_workload_id`와 `status: SUCCESS` 의미를 유지한다.
 6. 런타임 상태는 `instance_id`로 조회한다. 저장된 Binding에서
    `target_id`를 결정하므로 호출자가 다른 target으로 조회를 우회할 수
@@ -45,6 +46,8 @@ Secure Provisioner에 비동기·멱등 삭제 API와 Operation 폴링 API를
 
 ### 포함
 
+- Scheduler 호환 생성 요청 디코딩과 검증
+- 비동기 생성 접수
 - Scheduler 호환 삭제 요청 디코딩과 검증
 - 비동기 삭제 접수
 - `request_id` 기반 멱등 처리
@@ -64,7 +67,6 @@ Secure Provisioner에 비동기·멱등 삭제 API와 Operation 폴링 API를
 ### 제외
 
 - `MSG-CTF/instance-scheduler` 변경
-- 생성 API의 비동기 전환
 - Scheduler DB 상태 변경 또는 폴링 Worker
 - Operation·Binding의 운영 DB 영속화
 - TTL 감지
@@ -96,6 +98,35 @@ instance_id
 인메모리 Binding Store는 인터페이스 뒤의 Adapter로 유지한다. 운영
 영속화는 이번 작업에서 제외하므로 프로세스 재시작 후 복구를 지원한다고
 표현하지 않는다.
+
+### 비동기 생성
+
+생성 HTTP Handler는 Scheduler 호환 요청을 검증한 다음
+`RuntimeService.EnqueueCreate`를 호출한다.
+
+서비스 처리 순서는 다음과 같다.
+
+1. 같은 `request_id`의 기존 Operation 여부를 확인한다.
+2. 같은 요청이면 기존 Operation을 반환하고 다른 요청이면 충돌로
+   거부한다.
+3. 멱등 CREATE Operation을 등록한다.
+4. K3s 생성 완료를 기다리지 않고 Operation을 반환한다.
+
+Worker 처리 순서는 다음과 같다.
+
+1. Operation의 `target_id`로 정확한 K3s Client 하나를 선택한다.
+2. 기존 K3s 생성 Adapter로 Namespace, Deployment, Service와 Ingress를
+   생성·재조정한다.
+3. 현재 Deployment revision의 Pod Ready와 Endpoint 준비를 확인한다.
+4. 생성 결과를 Instance Runtime Binding에 저장한다.
+5. `runtime_workload_id`와 `service_url`을 Operation 결과에 저장한다.
+6. 모든 단계가 끝난 뒤에만 Operation을 `SUCCEEDED`로 변경한다.
+
+생성 중 오류가 발생하면 기존 Adapter의 소유권 검증과 rollback을
+사용한다. K3s 생성은 성공했지만 Binding 저장이 실패한 경우에도 해당
+요청이 소유한 리소스를 정리한 뒤 Operation을 최종 실패로 기록한다.
+일시적인 K3s 오류만 재시도하며 동일한 `request_id`는 새 workload를
+만들지 않는다.
 
 ### 비동기 삭제
 
@@ -177,6 +208,71 @@ Metrics 조회 실패는 상태 전체의 실패로 처리하지 않는다. Core
 표시한다.
 
 ## HTTP API
+
+### 생성 접수
+
+```http
+POST /internal/v1/instances
+Content-Type: application/json
+```
+
+```json
+{
+  "request_id": "runtime-create-018f3f1e",
+  "instance_id": "018f3f1e-21b8-7a91-a30b-63b3400fd001",
+  "team_id": 18,
+  "target": {
+    "runtime_type": "KUBERNETES",
+    "target_id": "aws-k3s-001"
+  },
+  "workload": {
+    "image": "registry.example.com/challenge@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "container_port": 8080,
+    "resource_limits": {
+      "cpu_millicores": 500,
+      "memory_mib": 512,
+      "ephemeral_storage_mib": 1024
+    }
+  }
+}
+```
+
+응답:
+
+```http
+HTTP/1.1 202 Accepted
+Location: /internal/v1/operations/op-create-123
+Retry-After: 2
+```
+
+```json
+{
+  "operation_id": "op-create-123",
+  "request_id": "runtime-create-018f3f1e",
+  "type": "CREATE",
+  "status": "QUEUED",
+  "attempt": 0,
+  "max_attempts": 3,
+  "created": true
+}
+```
+
+생성 성공 Operation은 다음 결과를 제공한다.
+
+```json
+{
+  "operation_id": "op-create-123",
+  "request_id": "runtime-create-018f3f1e",
+  "type": "CREATE",
+  "status": "SUCCEEDED",
+  "attempt": 1,
+  "max_attempts": 3,
+  "result": {
+    "runtime_workload_id": "aws-k3s-001/ctf-018f3f1e/challenge",
+    "service_url": "https://challenge.example.com"
+  }
+}
+```
 
 ### 삭제 접수
 
@@ -381,7 +477,8 @@ kubeconfig 내용, Kubernetes API 주소, 자격 증명, 컨테이너 환경변�
 
 ## 동시성과 실패 처리
 
-- 삭제는 기존 `(target_id, instance_id)` workload lock을 사용한다.
+- 생성과 삭제는 기존 `(target_id, instance_id)` workload lock을
+  공유한다.
 - 같은 workload의 생성과 삭제가 Kubernetes 리소스를 동시에 변경하지
   못하게 한다.
 - Foreground Namespace 삭제는 제한된 timeout과 poll interval을
@@ -397,6 +494,18 @@ kubeconfig 내용, Kubernetes API 주소, 자격 증명, 컨테이너 환경변�
 이를 로컬 구현의 제한으로 명시하고 영속 Operation을 보장하지 않는다.
 
 ## 테스트
+
+### 생성
+
+- 정상 요청이 202, Location, Retry-After와 `QUEUED`를 반환한다.
+- 같은 요청을 반복하면 같은 CREATE Operation을 반환한다.
+- 같은 `request_id`의 다른 요청은 409를 반환한다.
+- Worker가 RUNNING을 거쳐 SUCCEEDED가 된다.
+- Pod와 Endpoint가 준비되기 전에는 SUCCEEDED가 되지 않는다.
+- 성공 결과가 `runtime_workload_id`와 `service_url`을 포함한다.
+- 생성 성공 후 Runtime Binding이 저장된다.
+- 재시도 가능한 오류가 RETRYING을 거쳐 성공한다.
+- 부분 생성 실패와 Binding 저장 실패가 요청 소유 리소스를 정리한다.
 
 ### 삭제
 
@@ -441,5 +550,5 @@ git diff --check
 - `docs/api/runtime-operations.md`
 - `docs/api/secure-provisioner.openapi.yaml`
 
-두 문서는 비동기 삭제, Operation 폴링, 런타임 상태 응답, 안정 오류,
-멱등 처리와 로컬 인메모리 Store의 영속성 제한을 포함한다.
+두 문서는 비동기 생성·삭제, 공통 Operation 폴링, 런타임 상태 응답,
+안정 오류, 멱등 처리와 로컬 인메모리 Store의 영속성 제한을 포함한다.
