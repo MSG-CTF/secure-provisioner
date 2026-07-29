@@ -20,6 +20,7 @@ type Store interface {
 	EnqueueDelete(provisioner.DeleteWorkloadCommand, int) (Operation, bool, error)
 	Next(context.Context) (Operation, error)
 	Get(string) (Operation, error)
+	GetByRequestID(string) (Operation, error)
 	MarkRunning(string) (Operation, error)
 	MarkRetrying(string, string) (Operation, error)
 	Requeue(string) error

@@ -28,26 +28,34 @@ func NewRegistry(configs []ClusterConfig, factory ClientFactory) (*Registry, err
 
 	targets := make(map[string]Cluster, len(normalizedConfigs))
 	clientIdentities := make(map[clientIdentity]struct{}, len(normalizedConfigs))
+	metricsIdentities := make(map[clientIdentity]struct{}, len(normalizedConfigs))
 	for _, config := range normalizedConfigs {
 		cluster := Cluster{Config: config}
-		if config.Enabled {
-			if factory == nil {
-				return nil, newRuntimeError("K3S_UNAVAILABLE", true, nil)
-			}
-			client, err := factory.FromKubeconfig(config.KubeconfigPath)
-			if err != nil || client == nil {
-				return nil, newRuntimeError("K3S_UNAVAILABLE", true, err)
-			}
-			identity, ok := identifyClient(client)
-			if !ok {
-				return nil, newRuntimeError("CONFIG_INVALID", false, nil)
-			}
-			if _, exists := clientIdentities[identity]; exists {
-				return nil, newRuntimeError("CONFIG_INVALID", false, nil)
-			}
-			clientIdentities[identity] = struct{}{}
-			cluster.Client = client
+		if factory == nil {
+			return nil, newRuntimeError("K3S_UNAVAILABLE", true, nil)
 		}
+		clients, err := factory.FromKubeconfig(config.KubeconfigPath)
+		if err != nil || clients.Kubernetes == nil || clients.Metrics == nil {
+			return nil, newRuntimeError("K3S_UNAVAILABLE", true, err)
+		}
+		identity, ok := identifyClient(clients.Kubernetes)
+		if !ok {
+			return nil, newRuntimeError("CONFIG_INVALID", false, nil)
+		}
+		if _, exists := clientIdentities[identity]; exists {
+			return nil, newRuntimeError("CONFIG_INVALID", false, nil)
+		}
+		metricsIdentity, ok := identifyClient(clients.Metrics)
+		if !ok {
+			return nil, newRuntimeError("CONFIG_INVALID", false, nil)
+		}
+		if _, exists := metricsIdentities[metricsIdentity]; exists {
+			return nil, newRuntimeError("CONFIG_INVALID", false, nil)
+		}
+		clientIdentities[identity] = struct{}{}
+		metricsIdentities[metricsIdentity] = struct{}{}
+		cluster.Client = clients.Kubernetes
+		cluster.Metrics = clients.Metrics
 		targets[config.TargetID] = cluster
 	}
 
@@ -63,12 +71,27 @@ func identifyClient(client any) (clientIdentity, bool) {
 }
 
 func (r *Registry) Lookup(targetID string) (Cluster, error) {
+	return r.LookupForCreate(targetID)
+}
+
+func (r *Registry) LookupForCreate(targetID string) (Cluster, error) {
 	cluster, found := r.targets[targetID]
 	if !found {
 		return Cluster{}, newRuntimeError("TARGET_NOT_FOUND", false, nil)
 	}
 	if !cluster.Config.Enabled {
 		return Cluster{}, newRuntimeError("TARGET_DISABLED", false, nil)
+	}
+	return cluster, nil
+}
+
+func (r *Registry) LookupForMaintenance(targetID string) (Cluster, error) {
+	cluster, found := r.targets[targetID]
+	if !found {
+		return Cluster{}, newRuntimeError("TARGET_NOT_FOUND", false, nil)
+	}
+	if cluster.Client == nil || cluster.Metrics == nil {
+		return Cluster{}, newRuntimeError("K3S_UNAVAILABLE", true, nil)
 	}
 	return cluster, nil
 }

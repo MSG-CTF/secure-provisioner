@@ -7,17 +7,32 @@ import (
 	"mime"
 	"net/http"
 
+	"github.com/MSG-CTF/secure-provisioner/internal/operations"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 )
 
 type API struct {
 	createWorkload provisioner.CreateWorkloadUseCase
+	runtime        RuntimeUseCase
 }
 
 func NewHandler(createWorkload provisioner.CreateWorkloadUseCase) http.Handler {
-	api := &API{createWorkload: createWorkload}
+	return newHandler(createWorkload, nil)
+}
+
+func NewHandlerWithRuntime(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase) http.Handler {
+	return newHandler(createWorkload, runtime)
+}
+
+func newHandler(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase) http.Handler {
+	api := &API{createWorkload: createWorkload, runtime: runtime}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /internal/v1/instances", api.handleCreateInstance)
+	if runtime != nil {
+		mux.HandleFunc("GET /internal/v1/instances/{instance_id}/runtime-status", api.handleRuntimeStatus)
+		mux.HandleFunc("DELETE /internal/v1/instances/{instance_id}", api.handleDeleteInstance)
+		mux.HandleFunc("GET /internal/v1/operations/{operation_id}", api.handleGetOperation)
+	}
 	return requestSizeLimit(mux)
 }
 
@@ -35,6 +50,20 @@ func (api *API) handleCreateInstance(writer http.ResponseWriter, request *http.R
 	}
 	if err := createRequest.Validate(); err != nil {
 		writeAPIError(writer, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		return
+	}
+
+	if api.runtime != nil {
+		operation, created, err := api.runtime.EnqueueCreate(createRequest.ToCommand())
+		if err != nil {
+			if errors.Is(err, operations.ErrIdempotencyConflict) {
+				writeAPIError(writer, http.StatusConflict, "REQUEST_ID_CONFLICT", "request_id is already used by another operation")
+				return
+			}
+			writeAPIError(writer, http.StatusBadGateway, "CREATE_QUEUE_FAILED", "workload creation could not be queued")
+			return
+		}
+		writeAcceptedOperation(writer, operation, created)
 		return
 	}
 

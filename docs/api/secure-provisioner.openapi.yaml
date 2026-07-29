@@ -1,0 +1,734 @@
+openapi: 3.1.0
+info:
+  title: Secure Provisioner Internal Runtime API
+  version: 1.0.0-draft
+  description: 비동기 생성·삭제 Operation과 단일 노드 K3s 런타임 상태 조회 API
+  license:
+    name: Internal use only
+    identifier: LicenseRef-Internal
+servers:
+  - url: http://{host}:{port}
+    description: 로컬 및 내부 서비스 주소
+    variables:
+      host:
+        default: 127.0.0.1
+      port:
+        default: "8080"
+security: []
+paths:
+  /internal/v1/instances:
+    post:
+      summary: 인스턴스 생성 Operation 접수
+      operationId: enqueueCreateInstance
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateInstanceRequest"
+      responses:
+        "202":
+          $ref: "#/components/responses/OperationAccepted"
+        "400":
+          description: Request validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                InvalidRequest:
+                  value:
+                    error:
+                      code: INVALID_REQUEST
+                      message: invalid JSON request body
+        "409":
+          description: Idempotency request conflict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                RequestIDConflict:
+                  value:
+                    error:
+                      code: REQUEST_ID_CONFLICT
+                      message: request_id is already used by another operation
+        "415":
+          description: Unsupported request media type
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                UnsupportedMediaType:
+                  value:
+                    error:
+                      code: UNSUPPORTED_MEDIA_TYPE
+                      message: Content-Type must be application/json
+        "502":
+          description: Create operation could not be queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                CreateQueueFailed:
+                  value:
+                    error:
+                      code: CREATE_QUEUE_FAILED
+                      message: workload creation could not be queued
+  /internal/v1/instances/{instance_id}:
+    delete:
+      summary: 인스턴스 삭제 Operation 접수
+      operationId: enqueueDeleteInstance
+      parameters:
+        - $ref: "#/components/parameters/InstanceID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteInstanceRequest"
+      responses:
+        "202":
+          $ref: "#/components/responses/OperationAccepted"
+        "400":
+          description: Request validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                InvalidRequest:
+                  value:
+                    error:
+                      code: INVALID_REQUEST
+                      message: instance_id must be a UUID
+        "404":
+          description: Instance runtime binding was not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                InstanceNotFound:
+                  value:
+                    error:
+                      code: INSTANCE_NOT_FOUND
+                      message: instance runtime binding was not found
+        "409":
+          description: Instance binding, idempotency, or lifecycle conflict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                InstanceBindingMismatch:
+                  value:
+                    error:
+                      code: INSTANCE_BINDING_MISMATCH
+                      message: request does not match the stored runtime binding
+                RequestIDConflict:
+                  value:
+                    error:
+                      code: REQUEST_ID_CONFLICT
+                      message: request_id is already used by another operation
+                InstanceStateConflict:
+                  value:
+                    error:
+                      code: INSTANCE_STATE_CONFLICT
+                      message: instance cannot be deleted from its current state
+        "415":
+          description: Unsupported request media type
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                UnsupportedMediaType:
+                  value:
+                    error:
+                      code: UNSUPPORTED_MEDIA_TYPE
+                      message: Content-Type must be application/json
+        "502":
+          description: Delete operation could not be queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                DeleteQueueFailed:
+                  value:
+                    error:
+                      code: DELETE_QUEUE_FAILED
+                      message: workload deletion could not be queued
+  /internal/v1/operations/{operation_id}:
+    get:
+      summary: Operation 상태 조회
+      operationId: getOperation
+      parameters:
+        - $ref: "#/components/parameters/OperationID"
+      responses:
+        "200":
+          description: Operation의 현재 상태
+          headers:
+            Retry-After:
+              $ref: "#/components/headers/RetryAfter"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationResponse"
+              examples:
+                Queued:
+                  value:
+                    operation_id: op-create-123
+                    request_id: runtime-create-018f3f1e
+                    type: CREATE
+                    status: QUEUED
+                    attempt: 0
+                    max_attempts: 3
+                CreateSucceeded:
+                  value:
+                    operation_id: op-create-123
+                    request_id: runtime-create-018f3f1e
+                    type: CREATE
+                    status: SUCCEEDED
+                    attempt: 1
+                    max_attempts: 3
+                    result:
+                      runtime_workload_id: aws-k3s-001/ctf-018f3f1e/challenge
+                      service_url: https://challenge.example.com
+                DeleteSucceeded:
+                  value:
+                    operation_id: op-delete-123
+                    request_id: runtime-delete-018f3f1e
+                    type: DELETE
+                    status: SUCCEEDED
+                    attempt: 1
+                    max_attempts: 3
+                    result:
+                      runtime_workload_id: aws-k3s-001/ctf-018f3f1e/challenge
+                      status: SUCCESS
+                CreateFailed:
+                  value:
+                    operation_id: op-create-123
+                    request_id: runtime-create-018f3f1e
+                    type: CREATE
+                    status: FAILED
+                    attempt: 3
+                    max_attempts: 3
+                    last_error_code: TARGET_TEMPORARILY_UNAVAILABLE
+                DeleteFailed:
+                  value:
+                    operation_id: op-delete-123
+                    request_id: runtime-delete-018f3f1e
+                    type: DELETE
+                    status: FAILED
+                    attempt: 3
+                    max_attempts: 3
+                    last_error_code: TARGET_TEMPORARILY_UNAVAILABLE
+        "404":
+          description: Operation was not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                OperationNotFound:
+                  value:
+                    error:
+                      code: OPERATION_NOT_FOUND
+                      message: operation was not found
+        "500":
+          description: Operation lookup failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                OperationLookupFailed:
+                  value:
+                    error:
+                      code: OPERATION_LOOKUP_FAILED
+                      message: operation lookup failed
+  /internal/v1/instances/{instance_id}/runtime-status:
+    get:
+      summary: 컨테이너와 단일 노드 K3s 상태 조회
+      operationId: getRuntimeStatus
+      parameters:
+        - $ref: "#/components/parameters/InstanceID"
+      responses:
+        "200":
+          description: 런타임 상태
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuntimeStatusResponse"
+        "404":
+          description: Instance runtime binding was not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                InstanceNotFound:
+                  value:
+                    error:
+                      code: INSTANCE_NOT_FOUND
+                      message: instance runtime binding was not found
+        "409":
+          description: Runtime ownership does not match the stored binding
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                RuntimeOwnershipMismatch:
+                  value:
+                    error:
+                      code: RUNTIME_OWNERSHIP_MISMATCH
+                      message: runtime ownership does not match the stored binding
+        "502":
+          description: Runtime target or status lookup failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                TargetUnavailable:
+                  value:
+                    error:
+                      code: TARGET_TEMPORARILY_UNAVAILABLE
+                      message: runtime target is temporarily unavailable
+                K3sUnavailable:
+                  value:
+                    error:
+                      code: K3S_UNAVAILABLE
+                      message: runtime target is temporarily unavailable
+                RuntimeStatusFailed:
+                  value:
+                    error:
+                      code: RUNTIME_STATUS_FAILED
+                      message: runtime status lookup failed
+        "503":
+          description: Runtime target is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                TargetNotFound:
+                  value:
+                    error:
+                      code: TARGET_NOT_FOUND
+                      message: runtime target was not found
+                TargetTopologyInvalid:
+                  value:
+                    error:
+                      code: TARGET_TOPOLOGY_INVALID
+                      message: runtime target must contain exactly one node
+components:
+  parameters:
+    InstanceID:
+      name: instance_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    OperationID:
+      name: operation_id
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+  headers:
+    Location:
+      description: Operation 상태 조회 경로
+      schema:
+        type: string
+    RetryAfter:
+      description: 다음 조회까지 기다릴 시간(초)
+      schema:
+        type: integer
+        minimum: 1
+        example: 2
+  responses:
+    OperationAccepted:
+      description: Operation 접수 성공
+      headers:
+        Location:
+          $ref: "#/components/headers/Location"
+        Retry-After:
+          $ref: "#/components/headers/RetryAfter"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/OperationResponse"
+          examples:
+            CreateAccepted:
+              value:
+                operation_id: op-create-123
+                request_id: runtime-create-018f3f1e
+                type: CREATE
+                status: QUEUED
+                attempt: 0
+                max_attempts: 3
+                created: true
+            DeleteAccepted:
+              value:
+                operation_id: op-delete-123
+                request_id: runtime-delete-018f3f1e
+                type: DELETE
+                status: QUEUED
+                attempt: 0
+                max_attempts: 3
+                created: true
+  schemas:
+    RuntimeTarget:
+      type: object
+      additionalProperties: false
+      required:
+        - runtime_type
+        - target_id
+      properties:
+        runtime_type:
+          type: string
+          enum:
+            - KUBERNETES
+        target_id:
+          type: string
+          minLength: 1
+    ResourceValues:
+      type: object
+      additionalProperties: false
+      required:
+        - cpu_millicores
+        - memory_mib
+        - ephemeral_storage_mib
+      properties:
+        cpu_millicores:
+          type: integer
+          format: int64
+          minimum: 0
+        memory_mib:
+          type: integer
+          format: int64
+          minimum: 0
+        ephemeral_storage_mib:
+          type: integer
+          format: int64
+          minimum: 0
+    ResourceUsage:
+      type:
+        - object
+        - "null"
+      additionalProperties: false
+      required:
+        - cpu_millicores
+        - memory_mib
+      properties:
+        cpu_millicores:
+          type: integer
+          format: int64
+          minimum: 0
+        memory_mib:
+          type: integer
+          format: int64
+          minimum: 0
+    ResourceLimits:
+      allOf:
+        - $ref: "#/components/schemas/ResourceValues"
+    Workload:
+      type: object
+      additionalProperties: false
+      required:
+        - image
+        - container_port
+        - resource_limits
+      properties:
+        image:
+          type: string
+          minLength: 1
+        container_port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        resource_limits:
+          $ref: "#/components/schemas/ResourceLimits"
+    CreateInstanceRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - request_id
+        - instance_id
+        - team_id
+        - target
+        - workload
+      properties:
+        request_id:
+          type: string
+          minLength: 1
+        instance_id:
+          type: string
+          format: uuid
+        team_id:
+          type: integer
+          format: int64
+          minimum: 1
+        target:
+          $ref: "#/components/schemas/RuntimeTarget"
+        workload:
+          $ref: "#/components/schemas/Workload"
+    DeleteReason:
+      type: string
+      enum:
+        - USER_REQUESTED
+        - TTL_EXPIRED
+        - IDLE_EXPIRED
+        - HARD_TIMEOUT_EXPIRED
+        - CREATE_FAILED_CLEANUP
+        - ADMIN_FORCED
+    DeleteInstanceRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - request_id
+        - instance_id
+        - team_id
+        - target
+        - runtime_workload_id
+        - delete_reason
+      properties:
+        request_id:
+          type: string
+          minLength: 1
+        instance_id:
+          type: string
+          format: uuid
+        team_id:
+          type: integer
+          format: int64
+          minimum: 1
+        target:
+          $ref: "#/components/schemas/RuntimeTarget"
+        runtime_workload_id:
+          type: string
+          minLength: 1
+        delete_reason:
+          $ref: "#/components/schemas/DeleteReason"
+    OperationType:
+      type: string
+      enum:
+        - CREATE
+        - DELETE
+    OperationStatus:
+      type: string
+      enum:
+        - QUEUED
+        - RUNNING
+        - RETRYING
+        - SUCCEEDED
+        - FAILED
+    CreateOperationResult:
+      type: object
+      additionalProperties: false
+      required:
+        - runtime_workload_id
+        - service_url
+      properties:
+        runtime_workload_id:
+          type: string
+        service_url:
+          type: string
+          format: uri
+    DeleteOperationResult:
+      type: object
+      additionalProperties: false
+      required:
+        - runtime_workload_id
+        - status
+      properties:
+        runtime_workload_id:
+          type: string
+        status:
+          type: string
+          const: SUCCESS
+    OperationResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - operation_id
+        - request_id
+        - type
+        - status
+        - attempt
+        - max_attempts
+      properties:
+        operation_id:
+          type: string
+        request_id:
+          type: string
+        type:
+          $ref: "#/components/schemas/OperationType"
+        status:
+          $ref: "#/components/schemas/OperationStatus"
+        attempt:
+          type: integer
+          minimum: 0
+        max_attempts:
+          type: integer
+          minimum: 1
+        created:
+          type: boolean
+        last_error_code:
+          type: string
+        result:
+          oneOf:
+            - $ref: "#/components/schemas/CreateOperationResult"
+            - $ref: "#/components/schemas/DeleteOperationResult"
+    NodeStatus:
+      type: object
+      additionalProperties: false
+      required:
+        - ready
+        - memory_pressure
+        - disk_pressure
+        - pid_pressure
+        - capacity
+        - allocatable
+        - requested
+        - schedulable
+        - usage
+      properties:
+        ready:
+          type: boolean
+        memory_pressure:
+          type: boolean
+        disk_pressure:
+          type: boolean
+        pid_pressure:
+          type: boolean
+        capacity:
+          $ref: "#/components/schemas/ResourceValues"
+        allocatable:
+          $ref: "#/components/schemas/ResourceValues"
+        requested:
+          $ref: "#/components/schemas/ResourceValues"
+          description: 미종료 Pod의 컨테이너 요청량, init container 최대 요청량, Pod overhead를 반영한 예약 자원
+        schedulable:
+          $ref: "#/components/schemas/ResourceValues"
+          description: allocatable에서 requested를 빼고 자원별 최솟값을 0으로 제한한 값
+        usage:
+          description: Metrics API가 제공한 노드 사용량이며 Metrics가 없으면 null
+          $ref: "#/components/schemas/ResourceUsage"
+    ContainerStatus:
+      type: object
+      additionalProperties: false
+      required:
+        - pod_name
+        - name
+        - state
+        - ready
+        - restart_count
+        - requests
+        - limits
+        - usage
+      properties:
+        pod_name:
+          type: string
+        name:
+          type: string
+        state:
+          type: string
+          enum:
+            - RUNNING
+            - WAITING
+            - TERMINATED
+            - UNKNOWN
+        ready:
+          type: boolean
+        restart_count:
+          type: integer
+          format: int32
+          minimum: 0
+        reason:
+          type: string
+        exit_code:
+          type: integer
+          format: int32
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+        requests:
+          $ref: "#/components/schemas/ResourceValues"
+        limits:
+          $ref: "#/components/schemas/ResourceValues"
+        usage:
+          description: Metrics API가 제공한 컨테이너 사용량이며 Metrics가 없으면 null
+          $ref: "#/components/schemas/ResourceUsage"
+    RuntimeStatusResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - instance_id
+        - target_id
+        - runtime_workload_id
+        - phase
+        - endpoint_ready
+        - metrics_available
+        - observed_at
+        - node
+        - containers
+      properties:
+        instance_id:
+          type: string
+          format: uuid
+        target_id:
+          type: string
+        runtime_workload_id:
+          type: string
+        phase:
+          type: string
+          enum:
+            - PROVISIONING
+            - READY
+            - DEGRADED
+            - TERMINATING
+            - TERMINATED
+        endpoint_ready:
+          type: boolean
+        metrics_available:
+          type: boolean
+        observed_at:
+          type: string
+          format: date-time
+        node:
+          $ref: "#/components/schemas/NodeStatus"
+        containers:
+          type: array
+          items:
+            $ref: "#/components/schemas/ContainerStatus"
+    APIError:
+      type: object
+      additionalProperties: false
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - error
+      properties:
+        error:
+          $ref: "#/components/schemas/APIError"

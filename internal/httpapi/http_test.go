@@ -9,51 +9,81 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MSG-CTF/secure-provisioner/internal/operations"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 )
 
 func TestCreateInstanceAcceptsSchedulerContract(t *testing.T) {
-	useCase := &recordingCreateUseCase{
-		result: provisioner.CreateWorkloadResult{
-			RuntimeWorkloadID: "cluster-main/ns-team-1/workload-abc",
-			ServiceURL:        "https://team-1.example.test",
+	runtime := &recordingRuntimeUseCase{
+		operation: operations.Operation{
+			ID:          "operation-create-01",
+			RequestID:   "req-01",
+			Type:        operations.OperationTypeCreate,
+			Status:      operations.OperationStatusQueued,
+			MaxAttempts: 3,
 		},
+		created: true,
 	}
-	handler := NewHandler(useCase)
+	handler := NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime)
 
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(validCreateRequestJSON()))
 	request.Header.Set("Content-Type", "application/json")
 	handler.ServeHTTP(response, request)
 
-	if response.Code != http.StatusCreated {
-		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusCreated, response.Body.String())
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusAccepted, response.Body.String())
 	}
-	if useCase.calls != 1 {
-		t.Fatalf("CreateWorkload() calls = %d, want 1", useCase.calls)
+	if runtime.createCalls != 1 {
+		t.Fatalf("EnqueueCreate() calls = %d, want 1", runtime.createCalls)
 	}
 	wantCommand := validCreateWorkloadRequest().ToCommand()
-	if useCase.command != wantCommand {
-		t.Fatalf("command = %#v, want %#v", useCase.command, wantCommand)
+	if runtime.createCommand != wantCommand {
+		t.Fatalf("command = %#v, want %#v", runtime.createCommand, wantCommand)
 	}
-
-	responseBody := append([]byte(nil), response.Body.Bytes()...)
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(responseBody, &fields); err != nil {
-		t.Fatalf("decode response fields: %v", err)
+	if got := response.Header().Get("Location"); got != "/internal/v1/operations/operation-create-01" {
+		t.Fatalf("Location = %q", got)
 	}
-	if len(fields) != 2 || fields["runtime_workload_id"] == nil || fields["service_url"] == nil {
-		t.Fatalf("response fields = %v, want exactly runtime_workload_id and service_url", fields)
+	if got := response.Header().Get("Retry-After"); got != "2" {
+		t.Fatalf("Retry-After = %q", got)
 	}
-	var result CreateWorkloadResponse
-	if err := json.Unmarshal(responseBody, &result); err != nil {
+	var result OperationResponse
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if result.RuntimeWorkloadID != useCase.result.RuntimeWorkloadID || result.ServiceURL != useCase.result.ServiceURL {
-		t.Fatalf("result = %#v, want %#v", result, useCase.result)
+	if result.OperationID != "operation-create-01" || result.RequestID != "req-01" ||
+		result.Type != "CREATE" || result.Status != "QUEUED" || result.Created == nil || !*result.Created {
+		t.Fatalf("result = %#v", result)
 	}
 	if contentType := response.Header().Get("Content-Type"); contentType != "application/json" {
 		t.Fatalf("Content-Type = %q, want application/json", contentType)
+	}
+}
+
+func TestCreateInstanceIncludesFalseCreatedForIdempotentReplay(t *testing.T) {
+	runtime := &recordingRuntimeUseCase{
+		operation: operations.Operation{
+			ID:          "operation-create-01",
+			RequestID:   "req-01",
+			Type:        operations.OperationTypeCreate,
+			Status:      operations.OperationStatusRunning,
+			Attempt:     1,
+			MaxAttempts: 3,
+		},
+		created: false,
+	}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(validCreateRequestJSON()))
+	request.Header.Set("Content-Type", "application/json")
+
+	NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+
+	var payload OperationResponse
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Created == nil || *payload.Created {
+		t.Fatalf("created = %#v", payload.Created)
 	}
 }
 
@@ -71,17 +101,18 @@ func TestCreateInstanceRejectsInvalidJSONContracts(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			useCase := &recordingCreateUseCase{}
+			runtime := &recordingRuntimeUseCase{}
 			response := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(test.body))
 			request.Header.Set("Content-Type", "application/json")
 
-			NewHandler(useCase).ServeHTTP(response, request)
+			NewHandlerWithRuntime(useCase, runtime).ServeHTTP(response, request)
 
 			if response.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusBadRequest, response.Body.String())
 			}
-			if useCase.calls != 0 {
-				t.Fatalf("CreateWorkload() calls = %d, want 0", useCase.calls)
+			if runtime.createCalls != 0 {
+				t.Fatalf("EnqueueCreate() calls = %d, want 0", runtime.createCalls)
 			}
 			if !strings.Contains(response.Body.String(), "invalid JSON request body") {
 				t.Fatalf("response does not use stable decode error: %s", response.Body.String())
@@ -96,6 +127,7 @@ func TestCreateInstanceRejectsInvalidJSONContracts(t *testing.T) {
 
 func TestCreateInstanceRejectsInvalidResourceValues(t *testing.T) {
 	useCase := &recordingCreateUseCase{}
+	runtime := &recordingRuntimeUseCase{}
 	body := `{
 		"request_id":"req-01",
 		"instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001",
@@ -111,61 +143,60 @@ func TestCreateInstanceRejectsInvalidResourceValues(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json; charset=utf-8")
 
-	NewHandler(useCase).ServeHTTP(response, request)
+	NewHandlerWithRuntime(useCase, runtime).ServeHTTP(response, request)
 
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusBadRequest, response.Body.String())
 	}
-	if useCase.calls != 0 {
-		t.Fatalf("CreateWorkload() calls = %d, want 0", useCase.calls)
+	if runtime.createCalls != 0 {
+		t.Fatalf("EnqueueCreate() calls = %d, want 0", runtime.createCalls)
 	}
 	assertErrorCode(t, response, "INVALID_REQUEST")
 }
 
-func TestCreateInstanceHidesUseCaseFailureDetails(t *testing.T) {
-	useCase := &recordingCreateUseCase{err: errors.New("kubeconfig contains secret-internal-path")}
+func TestCreateInstanceRejectsRequestIDConflict(t *testing.T) {
+	useCase := &recordingCreateUseCase{}
+	runtime := &recordingRuntimeUseCase{createErr: operations.ErrIdempotencyConflict}
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(validCreateRequestJSON()))
 	request.Header.Set("Content-Type", "application/json")
 
-	NewHandler(useCase).ServeHTTP(response, request)
+	NewHandlerWithRuntime(useCase, runtime).ServeHTTP(response, request)
+
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusConflict, response.Body.String())
+	}
+	assertErrorCode(t, response, "REQUEST_ID_CONFLICT")
+}
+
+func TestCreateInstanceMapsQueueFailureWithoutLeakingStoreDetails(t *testing.T) {
+	runtime := &recordingRuntimeUseCase{createErr: errors.New("private operation store detail")}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(validCreateRequestJSON()))
+	request.Header.Set("Content-Type", "application/json")
+
+	NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
 
 	if response.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusBadGateway, response.Body.String())
 	}
-	if strings.Contains(response.Body.String(), "secret-internal-path") {
-		t.Fatalf("response leaked internal error: %s", response.Body.String())
-	}
-	assertErrorCode(t, response, "PROVISIONING_FAILED")
-}
-
-func TestCreateInstanceReportsUnavailableRuntime(t *testing.T) {
-	useCase := &recordingCreateUseCase{err: provisioner.ErrRuntimeUnavailable}
-	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(validCreateRequestJSON()))
-	request.Header.Set("Content-Type", "application/json")
-
-	NewHandler(useCase).ServeHTTP(response, request)
-
-	if response.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusServiceUnavailable, response.Body.String())
-	}
-	assertErrorCode(t, response, "RUNTIME_UNAVAILABLE")
+	assertPublicErrorMessage(t, response, "CREATE_QUEUE_FAILED", "private operation store detail")
 }
 
 func TestCreateInstanceRequiresJSONContentType(t *testing.T) {
 	useCase := &recordingCreateUseCase{}
+	runtime := &recordingRuntimeUseCase{}
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(validCreateRequestJSON()))
 	request.Header.Set("Content-Type", "text/plain")
 
-	NewHandler(useCase).ServeHTTP(response, request)
+	NewHandlerWithRuntime(useCase, runtime).ServeHTTP(response, request)
 
 	if response.Code != http.StatusUnsupportedMediaType {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusUnsupportedMediaType, response.Body.String())
 	}
-	if useCase.calls != 0 {
-		t.Fatalf("CreateWorkload() calls = %d, want 0", useCase.calls)
+	if runtime.createCalls != 0 {
+		t.Fatalf("EnqueueCreate() calls = %d, want 0", runtime.createCalls)
 	}
 	assertErrorCode(t, response, "UNSUPPORTED_MEDIA_TYPE")
 }
@@ -183,17 +214,41 @@ func (useCase *recordingCreateUseCase) CreateWorkload(_ context.Context, command
 	return useCase.result, useCase.err
 }
 
+type apiErrorEnvelope struct {
+	Error struct {
+		Code    string  `json:"code"`
+		Message *string `json:"message"`
+	} `json:"error"`
+}
+
 func assertErrorCode(t *testing.T, response *httptest.ResponseRecorder, want string) {
 	t.Helper()
-	var payload struct {
-		Error struct {
-			Code string `json:"code"`
-		} `json:"error"`
+	_ = assertAPIErrorEnvelope(t, response, want)
+}
+
+func assertPublicErrorMessage(t *testing.T, response *httptest.ResponseRecorder, wantCode, privateDetail string) {
+	t.Helper()
+	rawBody := response.Body.String()
+	payload := assertAPIErrorEnvelope(t, response, wantCode)
+	if payload.Error.Message == nil {
+		t.Fatal("error message is missing")
 	}
+	if strings.TrimSpace(*payload.Error.Message) == "" {
+		t.Fatal("error message is empty")
+	}
+	if strings.Contains(rawBody, privateDetail) {
+		t.Fatalf("response leaked private error detail: %s", rawBody)
+	}
+}
+
+func assertAPIErrorEnvelope(t *testing.T, response *httptest.ResponseRecorder, wantCode string) apiErrorEnvelope {
+	t.Helper()
+	var payload apiErrorEnvelope
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode error response: %v", err)
 	}
-	if payload.Error.Code != want {
-		t.Fatalf("error code = %q, want %q", payload.Error.Code, want)
+	if payload.Error.Code != wantCode {
+		t.Fatalf("error code = %q, want %q", payload.Error.Code, wantCode)
 	}
+	return payload
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/MSG-CTF/secure-provisioner/internal/operations"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
+	"github.com/MSG-CTF/secure-provisioner/internal/runtimebinding"
 )
 
 func TestExecutorRoutesCreateOperationToSelectedTarget(t *testing.T) {
@@ -46,6 +47,35 @@ func TestExecutorRejectsDeleteWithoutCallingKubernetes(t *testing.T) {
 	}
 	if adapter.calls != 0 {
 		t.Fatalf("adapter calls = %d, want 0", adapter.calls)
+	}
+}
+
+func TestExecutorRoutesDeleteUsingStoredBinding(t *testing.T) {
+	binding, _ := deleteFixture()
+	store := runtimebinding.NewMemoryStore()
+	if _, _, err := store.SaveCreated(binding); err != nil {
+		t.Fatal(err)
+	}
+	createAdapter := &recordingCreateAdapter{}
+	deleteAdapter := &recordingDeleteAdapter{}
+	executor, err := NewExecutorWithDelete(createAdapter, deleteAdapter, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := deleteCommand(binding)
+
+	result, err := executor.Execute(context.Background(), operations.Operation{
+		Type:          operations.OperationTypeDelete,
+		DeleteCommand: &command,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleteAdapter.calls != 1 || deleteAdapter.command != command || deleteAdapter.binding != binding {
+		t.Fatalf("delete call = %#v", deleteAdapter)
+	}
+	if !result.DeleteCompleted || result.Create != nil {
+		t.Fatalf("result = %#v", result)
 	}
 }
 
@@ -116,6 +146,20 @@ type recordingCreateAdapter struct {
 	command provisioner.CreateWorkloadCommand
 	result  provisioner.CreateWorkloadResult
 	err     error
+}
+
+type recordingDeleteAdapter struct {
+	calls   int
+	command provisioner.DeleteWorkloadCommand
+	binding runtimebinding.Binding
+	err     error
+}
+
+func (a *recordingDeleteAdapter) DeleteWorkload(_ context.Context, command provisioner.DeleteWorkloadCommand, binding runtimebinding.Binding) error {
+	a.calls++
+	a.command = command
+	a.binding = binding
+	return a.err
 }
 
 func (a *recordingCreateAdapter) CreateWorkload(_ context.Context, command provisioner.CreateWorkloadCommand) (provisioner.CreateWorkloadResult, error) {
