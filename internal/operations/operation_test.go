@@ -2,6 +2,7 @@ package operations
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
@@ -9,12 +10,13 @@ import (
 
 func TestNewCreateOperation(t *testing.T) {
 	command := provisioner.CreateWorkloadCommand{
-		RequestID:     "req-1",
-		InstanceID:    "inst-1",
-		RuntimeType:   provisioner.RuntimeTypeKubernetes,
-		TargetID:      "aws-dev",
-		Image:         "nginx:1.27",
-		ContainerPort: 80,
+		RequestID:   "req-1",
+		InstanceID:  "inst-1",
+		RuntimeType: provisioner.RuntimeTypeKubernetes,
+		TargetID:    "aws-dev",
+		Containers: []provisioner.WorkloadContainer{{
+			Name: "challenge", Image: "nginx:1.27", Ports: []int{80}, Expose: true,
+		}},
 	}
 
 	operation, err := NewCreateOperation("op-1", command, 3)
@@ -27,7 +29,7 @@ func TestNewCreateOperation(t *testing.T) {
 	if operation.CreateCommand == nil || operation.DeleteCommand != nil {
 		t.Fatalf("unexpected payload: %#v", operation)
 	}
-	if operation.RequestID != command.RequestID || *operation.CreateCommand != command {
+	if operation.RequestID != command.RequestID || !reflect.DeepEqual(*operation.CreateCommand, command) {
 		t.Fatalf("unexpected copied command: %#v", operation)
 	}
 }
@@ -83,7 +85,10 @@ func TestNewOperationRejectsEmptyIDRequestIDAndInvalidMaxAttempts(t *testing.T) 
 func TestSameRequestRequiresMatchingTypeRequestIDAndFullCommand(t *testing.T) {
 	createCommand := provisioner.CreateWorkloadCommand{
 		RequestID: "req-1", InstanceID: "inst-1", TeamID: 7,
-		RuntimeType: provisioner.RuntimeTypeKubernetes, TargetID: "aws-dev", Image: "nginx:1.27", ContainerPort: 80,
+		RuntimeType: provisioner.RuntimeTypeKubernetes, TargetID: "aws-dev",
+		Containers: []provisioner.WorkloadContainer{{
+			Name: "challenge", Image: "nginx:1.27", Ports: []int{80}, Expose: true,
+		}},
 		ResourceLimits: provisioner.ResourceLimits{CPUMillicores: 100, MemoryMiB: 128, EphemeralStorageMiB: 256},
 	}
 	matching, err := NewCreateOperation("op-1", createCommand, 1)

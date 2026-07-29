@@ -17,12 +17,20 @@ type ResourceLimits struct {
 	EphemeralStorageMiB int
 }
 
+type WorkloadContainer struct {
+	Name   string
+	Image  string
+	Ports  []int
+	Expose bool
+}
+
 type CreateWorkloadCommand struct {
 	RequestID      string
 	InstanceID     string
 	TeamID         int64
 	RuntimeType    RuntimeType
 	TargetID       string
+	Containers     []WorkloadContainer
 	Image          string
 	ContainerPort  int
 	ResourceLimits ResourceLimits

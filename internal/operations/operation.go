@@ -2,6 +2,7 @@ package operations
 
 import (
 	"errors"
+	"slices"
 
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 )
@@ -48,7 +49,7 @@ func NewCreateOperation(id string, command provisioner.CreateWorkloadCommand, ma
 		return Operation{}, err
 	}
 
-	commandCopy := command
+	commandCopy := copyCreateCommand(command)
 	return Operation{
 		ID:            id,
 		RequestID:     command.RequestID,
@@ -82,12 +83,47 @@ func (o Operation) SameRequest(other Operation) bool {
 
 	switch o.Type {
 	case OperationTypeCreate:
-		return o.CreateCommand != nil && other.CreateCommand != nil && *o.CreateCommand == *other.CreateCommand
+		return o.CreateCommand != nil && other.CreateCommand != nil && sameCreateCommand(*o.CreateCommand, *other.CreateCommand)
 	case OperationTypeDelete:
 		return o.DeleteCommand != nil && other.DeleteCommand != nil && *o.DeleteCommand == *other.DeleteCommand
 	default:
 		return false
 	}
+}
+
+func copyCreateCommand(command provisioner.CreateWorkloadCommand) provisioner.CreateWorkloadCommand {
+	copied := command
+	copied.Containers = make([]provisioner.WorkloadContainer, len(command.Containers))
+	for index, container := range command.Containers {
+		copied.Containers[index] = container
+		copied.Containers[index].Ports = slices.Clone(container.Ports)
+	}
+	return copied
+}
+
+func sameCreateCommand(first, second provisioner.CreateWorkloadCommand) bool {
+	if first.RequestID != second.RequestID ||
+		first.InstanceID != second.InstanceID ||
+		first.TeamID != second.TeamID ||
+		first.RuntimeType != second.RuntimeType ||
+		first.TargetID != second.TargetID ||
+		first.Image != second.Image ||
+		first.ContainerPort != second.ContainerPort ||
+		first.ResourceLimits != second.ResourceLimits ||
+		len(first.Containers) != len(second.Containers) {
+		return false
+	}
+	for index := range first.Containers {
+		firstContainer := first.Containers[index]
+		secondContainer := second.Containers[index]
+		if firstContainer.Name != secondContainer.Name ||
+			firstContainer.Image != secondContainer.Image ||
+			firstContainer.Expose != secondContainer.Expose ||
+			!slices.Equal(firstContainer.Ports, secondContainer.Ports) {
+			return false
+		}
+	}
+	return true
 }
 
 func validateOperation(id, requestID string, maxAttempts int) error {

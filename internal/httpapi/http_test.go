@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -38,7 +39,7 @@ func TestCreateInstanceAcceptsSchedulerContract(t *testing.T) {
 		t.Fatalf("EnqueueCreate() calls = %d, want 1", runtime.createCalls)
 	}
 	wantCommand := validCreateWorkloadRequest().ToCommand()
-	if runtime.createCommand != wantCommand {
+	if !reflect.DeepEqual(runtime.createCommand, wantCommand) {
 		t.Fatalf("command = %#v, want %#v", runtime.createCommand, wantCommand)
 	}
 	if got := response.Header().Get("Location"); got != "/internal/v1/operations/operation-create-01" {

@@ -196,7 +196,7 @@ func (s *MemoryStore) MarkFailed(id, errorCode string) (Operation, error) {
 
 func (s *MemoryStore) enqueueCreate(command provisioner.CreateWorkloadCommand, maxAttempts int) (Operation, bool, error) {
 	if existing, ok := s.operationForRequest(command.RequestID); ok {
-		if existing.Type == OperationTypeCreate && existing.CreateCommand != nil && *existing.CreateCommand == command {
+		if existing.Type == OperationTypeCreate && existing.CreateCommand != nil && sameCreateCommand(*existing.CreateCommand, command) {
 			return copyOperation(*existing), false, nil
 		}
 		return Operation{}, false, ErrIdempotencyConflict
@@ -319,7 +319,7 @@ func randomID() (string, error) {
 func copyOperation(operation Operation) Operation {
 	copy := operation
 	if operation.CreateCommand != nil {
-		command := *operation.CreateCommand
+		command := copyCreateCommand(*operation.CreateCommand)
 		copy.CreateCommand = &command
 	}
 	if operation.DeleteCommand != nil {

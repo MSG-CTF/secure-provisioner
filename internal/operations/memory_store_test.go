@@ -215,14 +215,39 @@ func TestMemoryStoreTransitionsAndReturnsCopies(t *testing.T) {
 	}
 
 	original.Status = OperationStatusFailed
-	original.CreateCommand.Image = "mutated:tag"
+	original.CreateCommand.Containers[0].Image = "mutated:tag"
 	succeeded.Result.Create.ServiceURL = "http://mutated.example"
 	stored, err := store.Get(next.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.Status != OperationStatusSucceeded || stored.CreateCommand.Image != "nginx:1.27" || stored.Result.Create.ServiceURL != "http://service.example" {
+	if stored.Status != OperationStatusSucceeded ||
+		stored.CreateCommand.Containers[0].Image != "nginx:1.27" ||
+		stored.Result.Create.ServiceURL != "http://service.example" {
 		t.Fatalf("store leaked mutable state: %#v", stored)
+	}
+}
+
+func TestMemoryStoreCopiesCreateContainerSlices(t *testing.T) {
+	store := NewMemoryStore(sequenceIDs("op-1"))
+	command := validCreateCommand("req-1")
+	enqueued, _, err := store.EnqueueCreate(command, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	command.Containers[0].Image = "mutated:latest"
+	command.Containers[0].Ports[0] = 9999
+	enqueued.CreateCommand.Containers[0].Image = "returned:latest"
+	enqueued.CreateCommand.Containers[0].Ports[0] = 7777
+
+	stored, err := store.Get(enqueued.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.CreateCommand.Containers[0].Image != "nginx:1.27" ||
+		stored.CreateCommand.Containers[0].Ports[0] != 8080 {
+		t.Fatalf("store leaked command slices: %#v", stored.CreateCommand)
 	}
 }
 
@@ -420,7 +445,10 @@ func TestMemoryStoreGetsOperationByRequestID(t *testing.T) {
 func validCreateCommand(requestID string) provisioner.CreateWorkloadCommand {
 	return provisioner.CreateWorkloadCommand{
 		RequestID: requestID, InstanceID: "inst-1", TeamID: 7,
-		RuntimeType: provisioner.RuntimeTypeKubernetes, TargetID: "target-1", Image: "nginx:1.27", ContainerPort: 8080,
+		RuntimeType: provisioner.RuntimeTypeKubernetes, TargetID: "target-1",
+		Containers: []provisioner.WorkloadContainer{{
+			Name: "challenge", Image: "nginx:1.27", Ports: []int{8080}, Expose: true,
+		}},
 		ResourceLimits: provisioner.ResourceLimits{CPUMillicores: 100, MemoryMiB: 128, EphemeralStorageMiB: 256},
 	}
 }

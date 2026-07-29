@@ -3,6 +3,7 @@ package k3s
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/MSG-CTF/secure-provisioner/internal/operations"
@@ -26,7 +27,7 @@ func TestExecutorRoutesCreateOperationToSelectedTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if adapter.calls != 1 || adapter.command != command {
+	if adapter.calls != 1 || !reflect.DeepEqual(adapter.command, command) {
 		t.Fatalf("adapter calls = %d, command = %#v", adapter.calls, adapter.command)
 	}
 	if result.Create == nil || *result.Create != want || result.DeleteCompleted {
