@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -78,7 +79,7 @@ func TestK3sIntegrationCreateReadyAndCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal("second CreateWorkload() failed")
 	}
-	if retryResult != result {
+	if !reflect.DeepEqual(retryResult, result) {
 		t.Fatal("second CreateWorkload() returned a different result")
 	}
 

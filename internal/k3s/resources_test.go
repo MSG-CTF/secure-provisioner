@@ -36,13 +36,19 @@ func TestBuildResourceSetCreatesOwnedKubernetesResources(t *testing.T) {
 		"msgctf.io/team-id":            "42",
 	}
 	for resource, labels := range map[string]map[string]string{
-		"namespace":    resources.Namespace.Labels,
+		"namespace": resources.Namespace.Labels,
+		"ingress":   resources.Ingress.Labels,
+	} {
+		assertExactOwnershipLabels(t, resource, labels, wantOwnerLabels)
+	}
+	wantContainerLabels := copyLabels(wantOwnerLabels)
+	wantContainerLabels[containerNameLabel] = resourceName
+	for resource, labels := range map[string]map[string]string{
 		"deployment":   resources.Deployment.Labels,
 		"pod template": resources.Deployment.Spec.Template.Labels,
 		"service":      resources.Service.Labels,
-		"ingress":      resources.Ingress.Labels,
 	} {
-		assertExactOwnershipLabels(t, resource, labels, wantOwnerLabels)
+		assertExactOwnershipLabels(t, resource, labels, wantContainerLabels)
 	}
 	if resources.Deployment.Spec.Replicas == nil || *resources.Deployment.Spec.Replicas != 1 {
 		t.Fatalf("replicas = %v, want explicit 1", resources.Deployment.Spec.Replicas)
@@ -67,7 +73,7 @@ func TestBuildResourceSetCreatesOwnedKubernetesResources(t *testing.T) {
 		}
 	}
 
-	const wantSpecHash = "ea9e8f4af5eb13c9b5197ee513dbcb937f0895df3b93585dbc4a69789ffec320"
+	const wantSpecHash = "2d0bc30d1f4d428f92e20d14430b8a0370ab5dedad7df62dfbdb99c2b9ab4161"
 	if resources.ExpectedSpecHash != wantSpecHash {
 		t.Fatalf("ExpectedSpecHash = %q, want stable SHA-256", resources.ExpectedSpecHash)
 	}
@@ -150,6 +156,89 @@ func TestBuildResourceSetSetsCPUAndMemoryAndEphemeralStorageRequestsAndLimits(t 
 		if got := limits.Limits[name]; got.Cmp(want) != 0 {
 			t.Errorf("limit %s = %s, want %s", name, got.String(), want.String())
 		}
+	}
+}
+
+func TestBuildResourceSetDistributesAggregateLimitsExactly(t *testing.T) {
+	command := validMultiCreateCommand("aws-dev")
+	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resources.Deployments) != 2 {
+		t.Fatalf("deployments = %d, want 2", len(resources.Deployments))
+	}
+
+	want := map[string]provisioner.ResourceLimits{
+		"web": {
+			CPUMillicores:       251,
+			MemoryMiB:           257,
+			EphemeralStorageMiB: 513,
+		},
+		"internal": {
+			CPUMillicores:       250,
+			MemoryMiB:           256,
+			EphemeralStorageMiB: 512,
+		},
+	}
+	gotTotal := provisioner.ResourceLimits{}
+	for _, deployment := range resources.Deployments {
+		container := deployment.Spec.Template.Spec.Containers[0]
+		expected, found := want[container.Name]
+		if !found {
+			t.Fatalf("unexpected container %q", container.Name)
+		}
+		got := provisioner.ResourceLimits{
+			CPUMillicores:       int(container.Resources.Limits.Cpu().MilliValue()),
+			MemoryMiB:           int(container.Resources.Limits.Memory().Value() / (1024 * 1024)),
+			EphemeralStorageMiB: int(container.Resources.Limits.StorageEphemeral().Value() / (1024 * 1024)),
+		}
+		if got != expected {
+			t.Fatalf("%s limits = %#v, want %#v", container.Name, got, expected)
+		}
+		gotTotal.CPUMillicores += got.CPUMillicores
+		gotTotal.MemoryMiB += got.MemoryMiB
+		gotTotal.EphemeralStorageMiB += got.EphemeralStorageMiB
+	}
+	if gotTotal != command.ResourceLimits {
+		t.Fatalf("distributed total = %#v, want %#v", gotTotal, command.ResourceLimits)
+	}
+}
+
+func TestBuildResourceSetCreatesMultipleContainerResources(t *testing.T) {
+	command := validMultiCreateCommand("aws-dev")
+	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resources.Deployments) != 2 || len(resources.Services) != 2 {
+		t.Fatalf("resources = %d deployments, %d services", len(resources.Deployments), len(resources.Services))
+	}
+	if resources.Deployments[0].Name != "web" || resources.Deployments[1].Name != "internal" {
+		t.Fatalf("deployment names = %q, %q", resources.Deployments[0].Name, resources.Deployments[1].Name)
+	}
+	if resources.Services[0].Name != "web" || resources.Services[1].Name != "internal" {
+		t.Fatalf("service names = %q, %q", resources.Services[0].Name, resources.Services[1].Name)
+	}
+	if len(resources.Services[1].Spec.Ports) != 2 ||
+		resources.Services[1].Spec.Ports[0].Port != 8080 ||
+		resources.Services[1].Spec.Ports[1].Port != 9090 {
+		t.Fatalf("internal service ports = %#v", resources.Services[1].Spec.Ports)
+	}
+	paths := resources.Ingress.Spec.Rules[0].HTTP.Paths
+	if len(paths) != 1 {
+		t.Fatalf("ingress paths = %#v, want one exposed port", paths)
+	}
+	if paths[0].Path != "/instances/"+command.InstanceID ||
+		paths[0].Backend.Service.Name != "web" ||
+		paths[0].Backend.Service.Port.Number != 8080 {
+		t.Fatalf("public path = %#v", paths[0])
+	}
+	if len(resources.Endpoints) != 1 ||
+		resources.Endpoints[0].ContainerName != "web" ||
+		resources.Endpoints[0].Port != 8080 ||
+		resources.ServiceURL != resources.Endpoints[0].ServiceURL {
+		t.Fatalf("endpoints = %#v, service URL = %q", resources.Endpoints, resources.ServiceURL)
 	}
 }
 
@@ -236,6 +325,25 @@ func validCreateCommand(targetID string) provisioner.CreateWorkloadCommand {
 			CPUMillicores:       500,
 			MemoryMiB:           512,
 			EphemeralStorageMiB: 1024,
+		},
+	}
+}
+
+func validMultiCreateCommand(targetID string) provisioner.CreateWorkloadCommand {
+	return provisioner.CreateWorkloadCommand{
+		RequestID:   "req-multi",
+		InstanceID:  "018f3f1e-21b8-7a91-a30b-63b3400fd001",
+		TeamID:      42,
+		RuntimeType: provisioner.RuntimeTypeKubernetes,
+		TargetID:    targetID,
+		Containers: []provisioner.WorkloadContainer{
+			{Name: "web", Image: "ghcr.io/msg-ctf/challenges/oob-test/web:latest", Ports: []int{8080}, Expose: true},
+			{Name: "internal", Image: "ghcr.io/msg-ctf/challenges/oob-test/web:latest", Ports: []int{8080, 9090}, Expose: false},
+		},
+		ResourceLimits: provisioner.ResourceLimits{
+			CPUMillicores:       501,
+			MemoryMiB:           513,
+			EphemeralStorageMiB: 1025,
 		},
 	}
 }

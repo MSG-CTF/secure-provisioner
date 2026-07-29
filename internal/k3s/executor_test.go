@@ -30,7 +30,7 @@ func TestExecutorRoutesCreateOperationToSelectedTarget(t *testing.T) {
 	if adapter.calls != 1 || !reflect.DeepEqual(adapter.command, command) {
 		t.Fatalf("adapter calls = %d, command = %#v", adapter.calls, adapter.command)
 	}
-	if result.Create == nil || *result.Create != want || result.DeleteCompleted {
+	if result.Create == nil || !reflect.DeepEqual(*result.Create, want) || result.DeleteCompleted {
 		t.Fatalf("result = %#v", result)
 	}
 }
