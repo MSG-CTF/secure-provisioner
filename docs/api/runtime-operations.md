@@ -132,7 +132,7 @@ Content-Type: application/json
     "runtime_type": "KUBERNETES",
     "target_id": "aws-k3s-001"
   },
-  "runtime_workload_id": "aws-k3s-001/ctf-018f3f1e/challenge",
+  "runtime_workload_id": "aws-k3s-001/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge",
   "delete_reason": "USER_REQUESTED"
 }
 ```
@@ -196,7 +196,7 @@ Retry-After: 2
   "attempt": 1,
   "max_attempts": 3,
   "result": {
-    "runtime_workload_id": "aws-k3s-001/ctf-018f3f1e/challenge",
+    "runtime_workload_id": "aws-k3s-001/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge",
     "service_url": "https://gateway.example.com/instances/018f3f1e-21b8-7a91-a30b-63b3400fd001",
     "endpoints": [
       {
@@ -224,7 +224,7 @@ Retry-After: 2
   "attempt": 1,
   "max_attempts": 3,
   "result": {
-    "runtime_workload_id": "aws-k3s-001/ctf-018f3f1e/challenge",
+    "runtime_workload_id": "aws-k3s-001/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge",
     "status": "SUCCESS"
   }
 }
@@ -256,7 +256,7 @@ GET /internal/v1/instances/{instance_id}/runtime-status
 {
   "instance_id": "018f3f1e-21b8-7a91-a30b-63b3400fd001",
   "target_id": "aws-k3s-001",
-  "runtime_workload_id": "aws-k3s-001/ctf-018f3f1e/challenge",
+  "runtime_workload_id": "aws-k3s-001/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge",
   "phase": "READY",
   "endpoint_ready": true,
   "metrics_available": true,

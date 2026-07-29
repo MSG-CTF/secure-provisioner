@@ -219,8 +219,8 @@ paths:
                     attempt: 1
                     max_attempts: 3
                     result:
-                      runtime_workload_id: aws-k3s-001/ctf-018f3f1e/challenge
-                      service_url: https://challenge.example.com
+                      runtime_workload_id: aws-k3s-001/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge
+                      service_url: https://gateway.example.com/instances/018f3f1e-21b8-7a91-a30b-63b3400fd001
                       endpoints:
                         - container_name: web
                           port: 8080
@@ -234,7 +234,7 @@ paths:
                     attempt: 1
                     max_attempts: 3
                     result:
-                      runtime_workload_id: aws-k3s-001/ctf-018f3f1e/challenge
+                      runtime_workload_id: aws-k3s-001/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge
                       status: SUCCESS
                 CreateFailed:
                   value:
