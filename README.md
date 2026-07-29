@@ -6,7 +6,9 @@ CTF 문제 인스턴스의 K3s 워크로드 생성·삭제와 상태 조회를 �
 
 ## 현재 구현 범위
 
-- 전달받은 이미지 주소로 Namespace·Deployment·Service·Ingress 생성
+- 단일 또는 다중 컨테이너 요청으로 Namespace·Deployment·Service·Ingress 생성
+- 문제 전체 합산 자원을 컨테이너별로 균등 분배
+- 공개 컨테이너의 포트별 접속 주소 반환
 - 생성·삭제 요청의 비동기 Operation 처리
 - Operation 상태 폴링과 최종 결과 반환
 - 저장된 Runtime Binding을 검증한 뒤 실제 K3s Namespace 삭제
@@ -87,8 +89,33 @@ POST 또는 DELETE
 ```
 
 Scheduler는 CREATE Operation이 `SUCCEEDED`가 되고 `result`에서
-`runtime_workload_id`, `service_url`을 받은 시점에 DB를 `RUNNING`으로
+`runtime_workload_id`, `service_url`, `endpoints`를 받은 시점에 DB를 `RUNNING`으로
 변경할 수 있습니다.
+
+## 다중 컨테이너 로컬 검증
+
+K3s 연결 없이 빠르게 회귀 테스트하려면 다음 명령을 실행합니다.
+
+```powershell
+go test ./internal/httpapi ./internal/operations ./internal/k3s ./internal/runtimeops -count=1
+```
+
+실제 단일 노드 K3s에서 테스트하려면 아래 환경변수를 설정합니다. 이미지 주소는
+요청 입력이므로 다른 문제 이미지로 바꿔도 됩니다.
+
+```powershell
+$env:K3S_INTEGRATION_TARGET_ID = "aws-k3s-001"
+$env:K3S_INTEGRATION_KUBECONFIG = "C:\secure\kubeconfigs\aws-k3s-001.yaml"
+$env:K3S_INTEGRATION_PUBLIC_GATEWAY = "https://gateway.example.com"
+$env:K3S_INTEGRATION_IMAGE = "ghcr.io/msg-ctf/challenges/oob-test/web:latest"
+$env:K3S_INTEGRATION_CONTAINER_PORT = "8080"
+go test ./internal/k3s -run TestK3sIntegrationCreateMultiContainerReadyAndDelete -v -count=1
+```
+
+테스트는 같은 이미지로 공개 `web`과 내부 `internal` 컨테이너를 만들고,
+모두 Ready인지 확인한 다음 실제 Delete Adapter로 Namespace 전체를 삭제한다.
+비공개 GHCR Package라면 K3s가 사용할 `read:packages` 권한의 pull credential이
+필요하다. 인증 정보는 API 요청이나 저장소에 넣지 않는다.
 
 ## 검증
 

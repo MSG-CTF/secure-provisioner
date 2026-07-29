@@ -1,0 +1,11 @@
+{
+  "request_id": "runtime-delete-018f3f1e",
+  "instance_id": "018f3f1e-21b8-7a91-a30b-63b3400fd001",
+  "team_id": 18,
+  "target": {
+    "runtime_type": "KUBERNETES",
+    "target_id": "aws-k3s-001"
+  },
+  "runtime_workload_id": "aws-k3s-001/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge",
+  "delete_reason": "USER_REQUESTED"
+}

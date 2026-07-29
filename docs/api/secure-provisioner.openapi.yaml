@@ -26,6 +26,29 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/CreateInstanceRequest"
+            examples:
+              MultiContainer:
+                value:
+                  request_id: runtime-create-018f3f1e
+                  instance_id: 018f3f1e-21b8-7a91-a30b-63b3400fd001
+                  team_id: 18
+                  target:
+                    runtime_type: KUBERNETES
+                    target_id: aws-k3s-001
+                  workload:
+                    containers:
+                      - name: web
+                        image: ghcr.io/msg-ctf/challenges/oob-test/web:latest
+                        ports: [8080]
+                        expose: true
+                      - name: internal
+                        image: ghcr.io/msg-ctf/challenges/oob-test/web:latest
+                        ports: [8080]
+                        expose: false
+                    resource_limits:
+                      cpu_millicores: 500
+                      memory_mib: 512
+                      ephemeral_storage_mib: 1024
       responses:
         "202":
           $ref: "#/components/responses/OperationAccepted"
@@ -198,6 +221,10 @@ paths:
                     result:
                       runtime_workload_id: aws-k3s-001/ctf-018f3f1e/challenge
                       service_url: https://challenge.example.com
+                      endpoints:
+                        - container_name: web
+                          port: 8080
+                          service_url: https://challenge.example.com/instances/018f3f1e-21b8-7a91-a30b-63b3400fd001
                 DeleteSucceeded:
                   value:
                     operation_id: op-delete-123
@@ -444,19 +471,80 @@ components:
       type: object
       additionalProperties: false
       required:
-        - image
-        - container_port
         - resource_limits
+      oneOf:
+        - properties:
+            image: {}
+            container_port: {}
+            containers: {}
+          required:
+            - image
+            - container_port
+          not:
+            properties:
+              containers: {}
+            required:
+              - containers
+        - properties:
+            image: {}
+            container_port: {}
+            containers: {}
+          required:
+            - containers
+          not:
+            anyOf:
+              - properties:
+                  image: {}
+                required:
+                  - image
+              - properties:
+                  container_port: {}
+                required:
+                  - container_port
       properties:
         image:
           type: string
           minLength: 1
+          description: 기존 단일 컨테이너 요청 호환 필드
         container_port:
           type: integer
           minimum: 1
           maximum: 65535
+          description: 기존 단일 컨테이너 요청 호환 필드
+        containers:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/RuntimeContainer"
         resource_limits:
           $ref: "#/components/schemas/ResourceLimits"
+    RuntimeContainer:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - image
+        - ports
+        - expose
+      properties:
+        name:
+          type: string
+          pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+          maxLength: 63
+        image:
+          type: string
+          minLength: 1
+        ports:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: integer
+            minimum: 1
+            maximum: 65535
+        expose:
+          type: boolean
+          description: 참가자 접속 경로를 Ingress에 공개할지 여부
     CreateInstanceRequest:
       type: object
       additionalProperties: false
@@ -537,9 +625,32 @@ components:
       required:
         - runtime_workload_id
         - service_url
+        - endpoints
       properties:
         runtime_workload_id:
           type: string
+        service_url:
+          type: string
+          format: uri
+        endpoints:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/WorkloadEndpoint"
+    WorkloadEndpoint:
+      type: object
+      additionalProperties: false
+      required:
+        - container_name
+        - port
+        - service_url
+      properties:
+        container_name:
+          type: string
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
         service_url:
           type: string
           format: uri
