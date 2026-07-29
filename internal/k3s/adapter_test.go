@@ -3,6 +3,7 @@ package k3s
 import (
 	"context"
 	"errors"
+	"fmt"
 	goruntime "runtime"
 	"strings"
 	"sync/atomic"
@@ -45,6 +46,130 @@ func TestAdapterRoutesEachTargetToItsOwnClient(t *testing.T) {
 	}
 	assertNamespaceCreateCount(t, awsClient, 1)
 	assertNamespaceCreateCount(t, gcpClient, 1)
+}
+
+func TestAdapterAppliesAllContainerResources(t *testing.T) {
+	command := validMultiCreateCommand("aws-dev")
+	client := readyMultiContainerClient(t, command)
+	adapter := newTestAdapter(t, adapterRegistry(
+		t,
+		[]ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")},
+		client,
+	))
+
+	result, err := adapter.CreateWorkload(context.Background(), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := actionCount(client, "create", "deployments"); got != 2 {
+		t.Fatalf("deployment create actions = %d, want 2", got)
+	}
+	if got := actionCount(client, "create", "services"); got != 2 {
+		t.Fatalf("service create actions = %d, want 2", got)
+	}
+	if got := actionCount(client, "create", "ingresses"); got != 1 {
+		t.Fatalf("ingress create actions = %d, want 1", got)
+	}
+	if len(result.Endpoints) != 1 ||
+		result.Endpoints[0].ContainerName != "web" ||
+		result.ServiceURL != result.Endpoints[0].ServiceURL {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestAdapterRollsBackMultiContainerApplyFailure(t *testing.T) {
+	command := validMultiCreateCommand("aws-dev")
+	client := readyMultiContainerClient(t, command)
+	client.PrependReactor("create", "services", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		service := action.(k8stesting.CreateAction).GetObject().(*corev1.Service)
+		if service.Name == "internal" {
+			return true, nil, errors.New("internal service creation failed")
+		}
+		return false, nil, nil
+	})
+	adapter := newTestAdapter(t, adapterRegistry(
+		t,
+		[]ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")},
+		client,
+	))
+
+	_, err := adapter.CreateWorkload(context.Background(), command)
+	if runtimeErrorCode(t, err) != "RESOURCE_APPLY_FAILED" {
+		t.Fatalf("code = %q, want RESOURCE_APPLY_FAILED", runtimeErrorCode(t, err))
+	}
+	assertDeleteActionCount(t, client, "namespaces", 1)
+	if got := actionCount(client, "create", "ingresses"); got != 0 {
+		t.Fatalf("ingress create actions = %d, want 0 after service failure", got)
+	}
+}
+
+func TestAdapterWaitsForEveryContainerAndService(t *testing.T) {
+	command := validMultiCreateCommand("aws-dev")
+	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	webDeployment := resources.Deployments[0]
+	internalDeployment := resources.Deployments[1]
+	webPod := readyPod(
+		resources.Namespace.Name,
+		resources.ExpectedSpecHashes[webDeployment.Name],
+		"web-pod",
+		"10.0.0.1",
+		webDeployment.Spec.Template.Labels,
+	)
+	internalPod := readyPod(
+		resources.Namespace.Name,
+		resources.ExpectedSpecHashes[internalDeployment.Name],
+		"internal-pod",
+		"10.0.0.2",
+		internalDeployment.Spec.Template.Labels,
+	)
+	client := fake.NewSimpleClientset(
+		webPod,
+		internalPod,
+		readyEndpointSliceForService(resources.Namespace.Name, "web", webPod),
+	)
+	installDeploymentController(client, true)
+	internalEndpointListed := make(chan struct{}, 1)
+	client.PrependReactor("list", "endpointslices", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		selector := action.(k8stesting.ListAction).GetListRestrictions().Labels.String()
+		if strings.Contains(selector, "internal") {
+			select {
+			case internalEndpointListed <- struct{}{}:
+			default:
+			}
+		}
+		return false, nil, nil
+	})
+	adapter := newTestAdapter(t, adapterRegistry(
+		t,
+		[]ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")},
+		client,
+	))
+	result := make(chan createResult, 1)
+	go func() {
+		value, createErr := adapter.CreateWorkload(context.Background(), command)
+		result <- createResult{result: value, err: createErr}
+	}()
+
+	<-internalEndpointListed
+	assertNoCreateResult(t, result)
+	if _, err := client.DiscoveryV1().EndpointSlices(resources.Namespace.Name).Create(
+		context.Background(),
+		readyEndpointSliceForService(resources.Namespace.Name, "internal", internalPod),
+		metav1.CreateOptions{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-result:
+		if got.err != nil {
+			t.Fatal(got.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("CreateWorkload did not finish after every service became ready")
+	}
 }
 
 func TestWorkloadLockSetCancelsSameKeyWaiterAndCleansEntry(t *testing.T) {
@@ -1214,8 +1339,12 @@ func readyPod(namespace, specHash string, uid types.UID, podIP string, podLabels
 }
 
 func readyEndpointSlice(namespace string, pod *corev1.Pod) *discoveryv1.EndpointSlice {
+	return readyEndpointSliceForService(namespace, resourceName, pod)
+}
+
+func readyEndpointSliceForService(namespace, serviceName string, pod *corev1.Pod) *discoveryv1.EndpointSlice {
 	return &discoveryv1.EndpointSlice{
-		ObjectMeta:  metav1.ObjectMeta{Namespace: namespace, Name: resourceName, Labels: map[string]string{discoveryv1.LabelServiceName: resourceName}},
+		ObjectMeta:  metav1.ObjectMeta{Namespace: namespace, Name: serviceName, Labels: map[string]string{discoveryv1.LabelServiceName: serviceName}},
 		AddressType: discoveryv1.AddressTypeIPv4,
 		Endpoints:   []discoveryv1.Endpoint{matchingEndpoint(pod)},
 	}
@@ -1281,6 +1410,28 @@ func readyClient(t *testing.T, command provisioner.CreateWorkloadCommand) *fake.
 	}
 	pod := readyPod(namespace, resources.ExpectedSpecHash, "ready-pod", "10.0.0.1", resources.Deployment.Spec.Template.Labels)
 	client := fake.NewSimpleClientset(pod, readyEndpointSlice(namespace, pod))
+	installDeploymentController(client, true)
+	return client
+}
+
+func readyMultiContainerClient(t *testing.T, command provisioner.CreateWorkloadCommand) *fake.Clientset {
+	t.Helper()
+	resources, err := BuildResourceSet(validCluster(command.TargetID), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	objects := make([]runtime.Object, 0, len(resources.Deployments)*2)
+	for index, deployment := range resources.Deployments {
+		pod := readyPod(
+			resources.Namespace.Name,
+			resources.ExpectedSpecHashes[deployment.Name],
+			types.UID(deployment.Name+"-pod"),
+			fmt.Sprintf("10.0.0.%d", index+1),
+			deployment.Spec.Template.Labels,
+		)
+		objects = append(objects, pod, readyEndpointSliceForService(resources.Namespace.Name, deployment.Name, pod))
+	}
+	client := fake.NewSimpleClientset(objects...)
 	installDeploymentController(client, true)
 	return client
 }

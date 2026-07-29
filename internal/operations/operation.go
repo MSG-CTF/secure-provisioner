@@ -107,8 +107,6 @@ func sameCreateCommand(first, second provisioner.CreateWorkloadCommand) bool {
 		first.TeamID != second.TeamID ||
 		first.RuntimeType != second.RuntimeType ||
 		first.TargetID != second.TargetID ||
-		first.Image != second.Image ||
-		first.ContainerPort != second.ContainerPort ||
 		first.ResourceLimits != second.ResourceLimits ||
 		len(first.Containers) != len(second.Containers) {
 		return false

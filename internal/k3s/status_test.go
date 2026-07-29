@@ -9,6 +9,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -76,6 +77,38 @@ func TestStatusReaderMapsRunningContainerAndResources(t *testing.T) {
 	}
 	if container.Usage == nil || container.Usage.CPUMillicores != 12 || container.Usage.MemoryMiB != 34 {
 		t.Fatalf("usage = %#v", container.Usage)
+	}
+}
+
+func TestStatusReaderRequiresReadyEndpointForIngressService(t *testing.T) {
+	binding, objects, _ := statusFixture(t)
+	endpoint := objects[3].(*discoveryv1.EndpointSlice)
+	endpoint.Labels[discoveryv1.LabelServiceName] = "internal"
+	reader, _ := NewStatusReader(statusRegistry(t, objects, nil))
+
+	status, err := reader.Get(context.Background(), binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.EndpointReady || status.Phase != "DEGRADED" {
+		t.Fatalf("status = %#v, want public endpoint not ready", status)
+	}
+}
+
+func TestStatusReaderSupportsExposedServiceNamedForContainer(t *testing.T) {
+	binding, objects, _ := statusFixture(t)
+	endpoint := objects[3].(*discoveryv1.EndpointSlice)
+	endpoint.Labels[discoveryv1.LabelServiceName] = "web"
+	ingress := objects[5].(*networkingv1.Ingress)
+	ingress.Spec.Rules[0].HTTP.Paths[0].Backend.Service.Name = "web"
+	reader, _ := NewStatusReader(statusRegistry(t, objects, nil))
+
+	status, err := reader.Get(context.Background(), binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.EndpointReady || status.Phase != "READY" {
+		t.Fatalf("status = %#v, want public web endpoint ready", status)
 	}
 }
 
@@ -349,7 +382,14 @@ func statusFixture(t *testing.T) (runtimebinding.Binding, []runtime.Object, *met
 		CreatedAt:         time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC),
 		UpdatedAt:         time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC),
 	}
-	return binding, []runtime.Object{resources.Namespace, resources.Deployment, pod, endpoint, testNode("node-1")}, metric
+	return binding, []runtime.Object{
+		resources.Namespace,
+		resources.Deployment,
+		pod,
+		endpoint,
+		testNode("node-1"),
+		resources.Ingress,
+	}, metric
 }
 
 func statusRegistry(t *testing.T, objects []runtime.Object, metric *metricsv1beta1.PodMetrics) *Registry {

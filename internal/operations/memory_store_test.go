@@ -32,7 +32,7 @@ func TestMemoryStoreRejectsIdempotencyConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	command.Image = "different:tag"
+	command.Containers[0].Image = "different:tag"
 	if _, _, err := store.EnqueueCreate(command, 3); !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("got %v", err)
 	}

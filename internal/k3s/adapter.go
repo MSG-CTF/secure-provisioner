@@ -79,7 +79,7 @@ func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.Create
 		}
 		return provisioner.CreateWorkloadResult{}, err
 	}
-	appliedDeployment, err := applyResourceSet(ctx, cluster.Client, resources)
+	appliedDeployments, err := applyResourceSet(ctx, cluster.Client, resources)
 	if err != nil {
 		if parentErr := ctx.Err(); parentErr != nil {
 			return provisioner.CreateWorkloadResult{}, a.failWithRollback(cluster.Client, resources.Namespace, "OPERATION_CANCELLED", parentErr)
@@ -89,7 +89,13 @@ func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.Create
 
 	readyCtx, cancel := context.WithTimeout(ctx, a.config.ReadyTimeout)
 	defer cancel()
-	if err := waitUntilReady(readyCtx, cluster.Client, appliedDeployment, resources.ExpectedSpecHash, a.config.PollInterval); err != nil {
+	if err := waitUntilReady(
+		readyCtx,
+		cluster.Client,
+		appliedDeployments,
+		resources.ExpectedSpecHashes,
+		a.config.PollInterval,
+	); err != nil {
 		if parentErr := ctx.Err(); parentErr != nil {
 			return provisioner.CreateWorkloadResult{}, a.failWithRollback(cluster.Client, resources.Namespace, "OPERATION_CANCELLED", parentErr)
 		}
@@ -102,6 +108,7 @@ func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.Create
 	return provisioner.CreateWorkloadResult{
 		RuntimeWorkloadID: resources.RuntimeWorkloadID,
 		ServiceURL:        resources.ServiceURL,
+		Endpoints:         append([]provisioner.WorkloadEndpoint(nil), resources.Endpoints...),
 	}, nil
 }
 
@@ -140,40 +147,50 @@ func ensureNamespace(ctx context.Context, client kubernetes.Interface, desired *
 	return createAttempted, newRuntimeError("RESOURCE_APPLY_FAILED", true, lastErr)
 }
 
-func applyResourceSet(ctx context.Context, client kubernetes.Interface, resources ResourceSet) (*appsv1.Deployment, error) {
+func applyResourceSet(ctx context.Context, client kubernetes.Interface, resources ResourceSet) ([]*appsv1.Deployment, error) {
 	if err := preflightResourceSet(ctx, client, resources); err != nil {
 		return nil, err
 	}
-	appliedDeployment, err := upsertDeployment(ctx, client, resources.Deployment)
-	if err != nil {
-		return nil, err
+	appliedDeployments := make([]*appsv1.Deployment, 0, len(resources.Deployments))
+	for _, deployment := range resources.Deployments {
+		appliedDeployment, err := upsertDeployment(ctx, client, deployment)
+		if err != nil {
+			return nil, err
+		}
+		appliedDeployments = append(appliedDeployments, appliedDeployment.DeepCopy())
 	}
-	if err := upsertService(ctx, client, resources.Service); err != nil {
-		return nil, err
+	for _, service := range resources.Services {
+		if err := upsertService(ctx, client, service); err != nil {
+			return nil, err
+		}
 	}
 	if err := upsertIngress(ctx, client, resources.Ingress); err != nil {
 		return nil, err
 	}
-	return appliedDeployment.DeepCopy(), nil
+	return appliedDeployments, nil
 }
 
 func preflightResourceSet(ctx context.Context, client kubernetes.Interface, resources ResourceSet) error {
-	deployment, err := client.AppsV1().Deployments(resources.Deployment.Namespace).Get(ctx, resources.Deployment.Name, metav1.GetOptions{})
-	if err == nil {
-		if !hasOwnership(deployment.Labels, resources.Deployment.Labels) {
-			return newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
+	for _, desired := range resources.Deployments {
+		deployment, err := client.AppsV1().Deployments(desired.Namespace).Get(ctx, desired.Name, metav1.GetOptions{})
+		if err == nil {
+			if !hasOwnership(deployment.Labels, desired.Labels) {
+				return newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
+			}
+		} else if !apierrors.IsNotFound(err) {
+			return applyError(err)
 		}
-	} else if !apierrors.IsNotFound(err) {
-		return applyError(err)
 	}
 
-	service, err := client.CoreV1().Services(resources.Service.Namespace).Get(ctx, resources.Service.Name, metav1.GetOptions{})
-	if err == nil {
-		if !hasOwnership(service.Labels, resources.Service.Labels) {
-			return newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
+	for _, desired := range resources.Services {
+		service, err := client.CoreV1().Services(desired.Namespace).Get(ctx, desired.Name, metav1.GetOptions{})
+		if err == nil {
+			if !hasOwnership(service.Labels, desired.Labels) {
+				return newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
+			}
+		} else if !apierrors.IsNotFound(err) {
+			return applyError(err)
 		}
-	} else if !apierrors.IsNotFound(err) {
-		return applyError(err)
 	}
 
 	ingress, err := client.NetworkingV1().Ingresses(resources.Ingress.Namespace).Get(ctx, resources.Ingress.Name, metav1.GetOptions{})
@@ -378,28 +395,58 @@ func hasOwnership(actual, expected map[string]string) bool {
 	return true
 }
 
-func waitUntilReady(ctx context.Context, client kubernetes.Interface, expectedDeployment *appsv1.Deployment, expectedSpecHash string, interval time.Duration) error {
+func waitUntilReady(
+	ctx context.Context,
+	client kubernetes.Interface,
+	expectedDeployments []*appsv1.Deployment,
+	expectedSpecHashes map[string]string,
+	interval time.Duration,
+) error {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		deploymentReady, err := currentDeploymentReady(ctx, client, expectedDeployment, expectedSpecHash)
-		if err != nil {
-			return err
-		}
-		if deploymentReady {
-			readyPods, podErr := readyPodsForSpec(ctx, client, expectedDeployment.Namespace, expectedDeployment.Spec.Selector.MatchLabels, expectedSpecHash)
+		allReady := len(expectedDeployments) > 0
+		for _, expectedDeployment := range expectedDeployments {
+			expectedSpecHash := expectedSpecHashes[expectedDeployment.Name]
+			deploymentReady, err := currentDeploymentReady(ctx, client, expectedDeployment, expectedSpecHash)
+			if err != nil {
+				return err
+			}
+			if !deploymentReady {
+				allReady = false
+				break
+			}
+			readyPods, podErr := readyPodsForSpec(
+				ctx,
+				client,
+				expectedDeployment.Namespace,
+				expectedDeployment.Spec.Selector.MatchLabels,
+				expectedSpecHash,
+			)
 			if podErr != nil {
 				return podErr
 			}
-			if len(readyPods) > 0 {
-				readyEndpoint, endpointErr := hasReadyEndpointForPods(ctx, client, expectedDeployment.Namespace, readyPods)
-				if endpointErr != nil {
-					return endpointErr
-				}
-				if readyEndpoint {
-					return nil
-				}
+			if len(readyPods) == 0 {
+				allReady = false
+				break
 			}
+			readyEndpoint, endpointErr := hasReadyEndpointForServicePods(
+				ctx,
+				client,
+				expectedDeployment.Namespace,
+				expectedDeployment.Name,
+				readyPods,
+			)
+			if endpointErr != nil {
+				return endpointErr
+			}
+			if !readyEndpoint {
+				allReady = false
+				break
+			}
+		}
+		if allReady {
+			return nil
 		}
 		select {
 		case <-ctx.Done():
@@ -443,7 +490,19 @@ func readyPodsForSpec(ctx context.Context, client kubernetes.Interface, namespac
 }
 
 func hasReadyEndpointForPods(ctx context.Context, client kubernetes.Interface, namespace string, pods []corev1.Pod) (bool, error) {
-	endpointSlices, err := client.DiscoveryV1().EndpointSlices(namespace).List(ctx, metav1.ListOptions{LabelSelector: labels.Set{discoveryv1.LabelServiceName: resourceName}.String()})
+	return hasReadyEndpointForServicePods(ctx, client, namespace, resourceName, pods)
+}
+
+func hasReadyEndpointForServicePods(
+	ctx context.Context,
+	client kubernetes.Interface,
+	namespace string,
+	serviceName string,
+	pods []corev1.Pod,
+) (bool, error) {
+	endpointSlices, err := client.DiscoveryV1().EndpointSlices(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labels.Set{discoveryv1.LabelServiceName: serviceName}.String(),
+	})
 	if err != nil {
 		return false, err
 	}

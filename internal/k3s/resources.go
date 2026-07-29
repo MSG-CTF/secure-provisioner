@@ -190,16 +190,7 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 }
 
 func normalizedCommandContainers(command provisioner.CreateWorkloadCommand) []provisioner.WorkloadContainer {
-	if len(command.Containers) > 0 {
-		return command.Containers
-	}
-	if strings.TrimSpace(command.Image) == "" || !validContainerPort(command.ContainerPort) {
-		return nil
-	}
-	return []provisioner.WorkloadContainer{{
-		Name: "challenge", Image: command.Image,
-		Ports: []int{command.ContainerPort}, Expose: true,
-	}}
+	return command.Containers
 }
 
 func distributedResourceLimits(total provisioner.ResourceLimits, count, index int) provisioner.ResourceLimits {

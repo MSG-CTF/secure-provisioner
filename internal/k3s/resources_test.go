@@ -55,11 +55,11 @@ func TestBuildResourceSetCreatesOwnedKubernetesResources(t *testing.T) {
 	}
 
 	container := resources.Deployment.Spec.Template.Spec.Containers[0]
-	if container.Image != command.Image {
-		t.Fatalf("image = %q, want %q", container.Image, command.Image)
+	if container.Image != command.Containers[0].Image {
+		t.Fatalf("image = %q, want %q", container.Image, command.Containers[0].Image)
 	}
-	if container.Ports[0].ContainerPort != int32(command.ContainerPort) {
-		t.Fatalf("container port = %d, want %d", container.Ports[0].ContainerPort, command.ContainerPort)
+	if container.Ports[0].ContainerPort != int32(command.Containers[0].Ports[0]) {
+		t.Fatalf("container port = %d, want %d", container.Ports[0].ContainerPort, command.Containers[0].Ports[0])
 	}
 	if resources.Service.Spec.Type != corev1.ServiceTypeClusterIP {
 		t.Fatalf("service type = %s, want ClusterIP", resources.Service.Spec.Type)
@@ -85,7 +85,7 @@ func TestBuildResourceSetCreatesOwnedKubernetesResources(t *testing.T) {
 		if got != wantSpecHash {
 			t.Fatalf("%s spec hash = %q, want %q", resource, got, wantSpecHash)
 		}
-		if strings.Contains(got, command.Image) || strings.Contains(got, validCluster("aws-dev").Config.PublicGateway) {
+		if strings.Contains(got, command.Containers[0].Image) || strings.Contains(got, validCluster("aws-dev").Config.PublicGateway) {
 			t.Fatalf("%s spec hash exposes sensitive input", resource)
 		}
 	}
@@ -94,8 +94,8 @@ func TestBuildResourceSetCreatesOwnedKubernetesResources(t *testing.T) {
 	if path.Path != "/instances/"+command.InstanceID {
 		t.Fatalf("path = %q, want instance path", path.Path)
 	}
-	if path.Backend.Service.Name != resourceName || path.Backend.Service.Port.Number != int32(command.ContainerPort) {
-		t.Fatalf("ingress backend = %#v, want challenge:%d", path.Backend.Service, command.ContainerPort)
+	if path.Backend.Service.Name != resourceName || path.Backend.Service.Port.Number != int32(command.Containers[0].Ports[0]) {
+		t.Fatalf("ingress backend = %#v, want challenge:%d", path.Backend.Service, command.Containers[0].Ports[0])
 	}
 }
 
@@ -115,7 +115,7 @@ func TestBuildResourceSetSpecHashTracksSpecButNotRequestMetadata(t *testing.T) {
 		t.Fatalf("request metadata changed spec hash: %q != %q", retry.ExpectedSpecHash, first.ExpectedSpecHash)
 	}
 
-	command.Image = "registry.example.invalid/challenges/web@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	command.Containers[0].Image = "registry.example.invalid/challenges/web@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	revision, err := BuildResourceSet(validCluster("aws-dev"), command)
 	if err != nil {
 		t.Fatal(err)
@@ -247,14 +247,14 @@ func TestBuildResourceSetRejectsInvalidCommandWithoutEmbeddingSensitiveData(t *t
 	for _, mutate := range []func(*provisioner.CreateWorkloadCommand){
 		func(command *provisioner.CreateWorkloadCommand) { command.InstanceID = "not-a-uuid" },
 		func(command *provisioner.CreateWorkloadCommand) { command.TargetID = "other-target" },
-		func(command *provisioner.CreateWorkloadCommand) { command.Image = "" },
-		func(command *provisioner.CreateWorkloadCommand) { command.ContainerPort = 0 },
+		func(command *provisioner.CreateWorkloadCommand) { command.Containers[0].Image = "" },
+		func(command *provisioner.CreateWorkloadCommand) { command.Containers[0].Ports[0] = 0 },
 		func(command *provisioner.CreateWorkloadCommand) { command.ResourceLimits.CPUMillicores = 0 },
 		func(command *provisioner.CreateWorkloadCommand) { command.ResourceLimits.MemoryMiB = 0 },
 		func(command *provisioner.CreateWorkloadCommand) { command.ResourceLimits.EphemeralStorageMiB = 0 },
 	} {
 		command := validCreateCommand("aws-dev")
-		command.Image = secretImage
+		command.Containers[0].Image = secretImage
 		mutate(&command)
 
 		_, err := BuildResourceSet(validCluster("aws-dev"), command)
@@ -314,13 +314,17 @@ func validCluster(targetID string) Cluster {
 
 func validCreateCommand(targetID string) provisioner.CreateWorkloadCommand {
 	return provisioner.CreateWorkloadCommand{
-		RequestID:     "req-01",
-		InstanceID:    "018f3f1e-21b8-7a91-a30b-63b3400fd001",
-		TeamID:        42,
-		RuntimeType:   provisioner.RuntimeTypeKubernetes,
-		TargetID:      targetID,
-		Image:         "registry.example.invalid/challenges/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		ContainerPort: 8080,
+		RequestID:   "req-01",
+		InstanceID:  "018f3f1e-21b8-7a91-a30b-63b3400fd001",
+		TeamID:      42,
+		RuntimeType: provisioner.RuntimeTypeKubernetes,
+		TargetID:    targetID,
+		Containers: []provisioner.WorkloadContainer{{
+			Name:   "challenge",
+			Image:  "registry.example.invalid/challenges/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Ports:  []int{8080},
+			Expose: true,
+		}},
 		ResourceLimits: provisioner.ResourceLimits{
 			CPUMillicores:       500,
 			MemoryMiB:           512,

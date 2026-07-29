@@ -90,7 +90,7 @@ func (request CreateWorkloadRequest) Validate() error {
 
 func (request CreateWorkloadRequest) ToCommand() provisioner.CreateWorkloadCommand {
 	containers, _ := request.normalizedContainers()
-	command := provisioner.CreateWorkloadCommand{
+	return provisioner.CreateWorkloadCommand{
 		RequestID:   request.RequestID,
 		InstanceID:  request.InstanceID,
 		TeamID:      request.TeamID,
@@ -103,11 +103,6 @@ func (request CreateWorkloadRequest) ToCommand() provisioner.CreateWorkloadComma
 			EphemeralStorageMiB: request.Workload.ResourceLimits.EphemeralStorageMiB,
 		},
 	}
-	if len(request.Workload.Containers) == 0 {
-		command.Image = request.Workload.Image
-		command.ContainerPort = request.Workload.ContainerPort
-	}
-	return command
 }
 
 func (request CreateWorkloadRequest) normalizedContainers() ([]provisioner.WorkloadContainer, error) {

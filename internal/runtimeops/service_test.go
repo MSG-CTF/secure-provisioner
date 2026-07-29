@@ -375,13 +375,17 @@ func (s *failingDeleteOperationStore) EnqueueDelete(provisioner.DeleteWorkloadCo
 
 func createCommand() provisioner.CreateWorkloadCommand {
 	return provisioner.CreateWorkloadCommand{
-		RequestID:     "create-request-01",
-		InstanceID:    "018f3f1e-21b8-7a91-a30b-63b3400fd001",
-		TeamID:        18,
-		RuntimeType:   provisioner.RuntimeTypeKubernetes,
-		TargetID:      "aws-dev",
-		Image:         "registry.example.invalid/challenge@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		ContainerPort: 8080,
+		RequestID:   "create-request-01",
+		InstanceID:  "018f3f1e-21b8-7a91-a30b-63b3400fd001",
+		TeamID:      18,
+		RuntimeType: provisioner.RuntimeTypeKubernetes,
+		TargetID:    "aws-dev",
+		Containers: []provisioner.WorkloadContainer{{
+			Name:   "challenge",
+			Image:  "registry.example.invalid/challenge@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Ports:  []int{8080},
+			Expose: true,
+		}},
 		ResourceLimits: provisioner.ResourceLimits{
 			CPUMillicores:       500,
 			MemoryMiB:           512,

@@ -53,7 +53,9 @@ func TestCreateWorkloadRequestDecodesAndConvertsAllSchedulerFields(t *testing.T)
 	if command.RuntimeType != provisioner.RuntimeTypeKubernetes || command.TargetID != "cluster-main" {
 		t.Fatalf("target = %#v", command)
 	}
-	if command.RequestID != "req-01" || command.TeamID != 1 || command.ContainerPort != 8080 {
+	if command.RequestID != "req-01" || command.TeamID != 1 ||
+		len(command.Containers) != 1 || command.Containers[0].Name != "challenge" ||
+		!reflect.DeepEqual(command.Containers[0].Ports, []int{8080}) {
 		t.Fatalf("command = %#v", command)
 	}
 	if command.ResourceLimits.CPUMillicores != 500 || command.ResourceLimits.MemoryMiB != 512 || command.ResourceLimits.EphemeralStorageMiB != 1024 {

@@ -4,12 +4,16 @@ import (
 	"context"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/MSG-CTF/secure-provisioner/internal/runtimebinding"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/client-go/kubernetes"
 	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 )
 
@@ -166,12 +170,70 @@ func (r *StatusReader) Get(ctx context.Context, binding runtimebinding.Binding) 
 		}
 	}
 
-	status.EndpointReady, err = hasReadyEndpoint(ctx, cluster.Client, binding.Namespace)
-	if err != nil {
-		return RuntimeStatus{}, newRuntimeError("TARGET_TEMPORARILY_UNAVAILABLE", true, err)
+	if len(status.Containers) > 0 {
+		status.EndpointReady, err = hasReadyIngressEndpoints(ctx, cluster.Client, binding.Namespace)
+		if err != nil {
+			return RuntimeStatus{}, newRuntimeError("TARGET_TEMPORARILY_UNAVAILABLE", true, err)
+		}
 	}
 	status.Phase = deriveRuntimePhase(binding.State, status.Containers, status.EndpointReady)
 	return status, nil
+}
+
+func hasReadyIngressEndpoints(ctx context.Context, client kubernetes.Interface, namespace string) (bool, error) {
+	ingress, err := client.NetworkingV1().Ingresses(namespace).Get(ctx, resourceName, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	serviceNames := make(map[string]struct{})
+	for _, rule := range ingress.Spec.Rules {
+		if rule.HTTP == nil {
+			continue
+		}
+		for _, path := range rule.HTTP.Paths {
+			if path.Backend.Service != nil && strings.TrimSpace(path.Backend.Service.Name) != "" {
+				serviceNames[path.Backend.Service.Name] = struct{}{}
+			}
+		}
+	}
+	if len(serviceNames) == 0 {
+		return false, nil
+	}
+	for serviceName := range serviceNames {
+		endpointSlices, listErr := client.DiscoveryV1().EndpointSlices(namespace).List(ctx, metav1.ListOptions{
+			LabelSelector: labels.Set{discoveryv1.LabelServiceName: serviceName}.String(),
+		})
+		if listErr != nil {
+			return false, listErr
+		}
+		serviceReady := false
+		for _, endpointSlice := range endpointSlices.Items {
+			for _, endpoint := range endpointSlice.Endpoints {
+				if endpoint.Conditions.Ready != nil && !*endpoint.Conditions.Ready {
+					continue
+				}
+				for _, address := range endpoint.Addresses {
+					if strings.TrimSpace(address) != "" {
+						serviceReady = true
+						break
+					}
+				}
+				if serviceReady {
+					break
+				}
+			}
+			if serviceReady {
+				break
+			}
+		}
+		if !serviceReady {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func mapNodeRuntimeStatus(node corev1.Node, pods []corev1.Pod, usage *ResourceUsage) NodeRuntimeStatus {

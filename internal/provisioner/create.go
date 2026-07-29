@@ -31,8 +31,6 @@ type CreateWorkloadCommand struct {
 	RuntimeType    RuntimeType
 	TargetID       string
 	Containers     []WorkloadContainer
-	Image          string
-	ContainerPort  int
 	ResourceLimits ResourceLimits
 }
 
