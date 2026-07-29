@@ -85,9 +85,16 @@ type OperationResponse struct {
 }
 
 type OperationResultResponse struct {
-	RuntimeWorkloadID string `json:"runtime_workload_id"`
-	ServiceURL        string `json:"service_url,omitempty"`
-	Status            string `json:"status,omitempty"`
+	RuntimeWorkloadID string                     `json:"runtime_workload_id"`
+	ServiceURL        string                     `json:"service_url,omitempty"`
+	Endpoints         []WorkloadEndpointResponse `json:"endpoints,omitempty"`
+	Status            string                     `json:"status,omitempty"`
+}
+
+type WorkloadEndpointResponse struct {
+	ContainerName string `json:"container_name"`
+	Port          int    `json:"port"`
+	ServiceURL    string `json:"service_url"`
 }
 
 func (api *API) handleRuntimeStatus(writer http.ResponseWriter, request *http.Request) {
@@ -285,10 +292,15 @@ func newOperationResultResponse(operation operations.Operation) *OperationResult
 		if operation.Result.Create == nil {
 			return nil
 		}
-		return &OperationResultResponse{
+		response := &OperationResultResponse{
 			RuntimeWorkloadID: operation.Result.Create.RuntimeWorkloadID,
 			ServiceURL:        operation.Result.Create.ServiceURL,
+			Endpoints:         make([]WorkloadEndpointResponse, 0, len(operation.Result.Create.Endpoints)),
 		}
+		for _, endpoint := range operation.Result.Create.Endpoints {
+			response.Endpoints = append(response.Endpoints, newWorkloadEndpointResponse(endpoint))
+		}
+		return response
 	case operations.OperationTypeDelete:
 		if !operation.Result.DeleteCompleted || operation.DeleteCommand == nil {
 			return nil
@@ -299,5 +311,13 @@ func newOperationResultResponse(operation operations.Operation) *OperationResult
 		}
 	default:
 		return nil
+	}
+}
+
+func newWorkloadEndpointResponse(endpoint provisioner.WorkloadEndpoint) WorkloadEndpointResponse {
+	return WorkloadEndpointResponse{
+		ContainerName: endpoint.ContainerName,
+		Port:          endpoint.Port,
+		ServiceURL:    endpoint.ServiceURL,
 	}
 }

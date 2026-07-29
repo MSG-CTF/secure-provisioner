@@ -334,6 +334,7 @@ func copyOperationResult(result OperationResult) OperationResult {
 	copy := result
 	if result.Create != nil {
 		create := *result.Create
+		create.Endpoints = append([]provisioner.WorkloadEndpoint(nil), result.Create.Endpoints...)
 		copy.Create = &create
 	}
 	return copy

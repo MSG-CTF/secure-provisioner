@@ -3,6 +3,7 @@ package runtimeops
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -54,7 +55,7 @@ func TestServiceProcessesCreateAndRecordsBinding(t *testing.T) {
 		t.Fatalf("EnqueueCreate() = (%#v, %t, %v)", operation, created, err)
 	}
 	operation = waitForOperationStatus(t, service, operation.ID, operations.OperationStatusSucceeded)
-	if operation.Result.Create == nil || *operation.Result.Create != create.result {
+	if operation.Result.Create == nil || !reflect.DeepEqual(*operation.Result.Create, create.result) {
 		t.Fatalf("operation result = %#v", operation.Result)
 	}
 	binding, err := bindings.Get(createCommand().InstanceID)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -297,11 +298,21 @@ func TestGetOperationReturnsCreateAndDeleteResults(t *testing.T) {
 				Result: operations.OperationResult{Create: &provisioner.CreateWorkloadResult{
 					RuntimeWorkloadID: "aws-dev/ns/challenge",
 					ServiceURL:        "https://challenge.example.test",
+					Endpoints: []provisioner.WorkloadEndpoint{{
+						ContainerName: "web",
+						Port:          8080,
+						ServiceURL:    "https://challenge.example.test",
+					}},
 				}},
 			},
 			want: OperationResultResponse{
 				RuntimeWorkloadID: "aws-dev/ns/challenge",
 				ServiceURL:        "https://challenge.example.test",
+				Endpoints: []WorkloadEndpointResponse{{
+					ContainerName: "web",
+					Port:          8080,
+					ServiceURL:    "https://challenge.example.test",
+				}},
 			},
 		},
 		{
@@ -332,7 +343,7 @@ func TestGetOperationReturnsCreateAndDeleteResults(t *testing.T) {
 			if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
 				t.Fatal(err)
 			}
-			if payload.Result == nil || *payload.Result != test.want {
+			if payload.Result == nil || !reflect.DeepEqual(*payload.Result, test.want) {
 				t.Fatalf("result = %#v, want %#v", payload.Result, test.want)
 			}
 			if response.Header().Get("Retry-After") != "" {

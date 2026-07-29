@@ -251,6 +251,36 @@ func TestMemoryStoreCopiesCreateContainerSlices(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreCopiesCreateResultEndpoints(t *testing.T) {
+	store := NewMemoryStore(sequenceIDs("op-1"))
+	operation := enqueueAndStart(t, store, "req-1")
+	result := OperationResult{Create: &provisioner.CreateWorkloadResult{
+		RuntimeWorkloadID: "target-1/ns/challenge",
+		ServiceURL:        "https://gateway.example/instances/inst-1",
+		Endpoints: []provisioner.WorkloadEndpoint{{
+			ContainerName: "web",
+			Port:          8080,
+			ServiceURL:    "https://gateway.example/instances/inst-1",
+		}},
+	}}
+	succeeded, err := store.MarkSucceeded(operation.ID, result)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result.Create.Endpoints[0].Port = 9999
+	succeeded.Result.Create.Endpoints[0].ServiceURL = "https://mutated.example"
+
+	stored, err := store.Get(operation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint := stored.Result.Create.Endpoints[0]
+	if endpoint.Port != 8080 || endpoint.ServiceURL != "https://gateway.example/instances/inst-1" {
+		t.Fatalf("store leaked result endpoints: %#v", endpoint)
+	}
+}
+
 func TestMemoryStoreRejectsInvalidTransition(t *testing.T) {
 	store := NewMemoryStore(sequenceIDs("op-1"))
 	operation, _, err := store.EnqueueCreate(validCreateCommand("req-1"), 2)

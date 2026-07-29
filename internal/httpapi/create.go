@@ -46,8 +46,9 @@ type CreateWorkloadRequest struct {
 }
 
 type CreateWorkloadResponse struct {
-	RuntimeWorkloadID string `json:"runtime_workload_id"`
-	ServiceURL        string `json:"service_url"`
+	RuntimeWorkloadID string                     `json:"runtime_workload_id"`
+	ServiceURL        string                     `json:"service_url"`
+	Endpoints         []WorkloadEndpointResponse `json:"endpoints"`
 }
 
 func (request CreateWorkloadRequest) Validate() error {
@@ -175,10 +176,15 @@ func validPort(port int) bool {
 }
 
 func NewCreateWorkloadResponse(result provisioner.CreateWorkloadResult) CreateWorkloadResponse {
-	return CreateWorkloadResponse{
+	response := CreateWorkloadResponse{
 		RuntimeWorkloadID: result.RuntimeWorkloadID,
 		ServiceURL:        result.ServiceURL,
+		Endpoints:         make([]WorkloadEndpointResponse, 0, len(result.Endpoints)),
 	}
+	for _, endpoint := range result.Endpoints {
+		response.Endpoints = append(response.Endpoints, newWorkloadEndpointResponse(endpoint))
+	}
+	return response
 }
 
 func isUUID(value string) bool {

@@ -39,6 +39,13 @@ type CreateWorkloadCommand struct {
 type CreateWorkloadResult struct {
 	RuntimeWorkloadID string
 	ServiceURL        string
+	Endpoints         []WorkloadEndpoint
+}
+
+type WorkloadEndpoint struct {
+	ContainerName string
+	Port          int
+	ServiceURL    string
 }
 
 type CreateWorkloadUseCase interface {
