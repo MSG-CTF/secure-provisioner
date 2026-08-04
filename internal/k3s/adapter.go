@@ -58,6 +58,9 @@ func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.Create
 	if err != nil {
 		return provisioner.CreateWorkloadResult{}, err
 	}
+	if err := cluster.Supports(command.Policy); err != nil {
+		return provisioner.CreateWorkloadResult{}, err
+	}
 	resources, err := BuildResourceSet(cluster, command)
 	if err != nil {
 		return provisioner.CreateWorkloadResult{}, err

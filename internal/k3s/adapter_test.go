@@ -48,6 +48,26 @@ func TestAdapterRoutesEachTargetToItsOwnClient(t *testing.T) {
 	assertNamespaceCreateCount(t, gcpClient, 1)
 }
 
+func TestAdapterRejectsTargetWithoutRequiredIsolationCapability(t *testing.T) {
+	command := validCreateCommand("aws-dev")
+	client := readyClient(t, command)
+	config := validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")
+	config.SecurityCapabilities.NetworkPolicyEnforced = false
+	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{config}, client))
+
+	_, err := adapter.CreateWorkload(context.Background(), command)
+	var runtimeErr *RuntimeError
+	if !errors.As(err, &runtimeErr) || runtimeErr.Code() != "TARGET_CAPABILITY_MISMATCH" {
+		t.Fatalf("error = %v, want TARGET_CAPABILITY_MISMATCH", err)
+	}
+	if runtimeErr.Retryable() {
+		t.Fatal("TARGET_CAPABILITY_MISMATCH must not be retryable")
+	}
+	if got := len(client.Actions()); got != 0 {
+		t.Fatalf("K3s client actions = %d, want 0", got)
+	}
+}
+
 func TestAdapterAppliesAllContainerResources(t *testing.T) {
 	command := validMultiCreateCommand("aws-dev")
 	client := readyMultiContainerClient(t, command)

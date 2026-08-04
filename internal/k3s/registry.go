@@ -4,6 +4,8 @@ import (
 	"net/url"
 	"reflect"
 	"strings"
+
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 type Registry struct {
@@ -106,6 +108,9 @@ func validateClusterConfig(config ClusterConfig, seenTargetIDs map[string]struct
 	if config.Provider != ProviderAWS && config.Provider != ProviderGCP && config.Provider != ProviderNCP {
 		return ClusterConfig{}, newRuntimeError("CONFIG_INVALID", false, nil)
 	}
+	if config.Enabled && !validSecurityCapabilities(config.SecurityCapabilities) {
+		return ClusterConfig{}, newRuntimeError("CONFIG_INVALID", false, nil)
+	}
 
 	gateway, err := url.ParseRequestURI(config.PublicGateway)
 	if err != nil || (gateway.Scheme != "http" && gateway.Scheme != "https") || gateway.Hostname() == "" || gateway.User != nil || gateway.RawQuery != "" || gateway.Fragment != "" {
@@ -116,4 +121,25 @@ func validateClusterConfig(config ClusterConfig, seenTargetIDs map[string]struct
 	config.PublicGateway = gateway.String()
 	seenTargetIDs[config.TargetID] = struct{}{}
 	return config, nil
+}
+
+func validSecurityCapabilities(capabilities SecurityCapabilities) bool {
+	if strings.TrimSpace(capabilities.NetworkPolicyProvider) == "" ||
+		len(validation.IsDNS1123Label(capabilities.DNSNamespace)) != 0 ||
+		len(validation.IsDNS1123Label(capabilities.IngressNamespace)) != 0 {
+		return false
+	}
+	return validLabelSelector(capabilities.DNSPodSelector) && validLabelSelector(capabilities.IngressPodSelector)
+}
+
+func validLabelSelector(selector map[string]string) bool {
+	if len(selector) == 0 {
+		return false
+	}
+	for key, value := range selector {
+		if len(validation.IsQualifiedName(key)) != 0 || len(validation.IsValidLabelValue(value)) != 0 {
+			return false
+		}
+	}
+	return true
 }

@@ -20,8 +20,81 @@ func writeRegistryFile(t *testing.T, content string) string {
 	return path
 }
 
+const completeSecurityCapabilitiesJSON = `{"network_policy_enforced":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`
+
+func TestLoadClusterConfigsAcceptsCompleteIsolationCapability(t *testing.T) {
+	path := writeRegistryFile(t, `{"clusters":[{"target_id":"lab","provider":"AWS","region":"ap-northeast-2","architecture":"amd64","kubeconfig_path":"lab.yaml","public_gateway":"https://lab.example","enabled":true,"security_capabilities":`+completeSecurityCapabilitiesJSON+`}]}`)
+	client := fake.NewSimpleClientset()
+	registry, err := LoadRegistry(path, &sequenceFactory{clients: []kubernetes.Interface{client}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cluster, err := registry.Lookup("lab")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cluster.Config.SecurityCapabilities.NetworkPolicyEnforced ||
+		cluster.Config.SecurityCapabilities.NetworkPolicyProvider != "kube-router" {
+		t.Fatalf("security capabilities = %#v", cluster.Config.SecurityCapabilities)
+	}
+}
+
+func TestLoadClusterConfigsPreservesExplicitUnsupportedCapability(t *testing.T) {
+	capabilities := `{"network_policy_enforced":false,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`
+	path := writeRegistryFile(t, `{"clusters":[{"target_id":"lab","provider":"AWS","region":"ap-northeast-2","architecture":"amd64","kubeconfig_path":"lab.yaml","public_gateway":"https://lab.example","enabled":true,"security_capabilities":`+capabilities+`}]}`)
+	registry, err := LoadRegistry(path, &sequenceFactory{clients: []kubernetes.Interface{fake.NewSimpleClientset()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cluster, err := registry.Lookup("lab")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cluster.Config.SecurityCapabilities.NetworkPolicyEnforced {
+		t.Fatal("explicit false enforcement declaration was not preserved")
+	}
+}
+
+func TestLoadClusterConfigsRejectsIncompleteIsolationCapability(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		capabilities string
+	}{
+		{name: "missing", capabilities: ""},
+		{name: "null", capabilities: `,"security_capabilities":null`},
+		{name: "missing enforcement declaration", capabilities: `,"security_capabilities":{"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`},
+		{name: "missing provider", capabilities: `,"security_capabilities":{"network_policy_enforced":true,"dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`},
+		{name: "missing DNS namespace", capabilities: `,"security_capabilities":{"network_policy_enforced":true,"network_policy_provider":"kube-router","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`},
+		{name: "missing ingress namespace", capabilities: `,"security_capabilities":{"network_policy_enforced":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`},
+		{name: "empty DNS selector", capabilities: `,"security_capabilities":{"network_policy_enforced":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`},
+		{name: "empty ingress selector", capabilities: `,"security_capabilities":{"network_policy_enforced":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{}}`},
+		{name: "invalid DNS selector key", capabilities: `,"security_capabilities":{"network_policy_enforced":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"invalid key":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`},
+		{name: "invalid ingress selector value", capabilities: `,"security_capabilities":{"network_policy_enforced":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"invalid$value"}}`},
+		{name: "malformed selector", capabilities: `,"security_capabilities":{"network_policy_enforced":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":["kube-dns"],"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cluster := `{"target_id":"lab","provider":"AWS","region":"ap-northeast-2","architecture":"amd64","kubeconfig_path":"lab.yaml","public_gateway":"https://lab.example","enabled":true` + test.capabilities + `}`
+			factory := &sequenceFactory{clients: []kubernetes.Interface{fake.NewSimpleClientset()}}
+			_, err := LoadRegistry(writeRegistryFile(t, `{"clusters":[`+cluster+`]}`), factory)
+			if code := runtimeErrorCode(t, err); code != "CONFIG_INVALID" {
+				t.Fatalf("code = %q, want CONFIG_INVALID", code)
+			}
+			if factory.calls != 0 {
+				t.Fatalf("client factory calls = %d, want 0", factory.calls)
+			}
+		})
+	}
+}
+
+func TestLoadClusterConfigsKeepsDisabledLegacyTargetLoadable(t *testing.T) {
+	path := writeRegistryFile(t, `{"clusters":[{"target_id":"retired","provider":"AWS","region":"ap-northeast-2","architecture":"amd64","kubeconfig_path":"retired.yaml","public_gateway":"https://retired.example","enabled":false}]}`)
+	if _, err := LoadRegistry(path, &sequenceFactory{clients: []kubernetes.Interface{fake.NewSimpleClientset()}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLoadRegistryRejectsUnknownFieldsAndMultipleJSONValues(t *testing.T) {
-	validJSON := `{"clusters":[{"target_id":"aws-dev","provider":"AWS","region":"test-region","architecture":"amd64","kubeconfig_path":"aws-kubeconfig","public_gateway":"https://gateway.example.invalid","enabled":true}]}`
+	validJSON := `{"clusters":[{"target_id":"aws-dev","provider":"AWS","region":"test-region","architecture":"amd64","kubeconfig_path":"aws-kubeconfig","public_gateway":"https://gateway.example.invalid","enabled":true,"security_capabilities":` + completeSecurityCapabilitiesJSON + `}]}`
 	for _, content := range []string{
 		`{"clusters":[],"unexpected":true}`,
 		validJSON + "\n{}",
@@ -34,7 +107,7 @@ func TestLoadRegistryRejectsUnknownFieldsAndMultipleJSONValues(t *testing.T) {
 }
 
 func TestLoadRegistryRejectsMissingRequiredJSONFields(t *testing.T) {
-	clusterWithoutEnabled := `{"target_id":"aws-dev","provider":"AWS","region":"test-region","architecture":"amd64","kubeconfig_path":"aws-kubeconfig","public_gateway":"https://gateway.example.invalid"}`
+	clusterWithoutEnabled := `{"target_id":"aws-dev","provider":"AWS","region":"test-region","architecture":"amd64","kubeconfig_path":"aws-kubeconfig","public_gateway":"https://gateway.example.invalid","security_capabilities":` + completeSecurityCapabilitiesJSON + `}`
 	for _, test := range []struct {
 		name    string
 		content string
@@ -55,7 +128,7 @@ func TestLoadRegistryRejectsMissingRequiredJSONFields(t *testing.T) {
 }
 
 func TestLoadRegistryDoesNotExposePathOrKubeconfigError(t *testing.T) {
-	registryPath := writeRegistryFile(t, `{"clusters":[{"target_id":"aws-dev","provider":"AWS","region":"test-region","architecture":"amd64","kubeconfig_path":"private-kubeconfig","public_gateway":"https://gateway.example.invalid","enabled":true}]}`)
+	registryPath := writeRegistryFile(t, `{"clusters":[{"target_id":"aws-dev","provider":"AWS","region":"test-region","architecture":"amd64","kubeconfig_path":"private-kubeconfig","public_gateway":"https://gateway.example.invalid","enabled":true,"security_capabilities":`+completeSecurityCapabilitiesJSON+`}]}`)
 	factoryFailure := errors.New("kubeconfig parsing detail")
 	_, err := LoadRegistry(registryPath, &sequenceFactory{err: factoryFailure})
 	if err == nil {
@@ -104,7 +177,7 @@ users:
 }
 
 func TestLoadRegistryBuildsARegistry(t *testing.T) {
-	path := writeRegistryFile(t, `{"clusters":[{"target_id":"aws-dev","provider":"AWS","region":"test-region","architecture":"amd64","kubeconfig_path":"aws-kubeconfig","public_gateway":"https://gateway.example.invalid","enabled":true}]}`)
+	path := writeRegistryFile(t, `{"clusters":[{"target_id":"aws-dev","provider":"AWS","region":"test-region","architecture":"amd64","kubeconfig_path":"aws-kubeconfig","public_gateway":"https://gateway.example.invalid","enabled":true,"security_capabilities":`+completeSecurityCapabilitiesJSON+`}]}`)
 	client := fake.NewSimpleClientset()
 	registry, err := LoadRegistry(path, &sequenceFactory{clients: []kubernetes.Interface{client}})
 	if err != nil {

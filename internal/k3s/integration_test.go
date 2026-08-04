@@ -34,6 +34,14 @@ func TestK3sIntegrationCreateReadyAndCleanup(t *testing.T) {
 		KubeconfigPath: kubeconfig,
 		PublicGateway:  gateway,
 		Enabled:        true,
+		SecurityCapabilities: SecurityCapabilities{
+			NetworkPolicyEnforced: true,
+			NetworkPolicyProvider: "kube-router",
+			DNSNamespace:          "kube-system",
+			DNSPodSelector:        map[string]string{"k8s-app": "kube-dns"},
+			IngressNamespace:      "kube-system",
+			IngressPodSelector:    map[string]string{"app.kubernetes.io/name": "traefik"},
+		},
 	}}, KubeconfigClientFactory{})
 	if err != nil {
 		t.Fatal("NewRegistry() failed")
@@ -129,6 +137,14 @@ func TestK3sIntegrationCreateMultiContainerReadyAndDelete(t *testing.T) {
 		KubeconfigPath: kubeconfig,
 		PublicGateway:  gateway,
 		Enabled:        true,
+		SecurityCapabilities: SecurityCapabilities{
+			NetworkPolicyEnforced: true,
+			NetworkPolicyProvider: "kube-router",
+			DNSNamespace:          "kube-system",
+			DNSPodSelector:        map[string]string{"k8s-app": "kube-dns"},
+			IngressNamespace:      "kube-system",
+			IngressPodSelector:    map[string]string{"app.kubernetes.io/name": "traefik"},
+		},
 	}}, KubeconfigClientFactory{})
 	if err != nil {
 		t.Fatal("NewRegistry() failed")

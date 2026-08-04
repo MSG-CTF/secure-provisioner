@@ -15,14 +15,24 @@ type registryFile struct {
 }
 
 type registryClusterConfig struct {
-	TargetID       string   `json:"target_id"`
-	Provider       Provider `json:"provider"`
-	Region         string   `json:"region"`
-	Architecture   string   `json:"architecture"`
-	KubeconfigPath string   `json:"kubeconfig_path"`
-	PublicGateway  string   `json:"public_gateway"`
-	IngressClass   string   `json:"ingress_class,omitempty"`
-	Enabled        *bool    `json:"enabled"`
+	TargetID             string                        `json:"target_id"`
+	Provider             Provider                      `json:"provider"`
+	Region               string                        `json:"region"`
+	Architecture         string                        `json:"architecture"`
+	KubeconfigPath       string                        `json:"kubeconfig_path"`
+	PublicGateway        string                        `json:"public_gateway"`
+	IngressClass         string                        `json:"ingress_class,omitempty"`
+	Enabled              *bool                         `json:"enabled"`
+	SecurityCapabilities *registrySecurityCapabilities `json:"security_capabilities"`
+}
+
+type registrySecurityCapabilities struct {
+	NetworkPolicyEnforced *bool             `json:"network_policy_enforced"`
+	NetworkPolicyProvider string            `json:"network_policy_provider"`
+	DNSNamespace          string            `json:"dns_namespace"`
+	DNSPodSelector        map[string]string `json:"dns_pod_selector"`
+	IngressNamespace      string            `json:"ingress_namespace"`
+	IngressPodSelector    map[string]string `json:"ingress_pod_selector"`
 }
 
 func LoadRegistry(path string, factory ClientFactory) (*Registry, error) {
@@ -60,16 +70,38 @@ func (c registryClusterConfig) clusterConfig() (ClusterConfig, bool) {
 	if c.Enabled == nil {
 		return ClusterConfig{}, false
 	}
+	if *c.Enabled && (c.SecurityCapabilities == nil || c.SecurityCapabilities.NetworkPolicyEnforced == nil) {
+		return ClusterConfig{}, false
+	}
+	capabilities := SecurityCapabilities{}
+	if c.SecurityCapabilities != nil {
+		capabilities = c.SecurityCapabilities.clusterCapabilities()
+	}
 	return ClusterConfig{
-		TargetID:       c.TargetID,
-		Provider:       c.Provider,
-		Region:         c.Region,
-		Architecture:   c.Architecture,
-		KubeconfigPath: c.KubeconfigPath,
-		PublicGateway:  c.PublicGateway,
-		IngressClass:   c.IngressClass,
-		Enabled:        *c.Enabled,
+		TargetID:             c.TargetID,
+		Provider:             c.Provider,
+		Region:               c.Region,
+		Architecture:         c.Architecture,
+		KubeconfigPath:       c.KubeconfigPath,
+		PublicGateway:        c.PublicGateway,
+		IngressClass:         c.IngressClass,
+		Enabled:              *c.Enabled,
+		SecurityCapabilities: capabilities,
 	}, true
+}
+
+func (c registrySecurityCapabilities) clusterCapabilities() SecurityCapabilities {
+	capabilities := SecurityCapabilities{
+		NetworkPolicyProvider: c.NetworkPolicyProvider,
+		DNSNamespace:          c.DNSNamespace,
+		DNSPodSelector:        c.DNSPodSelector,
+		IngressNamespace:      c.IngressNamespace,
+		IngressPodSelector:    c.IngressPodSelector,
+	}
+	if c.NetworkPolicyEnforced != nil {
+		capabilities.NetworkPolicyEnforced = *c.NetworkPolicyEnforced
+	}
+	return capabilities
 }
 
 type KubeconfigClientFactory struct{}
