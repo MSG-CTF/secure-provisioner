@@ -118,3 +118,29 @@ func TestLoadRegistryBuildsARegistry(t *testing.T) {
 		t.Fatal("registry did not retain factory client")
 	}
 }
+
+func TestLoadRegistryNormalizesExposureMode(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		field string
+		want  ExposureMode
+	}{
+		{name: "omitted defaults to ingress", field: "", want: ExposureModeIngressPath},
+		{name: "node port is retained", field: `,"exposure_mode":"NODE_PORT"`, want: ExposureModeNodePort},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			content := `{"clusters":[{"target_id":"aws-dev","provider":"AWS","region":"test-region","architecture":"amd64","kubeconfig_path":"aws-kubeconfig","public_gateway":"http://203.0.113.10"` + test.field + `,"enabled":true}]}`
+			registry, err := LoadRegistry(writeRegistryFile(t, content), &sequenceFactory{clients: []kubernetes.Interface{fake.NewSimpleClientset()}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cluster, err := registry.Lookup("aws-dev")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cluster.Config.ExposureMode != test.want {
+				t.Fatalf("ExposureMode = %q, want %q", cluster.Config.ExposureMode, test.want)
+			}
+		})
+	}
+}

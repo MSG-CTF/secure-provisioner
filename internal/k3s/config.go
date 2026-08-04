@@ -15,14 +15,15 @@ type registryFile struct {
 }
 
 type registryClusterConfig struct {
-	TargetID       string   `json:"target_id"`
-	Provider       Provider `json:"provider"`
-	Region         string   `json:"region"`
-	Architecture   string   `json:"architecture"`
-	KubeconfigPath string   `json:"kubeconfig_path"`
-	PublicGateway  string   `json:"public_gateway"`
-	IngressClass   string   `json:"ingress_class,omitempty"`
-	Enabled        *bool    `json:"enabled"`
+	TargetID       string       `json:"target_id"`
+	Provider       Provider     `json:"provider"`
+	Region         string       `json:"region"`
+	Architecture   string       `json:"architecture"`
+	KubeconfigPath string       `json:"kubeconfig_path"`
+	PublicGateway  string       `json:"public_gateway"`
+	IngressClass   string       `json:"ingress_class,omitempty"`
+	ExposureMode   ExposureMode `json:"exposure_mode,omitempty"`
+	Enabled        *bool        `json:"enabled"`
 }
 
 func LoadRegistry(path string, factory ClientFactory) (*Registry, error) {
@@ -68,6 +69,7 @@ func (c registryClusterConfig) clusterConfig() (ClusterConfig, bool) {
 		KubeconfigPath: c.KubeconfigPath,
 		PublicGateway:  c.PublicGateway,
 		IngressClass:   c.IngressClass,
+		ExposureMode:   c.ExposureMode,
 		Enabled:        *c.Enabled,
 	}, true
 }
