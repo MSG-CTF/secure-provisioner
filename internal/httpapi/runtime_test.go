@@ -119,6 +119,7 @@ func TestRuntimeStatusMapsStableK3sErrors(t *testing.T) {
 		code       string
 		wantStatus int
 	}{
+		{code: "RUNTIME_IDENTITY_MISMATCH", wantStatus: http.StatusConflict},
 		{code: "RUNTIME_OWNERSHIP_MISMATCH", wantStatus: http.StatusConflict},
 		{code: "TARGET_NOT_FOUND", wantStatus: http.StatusServiceUnavailable},
 		{code: "TARGET_TOPOLOGY_INVALID", wantStatus: http.StatusServiceUnavailable},
@@ -297,6 +298,7 @@ func TestGetOperationReturnsCreateAndDeleteResults(t *testing.T) {
 				Status:    operations.OperationStatusSucceeded,
 				Result: operations.OperationResult{Create: &provisioner.CreateWorkloadResult{
 					RuntimeWorkloadID: "aws-dev/ns/challenge",
+					NamespaceUID:      "namespace-uid-01",
 					ServiceURL:        "https://challenge.example.test",
 					Endpoints: []provisioner.WorkloadEndpoint{{
 						ContainerName: "web",
@@ -339,8 +341,12 @@ func TestGetOperationReturnsCreateAndDeleteResults(t *testing.T) {
 
 			NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
 
+			body := response.Body.Bytes()
+			if strings.Contains(string(body), "namespace_uid") {
+				t.Fatalf("internal Namespace UID leaked in public response: %s", body)
+			}
 			var payload OperationResponse
-			if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+			if err := json.Unmarshal(body, &payload); err != nil {
 				t.Fatal(err)
 			}
 			if payload.Result == nil || !reflect.DeepEqual(*payload.Result, test.want) {

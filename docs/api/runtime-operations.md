@@ -164,7 +164,8 @@ Retry-After: 2
 CREATE adapter가 성공한 뒤에만 Runtime Binding을 저장한다. Binding에는
 적용된 challenge ID/version, `STANDARD@v1` 같은 isolation profile identity,
 resource profile identity, resolver가 승인한 컨테이너 UID/port/writable path,
-내부 연결, outbound mode와 자원 합산값을 방어적으로 복사해 기록한다. raw 요청,
+내부 연결, outbound mode, 자원 합산값과 Kubernetes Namespace UID를 방어적으로
+복사해 기록한다. Namespace UID는 내부 소유권 확인에만 사용하며 API 응답에는 노출하지 않는다. raw 요청,
 이미지 credential, baseline 보안 플래그 또는 Kubernetes 설정은 기록하지 않는다.
 Adapter 실패나 생성 rollback은 Binding을 만들지 않으며, 같은 적용 결과의 멱등
 재실행은 기존 Binding을 보존한다. 같은 instance에 다른 적용 정책을 저장하려 하면
@@ -457,6 +458,7 @@ resident node·metadata endpoint로 향하는 트래픽의 차단도 보장하�
 | 409 | `INSTANCE_BINDING_MISMATCH` | 요청과 Binding 식별자 불일치 |
 | 409 | `REQUEST_ID_CONFLICT` | 멱등 키를 다른 명령에 재사용 |
 | 409 | `INSTANCE_STATE_CONFLICT` | 현재 Binding 상태에서 작업 불가 |
+| 409 | `RUNTIME_IDENTITY_MISMATCH` | Kubernetes Namespace UID 불일치 |
 | 409 | `RUNTIME_OWNERSHIP_MISMATCH` | Kubernetes 소유권 불일치 |
 | 502 | `RUNTIME_STATUS_FAILED` | K3s 상태 조회 실패 |
 | 503 | `TARGET_NOT_FOUND` | Registry에 target 없음 |
@@ -510,6 +512,7 @@ Scheduler가 처리한 비동기 Operation의 최종 실패는 서로 다른 계
 | `GET /internal/v1/operations/{operation_id}` | 404 | `OPERATION_NOT_FOUND` | Operation이 없음 | 조회 실패; Scheduler에 작업을 만들거나 변경하지 않음 |
 | `GET /internal/v1/operations/{operation_id}` | 500 | `OPERATION_LOOKUP_FAILED` | Operation Store 조회 실패 | 조회 실패; Scheduler 상태는 변경하지 않음 |
 | `GET /internal/v1/instances/{instance_id}/runtime-status` | 404 | `INSTANCE_NOT_FOUND` | Instance Binding이 없음 | 상태 조회 실패; Scheduler에 작업을 만들거나 변경하지 않음 |
+| `GET /internal/v1/instances/{instance_id}/runtime-status` | 409 | `RUNTIME_IDENTITY_MISMATCH` | Namespace UID가 Binding과 다름 | 상태 조회 실패; Scheduler에 작업을 만들거나 변경하지 않음 |
 | `GET /internal/v1/instances/{instance_id}/runtime-status` | 409 | `RUNTIME_OWNERSHIP_MISMATCH` | Kubernetes 리소스 소유권이 Binding과 다름 | 상태 조회 실패; Scheduler에 작업을 만들거나 변경하지 않음 |
 | `GET /internal/v1/instances/{instance_id}/runtime-status` | 503 | `TARGET_NOT_FOUND` | Registry에 target이 없음 | 상태 조회 실패; Scheduler에 작업을 만들거나 변경하지 않음 |
 | `GET /internal/v1/instances/{instance_id}/runtime-status` | 503 | `TARGET_TOPOLOGY_INVALID` | target이 단일 노드 K3s 토폴로지가 아님 | 상태 조회 실패; Scheduler에 작업을 만들거나 변경하지 않음 |
@@ -535,7 +538,8 @@ Scheduler가 처리한 비동기 Operation의 최종 실패는 서로 다른 계
 | `CREATE` | `TARGET_DISABLED` | 생성 target이 비활성화됨 | 즉시 `FAILED` |
 | `CREATE` | `K3S_UNAVAILABLE` | K3s client를 사용할 수 없음 | 재시도 후 한도 도달 시 `FAILED` |
 | `CREATE` | `INVALID_CREATE_COMMAND` | Worker가 받은 생성 명령으로 리소스를 구성할 수 없음 | 즉시 `FAILED` |
-| `CREATE` | `RESOURCE_OWNERSHIP_CONFLICT` | 기존 Namespace, Deployment, Service 또는 Ingress의 소유권이 다름 | 즉시 `FAILED` |
+| `CREATE` | `RESOURCE_OWNERSHIP_CONFLICT` | 생성 전에 같은 이름의 Namespace가 이미 있거나 다른 리소스의 소유권이 다름 | 즉시 `FAILED` |
+| `CREATE` | `RUNTIME_IDENTITY_MISMATCH` | 생성 성공 확인 전에 Namespace UID가 바뀜 | 즉시 `FAILED` |
 | `CREATE` | `RESOURCE_APPLY_FAILED` | Kubernetes 리소스 적용에 실패함 | 재시도 후 한도 도달 시 `FAILED` |
 | `CREATE` | `WORKLOAD_NOT_READY` | 준비 시간 안에 Workload가 ready가 되지 않음 | 재시도 후 한도 도달 시 `FAILED` |
 | `CREATE` | `RUNTIME_BINDING_SAVE_FAILED` | Workload 생성 뒤 Binding 저장에 실패했지만 생성 리소스 cleanup은 성공함 | 즉시 `FAILED` |
@@ -546,8 +550,9 @@ Scheduler가 처리한 비동기 Operation의 최종 실패는 서로 다른 계
 | `DELETE` | `INSTANCE_BINDING_MISMATCH` | 삭제 명령이 Binding과 일치하지 않음 | 즉시 `FAILED` |
 | `DELETE` | `TARGET_NOT_FOUND` | 유지보수 target이 Registry에 없음 | 즉시 `FAILED` |
 | `DELETE` | `K3S_UNAVAILABLE` | K3s client를 사용할 수 없음 | 재시도 후 한도 도달 시 `FAILED` |
+| `DELETE` | `RUNTIME_IDENTITY_MISMATCH` | Namespace UID가 Binding과 다름 | 즉시 `FAILED` |
 | `DELETE` | `RUNTIME_OWNERSHIP_MISMATCH` | Namespace 소유권이 Binding과 다름 | 즉시 `FAILED` |
-| `DELETE` | `TARGET_TEMPORARILY_UNAVAILABLE` | Kubernetes API 호출이 일시적으로 실패함 | 재시도 후 한도 도달 시 `FAILED` |
+| `DELETE` | `TARGET_TEMPORARILY_UNAVAILABLE` | Kubernetes API 호출이 실패함 | Forbidden/Unauthorized/BadRequest/Invalid는 즉시 `FAILED`, 그 밖의 일시 오류는 재시도 후 한도 도달 시 `FAILED` |
 | `DELETE` | `NAMESPACE_DELETE_TIMEOUT` | Namespace 삭제 완료 대기 시간이 초과됨 | 재시도 후 한도 도달 시 `FAILED` |
 | `DELETE` | `EXECUTION_FAILED` | 코드화되지 않은 실행 실패 | 즉시 `FAILED` |
 | `DELETE` | `INVALID_OPERATION_RESULT` | 성공 결과가 Operation Store 검증을 통과하지 못함 | 즉시 `FAILED` |

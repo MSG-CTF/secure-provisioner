@@ -11,13 +11,13 @@ CTF 문제 인스턴스의 K3s 워크로드 생성·삭제와 상태 조회를 �
 - 공개 컨테이너의 포트별 접속 주소 반환
 - 생성·삭제 요청의 비동기 Operation 처리
 - Operation 상태 폴링과 최종 결과 반환
-- 저장된 Runtime Binding을 검증한 뒤 실제 K3s Namespace 삭제
+- 저장된 Runtime Binding의 Namespace UID와 소유권 label을 검증한 뒤 실제 K3s Namespace 삭제
 - 컨테이너 상태, 요청량·제한량, Metrics 사용량 조회
 - 단일 노드의 Condition, capacity, allocatable, requested, schedulable 조회
 - Registry에 등록된 AWS·GCP·NCP K3s target을 `target_id`로 직접 선택
 - `STANDARD@v1` 격리 baseline, non-root UID, 제한된 writable path,
   명시적 내부 연결과 기본 `NONE` outbound 정책 적용
-- 적용된 challenge/profile identity와 resolver 승인 요구사항을 Runtime Binding에 기록
+- 적용된 challenge/profile identity, resolver 승인 요구사항과 Namespace UID를 Runtime Binding에 기록
 
 API 계약은 [런타임 API 명세](docs/api/runtime-operations.md)와
 [OpenAPI](docs/api/secure-provisioner.openapi.yaml)에 정리되어 있습니다.

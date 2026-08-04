@@ -213,6 +213,7 @@ func createdBinding(
 		TeamID:                command.TeamID,
 		TargetID:              command.TargetID,
 		Namespace:             namespace,
+		NamespaceUID:          result.NamespaceUID,
 		RuntimeWorkloadID:     result.RuntimeWorkloadID,
 		ChallengeID:           command.Policy.ChallengeID,
 		ChallengeVersion:      command.ChallengeRef.Version,

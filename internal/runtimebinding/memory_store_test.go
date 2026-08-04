@@ -95,6 +95,30 @@ func TestMemoryStoreRejectsDifferentTargetForSameInstance(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreRejectsCreatedBindingWithoutNamespaceUID(t *testing.T) {
+	store := NewMemoryStore()
+	binding := validBinding(time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC))
+	binding.NamespaceUID = ""
+
+	if _, _, err := store.SaveCreated(binding); !errors.Is(err, ErrInvalidBinding) {
+		t.Fatalf("SaveCreated() error = %v, want ErrInvalidBinding", err)
+	}
+}
+
+func TestMemoryStoreRejectsDifferentNamespaceUIDForSameInstance(t *testing.T) {
+	store := NewMemoryStore()
+	first := validBinding(time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC))
+	if _, _, err := store.SaveCreated(first); err != nil {
+		t.Fatalf("first SaveCreated() error = %v", err)
+	}
+	conflict := first
+	conflict.NamespaceUID = "replacement-namespace-uid"
+
+	if _, _, err := store.SaveCreated(conflict); !errors.Is(err, ErrConflict) {
+		t.Fatalf("SaveCreated(conflict) error = %v, want ErrConflict", err)
+	}
+}
+
 func TestMemoryStoreTransitionsCreatedDeletingDeleted(t *testing.T) {
 	store := NewMemoryStore()
 	createdAt := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
@@ -174,6 +198,7 @@ func validBinding(now time.Time) Binding {
 		TeamID:            18,
 		TargetID:          "aws-dev",
 		Namespace:         "ctf-018f3f1e21b87a91a30b63b3400fd001",
+		NamespaceUID:      "namespace-uid-01",
 		RuntimeWorkloadID: "aws-dev/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge",
 		ChallengeID:       "web-chall2",
 		ChallengeVersion:  "2026.08.1",

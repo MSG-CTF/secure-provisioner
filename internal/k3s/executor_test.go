@@ -13,7 +13,7 @@ import (
 
 func TestExecutorRoutesCreateOperationToSelectedTarget(t *testing.T) {
 	command := provisioner.CreateWorkloadCommand{RequestID: "req-1", TargetID: "aws-dev"}
-	want := provisioner.CreateWorkloadResult{RuntimeWorkloadID: "aws-dev/instance-1", ServiceURL: "https://instance-1.aws-dev.example"}
+	want := provisioner.CreateWorkloadResult{RuntimeWorkloadID: "aws-dev/instance-1", NamespaceUID: "namespace-uid-01", ServiceURL: "https://instance-1.aws-dev.example"}
 	adapter := &recordingCreateAdapter{result: want}
 	executor, err := NewExecutor(adapter)
 	if err != nil {

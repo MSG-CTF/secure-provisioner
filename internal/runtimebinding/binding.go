@@ -29,6 +29,7 @@ type Binding struct {
 	TeamID                int64
 	TargetID              string
 	Namespace             string
+	NamespaceUID          string
 	RuntimeWorkloadID     string
 	ChallengeID           string
 	ChallengeVersion      string
@@ -57,6 +58,7 @@ func validCreatedBinding(binding Binding) bool {
 		binding.TeamID > 0 &&
 		strings.TrimSpace(binding.TargetID) != "" &&
 		strings.TrimSpace(binding.Namespace) != "" &&
+		strings.TrimSpace(binding.NamespaceUID) != "" &&
 		strings.TrimSpace(binding.RuntimeWorkloadID) != "" &&
 		binding.State == StateCreated &&
 		!binding.CreatedAt.IsZero() &&
@@ -69,6 +71,7 @@ func samePlacement(first, second Binding) bool {
 		first.TeamID == second.TeamID &&
 		first.TargetID == second.TargetID &&
 		first.Namespace == second.Namespace &&
+		first.NamespaceUID == second.NamespaceUID &&
 		first.RuntimeWorkloadID == second.RuntimeWorkloadID &&
 		first.ChallengeID == second.ChallengeID &&
 		first.ChallengeVersion == second.ChallengeVersion &&

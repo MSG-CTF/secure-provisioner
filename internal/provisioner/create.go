@@ -46,6 +46,7 @@ type CreateWorkloadCommand struct {
 
 type CreateWorkloadResult struct {
 	RuntimeWorkloadID string
+	NamespaceUID      string
 	ServiceURL        string
 	Endpoints         []WorkloadEndpoint
 }

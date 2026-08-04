@@ -16,7 +16,7 @@ func TestWorkerExecutesAndStoresSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	executor := &scriptedExecutor{results: []execution{{result: OperationResult{Create: &provisioner.CreateWorkloadResult{RuntimeWorkloadID: "default/inst-1", ServiceURL: "http://service.example"}}}}}
+	executor := &scriptedExecutor{results: []execution{{result: OperationResult{Create: &provisioner.CreateWorkloadResult{RuntimeWorkloadID: "default/inst-1", NamespaceUID: "namespace-uid-01", ServiceURL: "http://service.example"}}}}}
 	worker, err := NewWorker(store, executor, WorkerConfig{Concurrency: 1, Backoff: noBackoff, Sleep: sleepWithContext})
 	if err != nil {
 		t.Fatal(err)
@@ -420,7 +420,7 @@ func receiveRun(t *testing.T, done <-chan error) error {
 func noBackoff(int) time.Duration { return 0 }
 
 func successfulCreateResult() OperationResult {
-	return OperationResult{Create: &provisioner.CreateWorkloadResult{RuntimeWorkloadID: "default/inst-1", ServiceURL: "http://service.example"}}
+	return OperationResult{Create: &provisioner.CreateWorkloadResult{RuntimeWorkloadID: "default/inst-1", NamespaceUID: "namespace-uid-01", ServiceURL: "http://service.example"}}
 }
 
 func successfulDeleteResult() OperationResult {

@@ -76,20 +76,13 @@ func TestAdapterClassifiesPermanentAndTransientKubernetesApplyErrors(t *testing.
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			command := validCreateCommand("aws-dev")
-			resources, err := BuildResourceSet(validCluster("aws-dev"), command)
-			if err != nil {
-				t.Fatal(err)
-			}
 			client := readyClient(t, command)
-			if err := client.Tracker().Add(resources.Namespace); err != nil {
-				t.Fatal(err)
-			}
 			client.PrependReactor("create", "serviceaccounts", func(k8stesting.Action) (bool, runtime.Object, error) {
 				return true, nil, test.err
 			})
 			adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
 
-			_, err = adapter.CreateWorkload(context.Background(), command)
+			_, err := adapter.CreateWorkload(context.Background(), command)
 			var runtimeErr *RuntimeError
 			if !errors.As(err, &runtimeErr) || runtimeErr.Code() != "RESOURCE_APPLY_FAILED" || runtimeErr.Retryable() != test.retryable {
 				t.Fatalf("error = %#v, want RESOURCE_APPLY_FAILED retryable=%t", err, test.retryable)
@@ -213,6 +206,29 @@ func TestAdapterRejectsTerminatingOwnedNamespaceBeforeAnyMutation(t *testing.T) 
 	namespace.DeletionTimestamp = &now
 	client := readyClient(t, command)
 	if err := client.Tracker().Add(namespace); err != nil {
+		t.Fatal(err)
+	}
+	client.ClearActions()
+	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
+
+	_, err = adapter.CreateWorkload(context.Background(), command)
+	if runtimeErrorCode(t, err) != "RESOURCE_OWNERSHIP_CONFLICT" {
+		t.Fatalf("code = %q, want RESOURCE_OWNERSHIP_CONFLICT", runtimeErrorCode(t, err))
+	}
+	assertNoMutations(t, client.Actions())
+}
+
+func TestAdapterRejectsPreexistingMatchingNamespaceBeforeAnyMutation(t *testing.T) {
+	command := validCreateCommand("aws-dev")
+	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preexisting := resources.Namespace.DeepCopy()
+	preexisting.UID = "preexisting-namespace-uid"
+	preexisting.ResourceVersion = "7"
+	client := readyClient(t, command)
+	if err := client.Tracker().Add(preexisting); err != nil {
 		t.Fatal(err)
 	}
 	client.ClearActions()
@@ -445,16 +461,17 @@ func TestAdapterRejectsDeploymentSpecTamperingDuringReadiness(t *testing.T) {
 
 func TestAdapterAcceptsNamespaceNameAdmissionLabel(t *testing.T) {
 	command := validCreateCommand("aws-dev")
-	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
-	if err != nil {
-		t.Fatal(err)
-	}
-	namespace := resources.Namespace.DeepCopy()
-	namespace.Labels[corev1.LabelMetadataName] = namespace.Name
 	client := readyClient(t, command)
-	if err := client.Tracker().Add(namespace); err != nil {
-		t.Fatal(err)
-	}
+	client.PrependReactor("create", "namespaces", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		namespace := action.(k8stesting.CreateAction).GetObject().(*corev1.Namespace).DeepCopy()
+		namespace.UID = "admission-labeled-namespace-uid"
+		namespace.ResourceVersion = "1"
+		namespace.Labels[corev1.LabelMetadataName] = namespace.Name
+		if err := client.Tracker().Create(corev1.SchemeGroupVersion.WithResource("namespaces"), namespace, ""); err != nil {
+			return true, nil, err
+		}
+		return true, namespace.DeepCopy(), nil
+	})
 	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
 
 	if _, err := adapter.CreateWorkload(context.Background(), command); err != nil {
@@ -566,7 +583,7 @@ func TestAdapterAppliesProtectionInExactOrderBeforeMultiContainerWorkload(t *tes
 	}
 }
 
-func TestAdapterCreatesDeterministicallyHashedProtectionOnlyOnce(t *testing.T) {
+func TestAdapterRejectsDirectRetryWithoutChangingProtectionHashes(t *testing.T) {
 	command := validCreateCommand("aws-dev")
 	client := readyClient(t, command)
 	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
@@ -575,8 +592,8 @@ func TestAdapterCreatesDeterministicallyHashedProtectionOnlyOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	firstHashes := storedProtectionHashes(t, client, command)
-	if _, err := adapter.CreateWorkload(context.Background(), command); err != nil {
-		t.Fatal(err)
+	if _, err := adapter.CreateWorkload(context.Background(), command); runtimeErrorCode(t, err) != "RESOURCE_OWNERSHIP_CONFLICT" {
+		t.Fatalf("second direct CreateWorkload() error = %v, want RESOURCE_OWNERSHIP_CONFLICT", err)
 	}
 	if got := storedProtectionHashes(t, client, command); !reflect.DeepEqual(got, firstHashes) {
 		t.Fatalf("protection hashes changed on identical retry: first = %#v, retry = %#v", firstHashes, got)
@@ -773,6 +790,7 @@ func TestAdapterWaitsForEveryContainerAndService(t *testing.T) {
 		internalPod,
 		readyEndpointSliceForService(resources.Namespace.Name, "web", webPod),
 	)
+	installNamespaceCreateMetadata(t, client, "test-namespace-uid", "1")
 	installDeploymentController(client, true)
 	internalEndpointListed := make(chan struct{}, 1)
 	client.PrependReactor("list", "endpointslices", func(action k8stesting.Action) (bool, runtime.Object, error) {
@@ -1009,6 +1027,7 @@ func TestAdapterReturnsOnlyAfterReadyPodAndEndpointSlice(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := fake.NewSimpleClientset()
+	installNamespaceCreateMetadata(t, client, "test-namespace-uid", "1")
 	installDeploymentController(client, true)
 	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
 	resourcesApplied := actionSignal(client, "create", "ingresses")
@@ -1038,6 +1057,49 @@ func TestAdapterReturnsOnlyAfterReadyPodAndEndpointSlice(t *testing.T) {
 	}
 }
 
+func TestAdapterReturnsExactNamespaceUIDAfterFinalReadback(t *testing.T) {
+	command := validCreateCommand("aws-dev")
+	client := readyClient(t, command)
+	installNamespaceCreateMetadata(t, client, "created-namespace-uid", "11")
+	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
+
+	result, err := adapter.CreateWorkload(context.Background(), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.NamespaceUID != "created-namespace-uid" {
+		t.Fatalf("NamespaceUID = %q, want exact server UID", result.NamespaceUID)
+	}
+}
+
+func TestAdapterRejectsNamespaceReplacementAtFinalReadback(t *testing.T) {
+	command := validCreateCommand("aws-dev")
+	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := readyClient(t, command)
+	installNamespaceCreateMetadata(t, client, "created-namespace-uid", "11")
+	getCount := 0
+	client.PrependReactor("get", "namespaces", func(k8stesting.Action) (bool, runtime.Object, error) {
+		getCount++
+		if getCount < 3 {
+			return false, nil, nil
+		}
+		replacement := resources.Namespace.DeepCopy()
+		replacement.UID = "replacement-namespace-uid"
+		replacement.ResourceVersion = "12"
+		return true, replacement, nil
+	})
+	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
+
+	_, err = adapter.CreateWorkload(context.Background(), command)
+	if runtimeErrorCode(t, err) != "RUNTIME_IDENTITY_MISMATCH" {
+		t.Fatalf("code = %q, want RUNTIME_IDENTITY_MISMATCH", runtimeErrorCode(t, err))
+	}
+	assertDeleteActionCount(t, client, "namespaces", 0)
+}
+
 func TestAdapterWaitsForLatestRevisionPodAndItsEndpoint(t *testing.T) {
 	command := validCreateCommand("aws-dev")
 	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
@@ -1047,6 +1109,7 @@ func TestAdapterWaitsForLatestRevisionPodAndItsEndpoint(t *testing.T) {
 	oldPod := readyPod(resources.Namespace.Name, "old-spec-hash", "old-pod", "10.0.0.1", resources.Deployment.Spec.Template.Labels)
 	oldEndpoint := readyEndpointSlice(resources.Namespace.Name, oldPod)
 	client := fake.NewSimpleClientset(oldPod, oldEndpoint)
+	installNamespaceCreateMetadata(t, client, "test-namespace-uid", "1")
 	installDeploymentController(client, true)
 	podListed := make(chan struct{})
 	firstListRelease := make(chan struct{})
@@ -1115,6 +1178,7 @@ func TestAdapterRejectsEndpointForDifferentReadyPod(t *testing.T) {
 	otherPod := readyPod(resources.Namespace.Name, resources.ExpectedSpecHash, "other-pod", "10.0.0.1", resources.Deployment.Spec.Template.Labels)
 	endpoint := readyEndpointSlice(resources.Namespace.Name, otherPod)
 	client := fake.NewSimpleClientset(pod, endpoint)
+	installNamespaceCreateMetadata(t, client, "test-namespace-uid", "1")
 	installDeploymentController(client, true)
 	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
 	assertNotReadyAfterGate(t, adapter, client, command, "list", "endpointslices")
@@ -1150,6 +1214,7 @@ func TestAdapterAcceptsPodIPMatchedEndpointWithoutTargetRef(t *testing.T) {
 	endpoint := readyEndpointSlice(resources.Namespace.Name, pod)
 	endpoint.Endpoints[0].TargetRef = nil
 	client := fake.NewSimpleClientset(pod, endpoint)
+	installNamespaceCreateMetadata(t, client, "test-namespace-uid", "1")
 	installDeploymentController(client, true)
 	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
 
@@ -1250,7 +1315,7 @@ func TestAdapterDoesNotReturnWithOnlyReadyEndpointSlice(t *testing.T) {
 	assertNotReadyAfterGate(t, adapter, client, command, "list", "pods")
 }
 
-func TestAdapterRetriesSameCommandWithoutDuplicateResources(t *testing.T) {
+func TestAdapterRejectsDirectRetryWithoutDuplicateResources(t *testing.T) {
 	command := validCreateCommand("aws-dev")
 	client := readyClient(t, command)
 	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
@@ -1258,8 +1323,8 @@ func TestAdapterRetriesSameCommandWithoutDuplicateResources(t *testing.T) {
 	if _, err := adapter.CreateWorkload(context.Background(), command); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := adapter.CreateWorkload(context.Background(), command); err != nil {
-		t.Fatal(err)
+	if _, err := adapter.CreateWorkload(context.Background(), command); runtimeErrorCode(t, err) != "RESOURCE_OWNERSHIP_CONFLICT" {
+		t.Fatalf("second direct CreateWorkload() error = %v, want RESOURCE_OWNERSHIP_CONFLICT", err)
 	}
 	for _, resource := range []string{"namespaces", "deployments", "services", "ingresses"} {
 		assertCreateActionCount(t, client, resource, 1)
@@ -1334,11 +1399,11 @@ func TestAdapterDoesNotRollbackNamespaceWhenFailedCreateCannotProveOwnership(t *
 	assertDeleteActionCount(t, client, "namespaces", 0)
 	assertNoChildResourceMutations(t, client.Actions())
 
-	if _, err := adapter.CreateWorkload(context.Background(), command); err != nil {
-		t.Fatalf("independent retry did not preflight the committed Namespace: %v", err)
+	if _, err := adapter.CreateWorkload(context.Background(), command); runtimeErrorCode(t, err) != "RESOURCE_OWNERSHIP_CONFLICT" {
+		t.Fatalf("independent retry error = %v, want RESOURCE_OWNERSHIP_CONFLICT", err)
 	}
 	assertCreateActionCount(t, client, "namespaces", 1)
-	assertCreateActionCount(t, client, "deployments", 1)
+	assertCreateActionCount(t, client, "deployments", 0)
 }
 
 func TestAdapterDoesNotReadBackOrRollbackNamespaceAfterFailedCreate(t *testing.T) {
@@ -1372,10 +1437,8 @@ func TestAdapterRetriesDeploymentUpdateConflictWithLatestResourceVersion(t *test
 	}
 	resources.Deployment.ResourceVersion = "1"
 	client := readyClient(t, command)
-	for _, object := range []runtime.Object{resources.Namespace, resources.Deployment, resources.Service, resources.Ingress} {
-		if err := client.Tracker().Add(object); err != nil {
-			t.Fatal(err)
-		}
+	if err := client.Tracker().Add(resources.Deployment); err != nil {
+		t.Fatal(err)
 	}
 	conflicts := 0
 	client.PrependReactor("update", "deployments", func(action k8stesting.Action) (bool, runtime.Object, error) {
@@ -1397,9 +1460,7 @@ func TestAdapterRetriesDeploymentUpdateConflictWithLatestResourceVersion(t *test
 		}
 		return false, nil, nil
 	})
-	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
-
-	if _, err := adapter.CreateWorkload(context.Background(), command); err != nil {
+	if _, err := upsertDeployment(context.Background(), client, resources.Deployment); err != nil {
 		t.Fatal(err)
 	}
 	if got := actionCount(client, "update", "deployments"); got != 2 {
@@ -1416,7 +1477,7 @@ func TestAdapterWorkloadUpdatesPreserveApprovedServerFields(t *testing.T) {
 				t.Fatal(err)
 			}
 			client := readyClient(t, command)
-			for _, object := range []runtime.Object{resources.Namespace, resources.Deployment, resources.Service, resources.Ingress} {
+			for _, object := range []runtime.Object{resources.Deployment, resources.Service, resources.Ingress} {
 				metadata := object.(metav1.Object)
 				metadata.SetUID(types.UID("server-" + metadata.GetName()))
 				metadata.SetResourceVersion("7")
@@ -1446,10 +1507,17 @@ func TestAdapterWorkloadUpdatesPreserveApprovedServerFields(t *testing.T) {
 				inspected.Store(true)
 				return false, nil, nil
 			})
-			adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
-
-			if _, err := adapter.CreateWorkload(context.Background(), command); err != nil {
-				t.Fatal(err)
+			var updateErr error
+			switch resource {
+			case "deployments":
+				_, updateErr = upsertDeployment(context.Background(), client, resources.Deployment)
+			case "services":
+				updateErr = upsertService(context.Background(), client, resources.Service)
+			case "ingresses":
+				updateErr = upsertIngress(context.Background(), client, resources.Ingress)
+			}
+			if updateErr != nil {
+				t.Fatal(updateErr)
 			}
 			if !inspected.Load() {
 				t.Fatalf("%s update was not inspected", resource)
@@ -1464,6 +1532,9 @@ func TestAdapterRetriesProtectionUpdateConflictWithLatestResourceVersion(t *test
 			command := validCreateCommand("aws-dev")
 			resources, err := BuildResourceSet(validCluster("aws-dev"), command)
 			if err != nil {
+				t.Fatal(err)
+			}
+			if err := prepareProtectionHashes(resources); err != nil {
 				t.Fatal(err)
 			}
 			client := readyClient(t, command)
@@ -1485,6 +1556,9 @@ func TestAdapterRetriesProtectionUpdateConflictWithLatestResourceVersion(t *test
 
 			conflicts := 0
 			client.PrependReactor("update", resource, func(action k8stesting.Action) (bool, runtime.Object, error) {
+				if action.(k8stesting.UpdateAction).GetObject().(metav1.Object).GetName() != metadata.GetName() {
+					return false, nil, nil
+				}
 				conflicts++
 				if conflicts == 1 {
 					latest, trackerErr := client.Tracker().Get(gvr, action.GetNamespace(), metadata.GetName())
@@ -1503,11 +1577,11 @@ func TestAdapterRetriesProtectionUpdateConflictWithLatestResourceVersion(t *test
 				return false, nil, nil
 			})
 
-			if _, err := adapter.CreateWorkload(context.Background(), command); err != nil {
+			if err := applyProtectionResourceSet(context.Background(), client, resources); err != nil {
 				t.Fatal(err)
 			}
-			if got := actionCount(client, "update", resource); got != 2 {
-				t.Fatalf("%s update actions = %d, want 2", resource, got)
+			if conflicts != 2 {
+				t.Fatalf("%s target update actions = %d, want 2", resource, conflicts)
 			}
 		})
 	}
@@ -1519,6 +1593,9 @@ func TestAdapterProtectionUpdatesPreserveApprovedServerFields(t *testing.T) {
 			command := validCreateCommand("aws-dev")
 			resources, err := BuildResourceSet(validCluster("aws-dev"), command)
 			if err != nil {
+				t.Fatal(err)
+			}
+			if err := prepareProtectionHashes(resources); err != nil {
 				t.Fatal(err)
 			}
 			client := readyClient(t, command)
@@ -1548,10 +1625,14 @@ func TestAdapterProtectionUpdatesPreserveApprovedServerFields(t *testing.T) {
 
 			updated := make(chan runtime.Object, 1)
 			client.PrependReactor("update", resource, func(action k8stesting.Action) (bool, runtime.Object, error) {
-				updated <- action.(k8stesting.UpdateAction).GetObject().DeepCopyObject()
+				object := action.(k8stesting.UpdateAction).GetObject()
+				if object.(metav1.Object).GetName() != metadata.GetName() {
+					return false, nil, nil
+				}
+				updated <- object.DeepCopyObject()
 				return false, nil, nil
 			})
-			if _, err := adapter.CreateWorkload(context.Background(), command); err != nil {
+			if err := applyProtectionResourceSet(context.Background(), client, resources); err != nil {
 				t.Fatal(err)
 			}
 
@@ -1575,31 +1656,23 @@ func TestAdapterProtectionUpdatesPreserveApprovedServerFields(t *testing.T) {
 	}
 }
 
-func TestAdapterStopsAfterThreePersistentServiceUpdateConflictsWithoutDeletingPreexistingNamespace(t *testing.T) {
+func TestUpsertServiceStopsAfterThreePersistentUpdateConflicts(t *testing.T) {
 	command := validCreateCommand("aws-dev")
 	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := readyClient(t, command)
-	for _, object := range []runtime.Object{resources.Namespace, resources.Deployment, resources.Service} {
-		if err := client.Tracker().Add(object); err != nil {
-			t.Fatal(err)
-		}
-	}
+	client := fake.NewSimpleClientset(resources.Service)
 	client.PrependReactor("update", "services", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, apierrors.NewConflict(action.GetResource().GroupResource(), resourceName, errors.New("persistent conflict"))
 	})
-	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
-
-	_, err = adapter.CreateWorkload(context.Background(), command)
+	err = upsertService(context.Background(), client, resources.Service)
 	if runtimeErrorCode(t, err) != "RESOURCE_APPLY_FAILED" {
 		t.Fatalf("code = %q, want RESOURCE_APPLY_FAILED", runtimeErrorCode(t, err))
 	}
 	if got := actionCount(client, "update", "services"); got != 3 {
 		t.Fatalf("service update actions = %d, want bounded 3", got)
 	}
-	assertDeleteActionCount(t, client, "namespaces", 0)
 }
 
 func TestAdapterDoesNotRetryOrDeleteForeignDeploymentFromAlreadyExistsRace(t *testing.T) {
@@ -1678,6 +1751,9 @@ func TestAdapterRechecksResourceQuotaSemanticMetadataAfterUpdateConflict(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := prepareProtectionHashes(resources); err != nil {
+		t.Fatal(err)
+	}
 	client := readyClient(t, command)
 	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
 	if _, err := adapter.CreateWorkload(context.Background(), command); err != nil {
@@ -1711,7 +1787,7 @@ func TestAdapterRechecksResourceQuotaSemanticMetadataAfterUpdateConflict(t *test
 		return true, nil, apierrors.NewConflict(action.GetResource().GroupResource(), metadata.GetName(), errors.New("stale resource version"))
 	})
 
-	_, err = adapter.CreateWorkload(context.Background(), command)
+	err = applyProtectionResourceSet(context.Background(), client, resources)
 	if runtimeErrorCode(t, err) != "RESOURCE_OWNERSHIP_CONFLICT" {
 		t.Fatalf("code = %q, want RESOURCE_OWNERSHIP_CONFLICT", runtimeErrorCode(t, err))
 	}
@@ -1793,27 +1869,19 @@ func TestAdapterPreflightAPIErrorReturnsWithoutAnyMutation(t *testing.T) {
 
 func TestAdapterPreservesServiceClusterAllocationOnRetry(t *testing.T) {
 	command := validCreateCommand("aws-dev")
-	client := readyClient(t, command)
 	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
 	if err != nil {
 		t.Fatal(err)
 	}
 	resources.Service.Spec.ClusterIP = "10.0.0.42"
 	resources.Service.Spec.ClusterIPs = []string{"10.0.0.42"}
-	for _, object := range []runtime.Object{resources.Namespace, resources.Deployment, resources.Service, resources.Ingress} {
-		if err := client.Tracker().Add(object); err != nil {
-			t.Fatal(err)
-		}
-	}
-	client.ClearActions()
+	client := fake.NewSimpleClientset(resources.Service)
 	updatedService := make(chan *corev1.Service, 1)
 	client.PrependReactor("update", "services", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		updatedService <- action.(k8stesting.UpdateAction).GetObject().(*corev1.Service).DeepCopy()
 		return false, nil, nil
 	})
-	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
-
-	if _, err := adapter.CreateWorkload(context.Background(), command); err != nil {
+	if err := upsertService(context.Background(), client, resources.Service); err != nil {
 		t.Fatal(err)
 	}
 	got := <-updatedService
@@ -2181,7 +2249,7 @@ func TestNewAdapterDefaultsAndValidatesRollbackTimeout(t *testing.T) {
 	}
 }
 
-func TestAdapterDoesNotRollbackPreexistingOwnedNamespaceWhenResourceApplyFails(t *testing.T) {
+func TestAdapterRejectsPreexistingOwnedNamespaceBeforeResourceApply(t *testing.T) {
 	command := validCreateCommand("aws-dev")
 	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
 	if err != nil {
@@ -2194,8 +2262,8 @@ func TestAdapterDoesNotRollbackPreexistingOwnedNamespaceWhenResourceApplyFails(t
 	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
 
 	_, err = adapter.CreateWorkload(context.Background(), command)
-	if runtimeErrorCode(t, err) != "RESOURCE_APPLY_FAILED" {
-		t.Fatalf("code = %q, want RESOURCE_APPLY_FAILED", runtimeErrorCode(t, err))
+	if runtimeErrorCode(t, err) != "RESOURCE_OWNERSHIP_CONFLICT" {
+		t.Fatalf("code = %q, want RESOURCE_OWNERSHIP_CONFLICT", runtimeErrorCode(t, err))
 	}
 	assertDeleteActionCount(t, client, "namespaces", 0)
 }
@@ -2216,7 +2284,7 @@ func TestAdapterRollsBackOwnedNamespaceWhenReadinessTimesOut(t *testing.T) {
 	assertDeleteActionCount(t, client, "namespaces", 1)
 }
 
-func TestAdapterDoesNotRollbackPreexistingOwnedNamespaceWhenReadinessTimesOut(t *testing.T) {
+func TestAdapterRejectsPreexistingOwnedNamespaceBeforeReadiness(t *testing.T) {
 	command := validCreateCommand("aws-dev")
 	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
 	if err != nil {
@@ -2230,8 +2298,8 @@ func TestAdapterDoesNotRollbackPreexistingOwnedNamespaceWhenReadinessTimesOut(t 
 	}
 
 	_, err = adapter.CreateWorkload(context.Background(), command)
-	if runtimeErrorCode(t, err) != "WORKLOAD_NOT_READY" {
-		t.Fatalf("code = %q, want WORKLOAD_NOT_READY", runtimeErrorCode(t, err))
+	if runtimeErrorCode(t, err) != "RESOURCE_OWNERSHIP_CONFLICT" {
+		t.Fatalf("code = %q, want RESOURCE_OWNERSHIP_CONFLICT", runtimeErrorCode(t, err))
 	}
 	assertDeleteActionCount(t, client, "namespaces", 0)
 }
@@ -2505,6 +2573,7 @@ func readyClient(t *testing.T, command provisioner.CreateWorkloadCommand) *fake.
 	}
 	pod := readyPod(namespace, resources.ExpectedSpecHash, "ready-pod", "10.0.0.1", resources.Deployment.Spec.Template.Labels)
 	client := fake.NewSimpleClientset(pod, readyEndpointSlice(namespace, pod))
+	installNamespaceCreateMetadata(t, client, "test-namespace-uid", "1")
 	installDeploymentController(client, true)
 	return client
 }
@@ -2527,8 +2596,22 @@ func readyMultiContainerClient(t *testing.T, command provisioner.CreateWorkloadC
 		objects = append(objects, pod, readyEndpointSliceForService(resources.Namespace.Name, deployment.Name, pod))
 	}
 	client := fake.NewSimpleClientset(objects...)
+	installNamespaceCreateMetadata(t, client, "test-namespace-uid", "1")
 	installDeploymentController(client, true)
 	return client
+}
+
+func installNamespaceCreateMetadata(t *testing.T, client *fake.Clientset, uid types.UID, resourceVersion string) {
+	t.Helper()
+	client.PrependReactor("create", "namespaces", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		namespace := action.(k8stesting.CreateAction).GetObject().(*corev1.Namespace).DeepCopy()
+		namespace.UID = uid
+		namespace.ResourceVersion = resourceVersion
+		if err := client.Tracker().Create(corev1.SchemeGroupVersion.WithResource("namespaces"), namespace, ""); err != nil {
+			return true, nil, err
+		}
+		return true, namespace.DeepCopy(), nil
+	})
 }
 
 func installDeploymentController(client *fake.Clientset, ready bool) {
@@ -2954,6 +3037,9 @@ func (n *parallelCreateNamespaces) Create(ctx context.Context, namespace *corev1
 	case n.parallelName:
 		n.parallelCreateEntered <- struct{}{}
 	}
+	namespace = namespace.DeepCopy()
+	namespace.UID = types.UID("test-" + namespace.Name)
+	namespace.ResourceVersion = "1"
 	return n.NamespaceInterface.Create(ctx, namespace, options)
 }
 

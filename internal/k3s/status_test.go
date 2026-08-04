@@ -292,6 +292,17 @@ func TestStatusReaderRejectsNamespaceOwnershipMismatch(t *testing.T) {
 	}
 }
 
+func TestStatusReaderRejectsNamespaceUIDMismatch(t *testing.T) {
+	binding, objects, metric := statusFixture(t)
+	objects[0].(*corev1.Namespace).UID = "replacement-namespace-uid"
+	reader, _ := NewStatusReader(statusRegistry(t, objects, metric))
+
+	_, err := reader.Get(context.Background(), binding)
+	if runtimeErrorCode(t, err) != "RUNTIME_IDENTITY_MISMATCH" {
+		t.Fatalf("error = %v, want RUNTIME_IDENTITY_MISMATCH", err)
+	}
+}
+
 func TestStatusReaderReturnsProvisioningWhenNoPodsExist(t *testing.T) {
 	binding, objects, _ := statusFixture(t)
 	objects = []runtime.Object{objects[0], objects[1], objects[4]}
@@ -377,11 +388,13 @@ func statusFixture(t *testing.T) (runtimebinding.Binding, []runtime.Object, *met
 		TeamID:            command.TeamID,
 		TargetID:          command.TargetID,
 		Namespace:         resources.Namespace.Name,
+		NamespaceUID:      "namespace-uid-01",
 		RuntimeWorkloadID: resources.RuntimeWorkloadID,
 		State:             runtimebinding.StateCreated,
 		CreatedAt:         time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC),
 		UpdatedAt:         time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC),
 	}
+	resources.Namespace.UID = "namespace-uid-01"
 	return binding, []runtime.Object{
 		resources.Namespace,
 		resources.Deployment,

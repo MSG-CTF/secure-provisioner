@@ -119,6 +119,8 @@ func writeRuntimeStatusError(writer http.ResponseWriter, err error) bool {
 		return false
 	}
 	switch coded.Code() {
+	case "RUNTIME_IDENTITY_MISMATCH":
+		writeAPIError(writer, http.StatusConflict, coded.Code(), "runtime identity does not match the stored binding")
 	case "RUNTIME_OWNERSHIP_MISMATCH":
 		writeAPIError(writer, http.StatusConflict, coded.Code(), "runtime ownership does not match the stored binding")
 	case "TARGET_NOT_FOUND":

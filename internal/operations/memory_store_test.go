@@ -208,7 +208,7 @@ func TestMemoryStoreTransitionsAndReturnsCopies(t *testing.T) {
 	if err != nil || running.Attempt != 1 || running.Status != OperationStatusRunning {
 		t.Fatalf("running: %#v %v", running, err)
 	}
-	result := OperationResult{Create: &provisioner.CreateWorkloadResult{RuntimeWorkloadID: "default/inst-1", ServiceURL: "http://service.example"}}
+	result := OperationResult{Create: &provisioner.CreateWorkloadResult{RuntimeWorkloadID: "default/inst-1", NamespaceUID: "namespace-uid-01", ServiceURL: "http://service.example"}}
 	succeeded, err := store.MarkSucceeded(next.ID, result)
 	if err != nil || succeeded.Status != OperationStatusSucceeded {
 		t.Fatalf("succeeded: %#v %v", succeeded, err)
@@ -256,6 +256,7 @@ func TestMemoryStoreCopiesCreateResultEndpoints(t *testing.T) {
 	operation := enqueueAndStart(t, store, "req-1")
 	result := OperationResult{Create: &provisioner.CreateWorkloadResult{
 		RuntimeWorkloadID: "target-1/ns/challenge",
+		NamespaceUID:      "namespace-uid-01",
 		ServiceURL:        "https://gateway.example/instances/inst-1",
 		Endpoints: []provisioner.WorkloadEndpoint{{
 			ContainerName: "web",
@@ -345,7 +346,7 @@ func TestMemoryStoreRejectsInvalidCreateSuccessResult(t *testing.T) {
 func TestMemoryStoreRejectsInvalidDeleteSuccessResult(t *testing.T) {
 	for _, result := range []OperationResult{
 		{},
-		{Create: &provisioner.CreateWorkloadResult{RuntimeWorkloadID: "default/inst-1", ServiceURL: "http://service.example"}},
+		{Create: &provisioner.CreateWorkloadResult{RuntimeWorkloadID: "default/inst-1", NamespaceUID: "namespace-uid-01", ServiceURL: "http://service.example"}},
 	} {
 		store := NewMemoryStore(sequenceIDs("op-1"))
 		operation, _, err := store.EnqueueDelete(validDeleteCommand("req-1"), 2)

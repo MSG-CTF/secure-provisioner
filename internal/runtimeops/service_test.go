@@ -18,6 +18,7 @@ func TestServiceEnqueuesCreateIdempotently(t *testing.T) {
 	bindings := runtimebinding.NewMemoryStore()
 	create := &recordingCreate{result: provisioner.CreateWorkloadResult{
 		RuntimeWorkloadID: "aws-dev/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge",
+		NamespaceUID:      "namespace-uid-01",
 		ServiceURL:        "https://gateway.example.invalid/instances/018f3f1e-21b8-7a91-a30b-63b3400fd001",
 	}}
 	service := newTestService(t, create, &recordingStatus{}, &recordingDelete{}, bindings)
@@ -76,6 +77,7 @@ func TestServiceCreateWorkloadResolvesZeroBaselineBeforeAdapter(t *testing.T) {
 	resolver := &recordingResolver{resolved: validResolvedPolicy()}
 	create := &recordingCreate{result: provisioner.CreateWorkloadResult{
 		RuntimeWorkloadID: "aws-dev/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge",
+		NamespaceUID:      "namespace-uid-01",
 	}}
 	service := newTestServiceWithCreateAndResolver(
 		t,
@@ -116,6 +118,7 @@ func TestCreateOperationStoresAppliedIsolationPolicy(t *testing.T) {
 	bindings := runtimebinding.NewMemoryStore()
 	create := &recordingCreate{result: provisioner.CreateWorkloadResult{
 		RuntimeWorkloadID: "aws-dev/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge",
+		NamespaceUID:      "namespace-uid-01",
 	}}
 	service := newTestService(t, create, &recordingStatus{}, &recordingDelete{}, bindings)
 	command := createPolicyCommand()
@@ -129,7 +132,8 @@ func TestCreateOperationStoresAppliedIsolationPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantPolicy := validResolvedPolicyFor(command.PolicyRequest)
-	if binding.ChallengeID != "web-chall2" || binding.ChallengeVersion != "2026.08.1" ||
+	if binding.NamespaceUID != create.result.NamespaceUID ||
+		binding.ChallengeID != "web-chall2" || binding.ChallengeVersion != "2026.08.1" ||
 		binding.IsolationProfile != "STANDARD@v1" || binding.ResourceProfile != "SMALL_MULTI@v1" ||
 		!reflect.DeepEqual(binding.ContainerRequirements, wantPolicy.Containers) ||
 		!reflect.DeepEqual(binding.InternalConnections, wantPolicy.InternalConnections) ||
@@ -162,6 +166,7 @@ func TestDirectCreateCleansUpWithIndependentContextWhenBindingSaveFails(t *testi
 	}
 	create := &recordingCreate{result: provisioner.CreateWorkloadResult{
 		RuntimeWorkloadID: "aws-dev/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge",
+		NamespaceUID:      "namespace-uid-01",
 	}}
 	deleteAdapter := &recordingDelete{}
 	service := newTestService(t, create, &recordingStatus{}, deleteAdapter, store)
@@ -183,7 +188,8 @@ func TestDirectCreateCleansUpWithIndependentContextWhenBindingSaveFails(t *testi
 	}
 	if deleteAdapter.command.Reason != provisioner.DeleteReasonCreateFailedCleanup ||
 		deleteAdapter.command.RuntimeWorkloadID != create.result.RuntimeWorkloadID ||
-		deleteAdapter.binding.Namespace != "ctf-018f3f1e21b87a91a30b63b3400fd001" {
+		deleteAdapter.binding.Namespace != "ctf-018f3f1e21b87a91a30b63b3400fd001" ||
+		deleteAdapter.binding.NamespaceUID != create.result.NamespaceUID {
 		t.Fatalf("cleanup command = %#v; binding = %#v", deleteAdapter.command, deleteAdapter.binding)
 	}
 	if _, getErr := store.Store.Get(createCommand().InstanceID); !errors.Is(getErr, runtimebinding.ErrNotFound) {
@@ -197,6 +203,7 @@ func TestDirectCreatePreservesBindingSaveAndCleanupFailures(t *testing.T) {
 	store := &failingSaveBindingStore{Store: runtimebinding.NewMemoryStore(), err: saveCause}
 	create := &recordingCreate{result: provisioner.CreateWorkloadResult{
 		RuntimeWorkloadID: "aws-dev/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge",
+		NamespaceUID:      "namespace-uid-01",
 	}}
 	deleteAdapter := &recordingDelete{err: retryableTestError{cause: cleanupCause}}
 	service := newTestService(t, create, &recordingStatus{}, deleteAdapter, store)
@@ -220,6 +227,7 @@ func TestServiceProcessesCreateAndRecordsBinding(t *testing.T) {
 	bindings := runtimebinding.NewMemoryStore()
 	create := &recordingCreate{result: provisioner.CreateWorkloadResult{
 		RuntimeWorkloadID: "aws-dev/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge",
+		NamespaceUID:      "namespace-uid-01",
 		ServiceURL:        "https://gateway.example.invalid/instances/018f3f1e-21b8-7a91-a30b-63b3400fd001",
 	}}
 	service := newTestService(t, create, &recordingStatus{}, &recordingDelete{}, bindings)
@@ -242,6 +250,7 @@ func TestServiceProcessesCreateAndRecordsBinding(t *testing.T) {
 	}
 	if binding.TargetID != createCommand().TargetID || binding.TeamID != createCommand().TeamID ||
 		binding.Namespace != "ctf-018f3f1e21b87a91a30b63b3400fd001" ||
+		binding.NamespaceUID != create.result.NamespaceUID ||
 		binding.RuntimeWorkloadID != create.result.RuntimeWorkloadID ||
 		binding.ChallengeID != "web-chall1" || binding.ChallengeVersion != "2026.08.1" ||
 		binding.IsolationProfile != "STANDARD@v1" || binding.ResourceProfile != "SMALL_SINGLE@v1" ||
@@ -282,6 +291,7 @@ func TestServiceCleansUpNamespaceWhenBindingSaveFails(t *testing.T) {
 	}
 	create := &recordingCreate{result: provisioner.CreateWorkloadResult{
 		RuntimeWorkloadID: "aws-dev/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge",
+		NamespaceUID:      "namespace-uid-01",
 		ServiceURL:        "https://gateway.example.invalid/instances/018f3f1e-21b8-7a91-a30b-63b3400fd001",
 	}}
 	deleteAdapter := &recordingDelete{}
@@ -304,7 +314,8 @@ func TestServiceCleansUpNamespaceWhenBindingSaveFails(t *testing.T) {
 	}
 	if deleteAdapter.command.Reason != provisioner.DeleteReasonCreateFailedCleanup ||
 		deleteAdapter.command.RuntimeWorkloadID != create.result.RuntimeWorkloadID ||
-		deleteAdapter.binding.Namespace != "ctf-018f3f1e21b87a91a30b63b3400fd001" {
+		deleteAdapter.binding.Namespace != "ctf-018f3f1e21b87a91a30b63b3400fd001" ||
+		deleteAdapter.binding.NamespaceUID != create.result.NamespaceUID {
 		t.Fatalf("cleanup command = %#v, binding = %#v", deleteAdapter.command, deleteAdapter.binding)
 	}
 	if _, err := store.Store.Get(createCommand().InstanceID); !errors.Is(err, runtimebinding.ErrNotFound) {
@@ -706,6 +717,7 @@ func savedBinding(t *testing.T, store runtimebinding.Store) runtimebinding.Bindi
 		TeamID:            18,
 		TargetID:          "aws-dev",
 		Namespace:         "ctf-018f3f1e21b87a91a30b63b3400fd001",
+		NamespaceUID:      "namespace-uid-01",
 		RuntimeWorkloadID: "aws-dev/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge",
 		State:             runtimebinding.StateCreated,
 		CreatedAt:         time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC),

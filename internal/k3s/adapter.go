@@ -117,8 +117,16 @@ func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.Create
 		}
 		return provisioner.CreateWorkloadResult{}, a.failAfterNamespace(cluster.Client, createdNamespace, code, err)
 	}
+	observedNamespace, err := verifyCreatedNamespace(ctx, cluster.Client, resources.Namespace, createdNamespace)
+	if err != nil {
+		if parentErr := ctx.Err(); parentErr != nil {
+			return provisioner.CreateWorkloadResult{}, a.failAfterNamespace(cluster.Client, createdNamespace, "OPERATION_CANCELLED", parentErr)
+		}
+		return provisioner.CreateWorkloadResult{}, a.failAfterNamespace(cluster.Client, createdNamespace, "RESOURCE_APPLY_FAILED", err)
+	}
 	return provisioner.CreateWorkloadResult{
 		RuntimeWorkloadID: resources.RuntimeWorkloadID,
+		NamespaceUID:      string(observedNamespace.UID),
 		ServiceURL:        resources.ServiceURL,
 		Endpoints:         append([]provisioner.WorkloadEndpoint(nil), resources.Endpoints...),
 	}, nil
@@ -127,12 +135,9 @@ func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.Create
 func ensureNamespace(ctx context.Context, client kubernetes.Interface, desired *corev1.Namespace) (*corev1.Namespace, error) {
 	var lastErr error
 	for attempt := 0; attempt < maxReconcileAttempts; attempt++ {
-		existing, err := client.CoreV1().Namespaces().Get(ctx, desired.Name, metav1.GetOptions{})
+		_, err := client.CoreV1().Namespaces().Get(ctx, desired.Name, metav1.GetOptions{})
 		if err == nil {
-			if !approvedSemanticMetadata(existing, desired, true) {
-				return nil, newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
-			}
-			return nil, nil
+			return nil, newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
 		}
 		if !apierrors.IsNotFound(err) {
 			lastErr = err
@@ -155,6 +160,28 @@ func ensureNamespace(ctx context.Context, client kubernetes.Interface, desired *
 		return nil, applyError(createErr)
 	}
 	return nil, applyError(lastErr)
+}
+
+func verifyCreatedNamespace(
+	ctx context.Context,
+	client kubernetes.Interface,
+	desired *corev1.Namespace,
+	created *corev1.Namespace,
+) (*corev1.Namespace, error) {
+	if created == nil || created.UID == "" {
+		return nil, newRuntimeError("RUNTIME_IDENTITY_MISMATCH", false, nil)
+	}
+	observed, err := client.CoreV1().Namespaces().Get(ctx, desired.Name, metav1.GetOptions{})
+	if err != nil {
+		return nil, applyError(err)
+	}
+	if observed.UID == "" || observed.UID != created.UID {
+		return nil, newRuntimeError("RUNTIME_IDENTITY_MISMATCH", false, nil)
+	}
+	if observed.DeletionTimestamp != nil || !approvedSemanticMetadata(observed, desired, false) {
+		return nil, newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
+	}
+	return observed.DeepCopy(), nil
 }
 
 func applyResourceSet(ctx context.Context, client kubernetes.Interface, resources ResourceSet) ([]*appsv1.Deployment, error) {
@@ -955,7 +982,8 @@ func (a *Adapter) failAfterNamespace(
 
 func (a *Adapter) failWithRollback(client kubernetes.Interface, namespace *corev1.Namespace, code string, cause error) error {
 	var runtimeErr *RuntimeError
-	if errors.As(cause, &runtimeErr) && runtimeErr.Code() == "RESOURCE_OWNERSHIP_CONFLICT" {
+	if errors.As(cause, &runtimeErr) &&
+		(runtimeErr.Code() == "RESOURCE_OWNERSHIP_CONFLICT" || runtimeErr.Code() == "RUNTIME_IDENTITY_MISMATCH") {
 		return runtimeErr
 	}
 	rollbackCtx, cancel := context.WithTimeout(context.Background(), a.config.RollbackTimeout)
