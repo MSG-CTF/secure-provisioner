@@ -10,6 +10,7 @@ import (
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func TestBuildNetworkPoliciesCreatesNamespaceWideDefaultDeny(t *testing.T) {
@@ -124,14 +125,14 @@ func TestBuildNetworkPoliciesForOutboundNoneHasNoPublicOrCIDREgress(t *testing.T
 	}}
 	resources := buildNetworkPolicyResources(t, command)
 
+	if policyName, broad := firstBroadEgressPolicy(resources.NetworkPolicies); broad {
+		t.Fatalf("%s has an egress rule without destinations", policyName)
+	}
 	for _, policy := range resources.NetworkPolicies {
 		if strings.Contains(policy.Name, "public-egress") {
 			t.Fatalf("unexpected public egress policy %q", policy.Name)
 		}
 		for _, rule := range policy.Spec.Egress {
-			if len(rule.To) == 0 && len(rule.Ports) != 0 {
-				t.Fatalf("%s has a broad egress destination", policy.Name)
-			}
 			for _, peer := range rule.To {
 				if peer.IPBlock != nil {
 					t.Fatalf("%s contains forbidden CIDR egress %#v", policy.Name, peer.IPBlock)
@@ -146,6 +147,49 @@ func TestBuildNetworkPoliciesForOutboundNoneHasNoPublicOrCIDREgress(t *testing.T
 			}
 		}
 	}
+}
+
+func TestBroadEgressAssertionRejectsEmptyAllowAllRule(t *testing.T) {
+	mutant := []*networkingv1.NetworkPolicy{{
+		ObjectMeta: metav1.ObjectMeta{Name: "mutant-empty-egress-rule"},
+		Spec: networkingv1.NetworkPolicySpec{
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
+			Egress:      []networkingv1.NetworkPolicyEgressRule{{}},
+		},
+	}}
+
+	policyName, broad := firstBroadEgressPolicy(mutant)
+	if !broad || policyName != "mutant-empty-egress-rule" {
+		t.Fatalf("empty egress rule was not detected: policy = %q, detected = %t", policyName, broad)
+	}
+}
+
+func TestBuildNetworkPoliciesPreservesInternalPeerPortPairsAcrossGroupedRules(t *testing.T) {
+	command := validMultiCreateCommand("aws-dev")
+	command.Containers = []provisioner.WorkloadContainer{
+		{Name: "web", Image: "registry.example.invalid/web:latest", Ports: []int{8000}, Expose: true},
+		{Name: "api", Image: "registry.example.invalid/api:latest", Ports: []int{8080, 9090}},
+		{Name: "worker", Image: "registry.example.invalid/worker:latest", Ports: []int{7070}},
+	}
+	command.Policy = resolvedPolicyForCommand(command, "SMALL_MULTI")
+	command.Policy.InternalConnections = []isolation.InternalConnection{
+		{SourceContainer: "web", DestinationContainer: "api", Protocol: isolation.ProtocolTCP, Port: 8080},
+		{SourceContainer: "web", DestinationContainer: "worker", Protocol: isolation.ProtocolTCP, Port: 7070},
+		{SourceContainer: "worker", DestinationContainer: "api", Protocol: isolation.ProtocolTCP, Port: 9090},
+	}
+	resources := buildNetworkPolicyResources(t, command)
+
+	webEgress := requireNetworkPolicy(t, resources.NetworkPolicies, "allow-internal-egress-web")
+	assertInternalEgressRulePairs(t, webEgress.Spec.Egress, ownershipLabels(command), []internalRulePair{
+		{PeerContainer: "api", Protocol: corev1.ProtocolTCP, Port: 8080},
+		{PeerContainer: "worker", Protocol: corev1.ProtocolTCP, Port: 7070},
+	})
+
+	apiIngress := requireNetworkPolicy(t, resources.NetworkPolicies, "allow-internal-ingress-api")
+	assertInternalIngressRulePairs(t, apiIngress.Spec.Ingress, ownershipLabels(command), []internalRulePair{
+		{PeerContainer: "web", Protocol: corev1.ProtocolTCP, Port: 8080},
+		{PeerContainer: "worker", Protocol: corev1.ProtocolTCP, Port: 9090},
+	})
 }
 
 func TestBuildNetworkPoliciesScopesPodSelectorsToOwningTeamAndInstance(t *testing.T) {
@@ -180,27 +224,31 @@ func TestBuildNetworkPoliciesScopesPodSelectorsToOwningTeamAndInstance(t *testin
 }
 
 func TestBuildNetworkPoliciesRejectsMalformedInternalConnections(t *testing.T) {
-	tests := map[string]isolation.InternalConnection{
-		"missing source": {
-			SourceContainer: "missing", DestinationContainer: "internal", Protocol: isolation.ProtocolTCP, Port: 9090,
-		},
-		"missing destination": {
-			SourceContainer: "web", DestinationContainer: "missing", Protocol: isolation.ProtocolTCP, Port: 9090,
-		},
-		"undeclared destination port": {
-			SourceContainer: "web", DestinationContainer: "internal", Protocol: isolation.ProtocolTCP, Port: 7070,
-		},
-		"unsupported protocol": {
-			SourceContainer: "web", DestinationContainer: "internal", Protocol: isolation.Protocol("UDP"), Port: 9090,
-		},
-		"invalid port": {
-			SourceContainer: "web", DestinationContainer: "internal", Protocol: isolation.ProtocolTCP, Port: 0,
-		},
+	valid := isolation.InternalConnection{
+		SourceContainer: "web", DestinationContainer: "internal", Protocol: isolation.ProtocolTCP, Port: 9090,
 	}
-	for name, connection := range tests {
+	tests := map[string][]isolation.InternalConnection{
+		"missing source": {{
+			SourceContainer: "missing", DestinationContainer: "internal", Protocol: isolation.ProtocolTCP, Port: 9090,
+		}},
+		"missing destination": {{
+			SourceContainer: "web", DestinationContainer: "missing", Protocol: isolation.ProtocolTCP, Port: 9090,
+		}},
+		"undeclared destination port": {{
+			SourceContainer: "web", DestinationContainer: "internal", Protocol: isolation.ProtocolTCP, Port: 7070,
+		}},
+		"unsupported protocol": {{
+			SourceContainer: "web", DestinationContainer: "internal", Protocol: isolation.Protocol("UDP"), Port: 9090,
+		}},
+		"invalid port": {{
+			SourceContainer: "web", DestinationContainer: "internal", Protocol: isolation.ProtocolTCP, Port: 0,
+		}},
+		"duplicate connection": {valid, valid},
+	}
+	for name, connections := range tests {
 		t.Run(name, func(t *testing.T) {
 			command := validMultiCreateCommand("aws-dev")
-			command.Policy.InternalConnections = []isolation.InternalConnection{connection}
+			command.Policy.InternalConnections = connections
 			_, err := BuildResourceSet(networkPolicyCluster("aws-dev"), command)
 			if runtimeErrorCode(t, err) != "INVALID_CREATE_COMMAND" {
 				t.Fatalf("code = %q, want INVALID_CREATE_COMMAND", runtimeErrorCode(t, err))
@@ -258,6 +306,12 @@ func TestBuildNetworkPoliciesUsesDeterministicNamesAndOrder(t *testing.T) {
 type networkPolicyPortExpectation struct {
 	Protocol corev1.Protocol
 	Port     int
+}
+
+type internalRulePair struct {
+	PeerContainer string
+	Protocol      corev1.Protocol
+	Port          int
 }
 
 func buildNetworkPolicyResources(t *testing.T, command provisioner.CreateWorkloadCommand) ResourceSet {
@@ -333,6 +387,95 @@ func assertInternalPeerRule(
 	}
 	assertLabelMap(t, subject+" peer selector", peers[0].PodSelector.MatchLabels, wantPeerLabels)
 	assertNetworkPolicyPorts(t, ports, []networkPolicyPortExpectation{{Protocol: corev1.ProtocolTCP, Port: wantPort}})
+}
+
+func firstBroadEgressPolicy(policies []*networkingv1.NetworkPolicy) (string, bool) {
+	for _, policy := range policies {
+		for _, rule := range policy.Spec.Egress {
+			if len(rule.To) == 0 {
+				return policy.Name, true
+			}
+		}
+	}
+	return "", false
+}
+
+func assertInternalEgressRulePairs(
+	t *testing.T,
+	rules []networkingv1.NetworkPolicyEgressRule,
+	ownerLabels map[string]string,
+	want []internalRulePair,
+) {
+	t.Helper()
+	got := make([]internalRulePair, 0, len(rules))
+	for _, rule := range rules {
+		got = append(got, internalRulePairFromRule(t, "egress", rule.To, rule.Ports, ownerLabels))
+	}
+	assertInternalRulePairs(t, got, want)
+}
+
+func assertInternalIngressRulePairs(
+	t *testing.T,
+	rules []networkingv1.NetworkPolicyIngressRule,
+	ownerLabels map[string]string,
+	want []internalRulePair,
+) {
+	t.Helper()
+	got := make([]internalRulePair, 0, len(rules))
+	for _, rule := range rules {
+		got = append(got, internalRulePairFromRule(t, "ingress", rule.From, rule.Ports, ownerLabels))
+	}
+	assertInternalRulePairs(t, got, want)
+}
+
+func internalRulePairFromRule(
+	t *testing.T,
+	direction string,
+	peers []networkingv1.NetworkPolicyPeer,
+	ports []networkingv1.NetworkPolicyPort,
+	ownerLabels map[string]string,
+) internalRulePair {
+	t.Helper()
+	if len(peers) != 1 || peers[0].NamespaceSelector != nil || peers[0].PodSelector == nil {
+		t.Fatalf("%s rule peers = %#v, want one same-namespace pod peer", direction, peers)
+	}
+	if len(ports) != 1 || ports[0].Protocol == nil || ports[0].Port == nil {
+		t.Fatalf("%s rule ports = %#v, want one explicit protocol/port", direction, ports)
+	}
+	wantPeerLabels := copyLabels(ownerLabels)
+	peerContainer := peers[0].PodSelector.MatchLabels[containerNameLabel]
+	wantPeerLabels[containerNameLabel] = peerContainer
+	assertLabelMap(t, direction+" peer selector", peers[0].PodSelector.MatchLabels, wantPeerLabels)
+	return internalRulePair{
+		PeerContainer: peerContainer,
+		Protocol:      *ports[0].Protocol,
+		Port:          ports[0].Port.IntValue(),
+	}
+}
+
+func assertInternalRulePairs(t *testing.T, got, want []internalRulePair) {
+	t.Helper()
+	sort.Slice(got, func(i, j int) bool {
+		if got[i].PeerContainer != got[j].PeerContainer {
+			return got[i].PeerContainer < got[j].PeerContainer
+		}
+		if got[i].Protocol != got[j].Protocol {
+			return got[i].Protocol < got[j].Protocol
+		}
+		return got[i].Port < got[j].Port
+	})
+	sort.Slice(want, func(i, j int) bool {
+		if want[i].PeerContainer != want[j].PeerContainer {
+			return want[i].PeerContainer < want[j].PeerContainer
+		}
+		if want[i].Protocol != want[j].Protocol {
+			return want[i].Protocol < want[j].Protocol
+		}
+		return want[i].Port < want[j].Port
+	})
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("internal rule pairs = %#v, want %#v", got, want)
+	}
 }
 
 func reverseWorkloadContainers(containers []provisioner.WorkloadContainer) []provisioner.WorkloadContainer {
