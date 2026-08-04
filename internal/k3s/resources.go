@@ -33,6 +33,7 @@ type ResourceSet struct {
 	ServiceAccount     *corev1.ServiceAccount
 	ResourceQuota      *corev1.ResourceQuota
 	LimitRange         *corev1.LimitRange
+	NetworkPolicies    []*networkingv1.NetworkPolicy
 	Deployments        []*appsv1.Deployment
 	Services           []*corev1.Service
 	Ingress            *networkingv1.Ingress
@@ -64,6 +65,9 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 	if !validWorkloadCommand(cluster, command, containers) {
 		return ResourceSet{}, newRuntimeError("INVALID_CREATE_COMMAND", false, nil)
 	}
+	if err := cluster.Supports(command.Policy); err != nil {
+		return ResourceSet{}, err
+	}
 	policyContainers, validPolicy := validateResolvedPolicy(command, containers)
 	if !validPolicy {
 		return ResourceSet{}, newRuntimeError("INVALID_CREATE_COMMAND", false, nil)
@@ -74,6 +78,17 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 		return ResourceSet{}, newRuntimeError("INVALID_CREATE_COMMAND", false, nil)
 	}
 	labels := ownershipLabels(command)
+	networkPolicies, validNetworkPolicies := buildNetworkPolicies(
+		cluster,
+		namespace,
+		labels,
+		containers,
+		command.Policy,
+		policyContainers,
+	)
+	if !validNetworkPolicies {
+		return ResourceSet{}, newRuntimeError("INVALID_CREATE_COMMAND", false, nil)
+	}
 	pathType := networkingv1.PathTypePrefix
 	replicas := int32(1)
 	resources := ResourceSet{
@@ -83,6 +98,7 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 		ServiceAccount:     buildRuntimeServiceAccount(namespace, labels),
 		ResourceQuota:      buildRuntimeResourceQuota(namespace, labels, command.Policy, len(containers)),
 		LimitRange:         buildRuntimeLimitRange(namespace, labels, command.Policy, len(containers)),
+		NetworkPolicies:    networkPolicies,
 		Deployments:        make([]*appsv1.Deployment, 0, len(containers)),
 		Services:           make([]*corev1.Service, 0, len(containers)),
 		ExpectedSpecHashes: make(map[string]string, len(containers)),

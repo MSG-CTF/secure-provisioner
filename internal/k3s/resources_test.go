@@ -310,6 +310,14 @@ func validCluster(targetID string) Cluster {
 		TargetID:      targetID,
 		PublicGateway: "https://gateway.example.invalid",
 		IngressClass:  "nginx",
+		SecurityCapabilities: SecurityCapabilities{
+			NetworkPolicyEnforced: true,
+			NetworkPolicyProvider: "kube-router",
+			DNSNamespace:          "kube-system",
+			DNSPodSelector:        map[string]string{"k8s-app": "kube-dns"},
+			IngressNamespace:      "ingress-system",
+			IngressPodSelector:    map[string]string{"app.kubernetes.io/name": "traefik"},
+		},
 	}}
 }
 
