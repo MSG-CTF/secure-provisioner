@@ -171,7 +171,9 @@ Adapter 실패나 생성 rollback은 Binding을 만들지 않으며, 같은 적�
 충돌로 처리하고 생성 리소스를 rollback한다. Adapter 성공 뒤 Binding 저장이
 실패해도 요청 context와 독립된 제한 시간의 cleanup으로 방금 생성한 workload를
 삭제한다. cleanup이 성공하면 `RUNTIME_BINDING_SAVE_FAILED`, cleanup도 실패하면 두
-원인을 보존한 `ROLLBACK_FAILED`로 기록하며 어느 경우에도 Binding은 남기지 않는다.
+원인을 보존한 `ROLLBACK_FAILED`로 기록한다. 두 경우 모두 이번 생성 경로에서는 새
+Binding을 저장하지 않으며, `ErrConflict` 또는 `ErrInvalidTransition`을 일으킨 기존
+Binding은 변경하지 않고 그대로 보존한다.
 
 ## 삭제 접수
 
