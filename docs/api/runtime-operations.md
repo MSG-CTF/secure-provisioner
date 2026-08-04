@@ -580,8 +580,11 @@ NetworkPolicy provider, DNS/Ingress selector와 Strict supplemental-groups 지�
 운영자가 선언한 값이며 런타임 검증 증명이 아니다. Provisioner는 Pod에
 `supplementalGroupsPolicy: Strict`를 지정하고 `supplementalGroups`와 `fsGroup`은
 지정하지 않는다. 실제 Node의 `status.features.supplementalGroupsPolicy`와 CRI 지원
-attestation은 Task 12 / issue `#11`에서 완료해야 한다. Kubernetes v1.33 이상은
-지원하지 않는 Node의 Strict Pod를 거절하므로 workload는 fail-closed로 실패하며,
-이 동작만으로 특정 K3s 버전의 지원을 보장하지 않는다. 실제 NetworkPolicy 격리
-효과는 `#11`, resident-node 및 metadata host boundary attestation은 `#32`에서
-완료해야 production 경계를 충족한다.
+attestation은 Task 12 / issue `#11`에서 완료해야 한다. 기존 활성화 Registry는 새
+Provisioner rollout 전에 `supplemental_groups_policy_strict`를 추가해야 하며, 지원을
+확인하지 않은 target을 capable로 선언하거나 승인하면 안 된다. 이 기능이 alpha였던
+Kubernetes v1.31-v1.32에서는 지원하지 않는 Node가 Strict 요청을 거절하지 않고
+`Merge`로 조용히 fallback할 수 있다. Kubernetes v1.33 이상은 지원하지 않는 Node의
+Strict Pod를 거절하므로 workload는 fail-closed로 실패한다. 이 동작만으로 특정 K3s 버전의
+지원을 보장하지 않는다. 실제 NetworkPolicy 격리 효과는 `#11`, resident-node 및
+metadata host boundary attestation은 `#32`에서 완료해야 production 경계를 충족한다.

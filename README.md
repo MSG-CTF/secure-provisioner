@@ -102,6 +102,9 @@ Registry 예시:
 `null`이면 Registry 설정이 유효하지 않습니다. 명시적인 `false`는 진단을 위해
 로드되지만 workload 생성은 Kubernetes 작업 전에 재시도하지 않는
 `TARGET_CAPABILITY_MISMATCH`로 거절됩니다.
+기존 활성화 Registry도 새 Provisioner를 rollout하기 전에 이 필드를 추가해야
+합니다. 실제 Node/CRI 지원을 확인하지 않은 target은 `true`로 선언하거나
+승인하지 말고 `false`로 유지하거나 비활성화해야 합니다.
 
 PowerShell 실행 예시:
 
@@ -172,8 +175,10 @@ authority가 아닙니다. Registry의 `security_capabilities`도 target capabil
 `supplementalGroupsPolicy: Strict`를 지정하고 `supplementalGroups`와 `fsGroup`은
 지정하지 않지만, 실제 Node의 `status.features.supplementalGroupsPolicy`와 CRI 지원을
 자동으로 증명하지 않습니다. 이 Node/CRI attestation은 Task 12 / issue `#11`의
-후속 범위입니다. Kubernetes v1.33 이상은 해당 기능을 지원하지 않는 Node에
-스케줄된 Strict Pod를 거절하므로 이 경우 workload는 fail-closed로 실패합니다.
-이는 특정 K3s 버전의 지원을 보장한다는 의미가 아닙니다. 실제 NetworkPolicy 격리
-효과와 resident-node/metadata host boundary는 각각 `#11`, `#32`의 검증이 끝날
-때까지 production 완료로 간주하지 않습니다.
+후속 범위입니다. 이 기능이 alpha였던 Kubernetes v1.31-v1.32에서는 지원하지 않는
+Node가 Strict 요청을 거절하지 않고 `Merge`로 조용히 fallback할 수 있으므로 해당
+Node를 capable로 선언하거나 승인하면 안 됩니다. Kubernetes v1.33 이상은 지원하지
+않는 Node의 Strict Pod를 거절하므로 이 경우 workload는 fail-closed로 실패합니다. 이는 특정
+K3s 버전의 지원을 보장한다는 의미가 아닙니다. 실제 NetworkPolicy 격리 효과와
+resident-node/metadata host boundary는 각각 `#11`, `#32`의 검증이 끝날 때까지
+production 완료로 간주하지 않습니다.
