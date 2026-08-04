@@ -29,6 +29,11 @@ type Adapter struct {
 	workloadLocks *workloadLockSet
 }
 
+type appliedResourceSet struct {
+	Deployments []*appsv1.Deployment
+	Services    []*corev1.Service
+}
+
 const (
 	maxReconcileAttempts   = 3
 	defaultRollbackTimeout = 30 * time.Second
@@ -79,7 +84,7 @@ func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.Create
 		}
 		return provisioner.CreateWorkloadResult{}, err
 	}
-	appliedDeployments, err := applyResourceSet(ctx, cluster.Client, resources)
+	applied, err := applyResourceSet(ctx, cluster.Client, resources)
 	if err != nil {
 		if parentErr := ctx.Err(); parentErr != nil {
 			return provisioner.CreateWorkloadResult{}, a.failWithRollback(cluster.Client, resources.Namespace, "OPERATION_CANCELLED", parentErr)
@@ -92,7 +97,7 @@ func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.Create
 	if err := waitUntilReady(
 		readyCtx,
 		cluster.Client,
-		appliedDeployments,
+		applied.Deployments,
 		resources.ExpectedSpecHashes,
 		a.config.PollInterval,
 	); err != nil {
@@ -105,10 +110,19 @@ func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.Create
 		}
 		return provisioner.CreateWorkloadResult{}, a.failWithRollback(cluster.Client, resources.Namespace, code, err)
 	}
+	endpoints := append([]provisioner.WorkloadEndpoint(nil), resources.Endpoints...)
+	serviceURL := resources.ServiceURL
+	if cluster.Config.ExposureMode == ExposureModeNodePort {
+		endpoints, err = BuildNodePortEndpoints(cluster.Config.PublicGateway, applied.Services)
+		if err != nil {
+			return provisioner.CreateWorkloadResult{}, a.failWithRollback(cluster.Client, resources.Namespace, "RESOURCE_APPLY_FAILED", err)
+		}
+		serviceURL = endpoints[0].ServiceURL
+	}
 	return provisioner.CreateWorkloadResult{
 		RuntimeWorkloadID: resources.RuntimeWorkloadID,
-		ServiceURL:        resources.ServiceURL,
-		Endpoints:         append([]provisioner.WorkloadEndpoint(nil), resources.Endpoints...),
+		ServiceURL:        serviceURL,
+		Endpoints:         endpoints,
 	}, nil
 }
 
@@ -147,27 +161,34 @@ func ensureNamespace(ctx context.Context, client kubernetes.Interface, desired *
 	return createAttempted, newRuntimeError("RESOURCE_APPLY_FAILED", true, lastErr)
 }
 
-func applyResourceSet(ctx context.Context, client kubernetes.Interface, resources ResourceSet) ([]*appsv1.Deployment, error) {
+func applyResourceSet(ctx context.Context, client kubernetes.Interface, resources ResourceSet) (appliedResourceSet, error) {
 	if err := preflightResourceSet(ctx, client, resources); err != nil {
-		return nil, err
+		return appliedResourceSet{}, err
 	}
-	appliedDeployments := make([]*appsv1.Deployment, 0, len(resources.Deployments))
+	applied := appliedResourceSet{
+		Deployments: make([]*appsv1.Deployment, 0, len(resources.Deployments)),
+		Services:    make([]*corev1.Service, 0, len(resources.Services)),
+	}
 	for _, deployment := range resources.Deployments {
 		appliedDeployment, err := upsertDeployment(ctx, client, deployment)
 		if err != nil {
-			return nil, err
+			return appliedResourceSet{}, err
 		}
-		appliedDeployments = append(appliedDeployments, appliedDeployment.DeepCopy())
+		applied.Deployments = append(applied.Deployments, appliedDeployment.DeepCopy())
 	}
 	for _, service := range resources.Services {
-		if err := upsertService(ctx, client, service); err != nil {
-			return nil, err
+		appliedService, err := upsertService(ctx, client, service)
+		if err != nil {
+			return appliedResourceSet{}, err
+		}
+		applied.Services = append(applied.Services, appliedService.DeepCopy())
+	}
+	if resources.Ingress != nil {
+		if err := upsertIngress(ctx, client, resources.Ingress); err != nil {
+			return appliedResourceSet{}, err
 		}
 	}
-	if err := upsertIngress(ctx, client, resources.Ingress); err != nil {
-		return nil, err
-	}
-	return appliedDeployments, nil
+	return applied, nil
 }
 
 func preflightResourceSet(ctx context.Context, client kubernetes.Interface, resources ResourceSet) error {
@@ -193,13 +214,15 @@ func preflightResourceSet(ctx context.Context, client kubernetes.Interface, reso
 		}
 	}
 
-	ingress, err := client.NetworkingV1().Ingresses(resources.Ingress.Namespace).Get(ctx, resources.Ingress.Name, metav1.GetOptions{})
-	if err == nil {
-		if !hasOwnership(ingress.Labels, resources.Ingress.Labels) {
-			return newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
+	if resources.Ingress != nil {
+		ingress, err := client.NetworkingV1().Ingresses(resources.Ingress.Namespace).Get(ctx, resources.Ingress.Name, metav1.GetOptions{})
+		if err == nil {
+			if !hasOwnership(ingress.Labels, resources.Ingress.Labels) {
+				return newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
+			}
+		} else if !apierrors.IsNotFound(err) {
+			return applyError(err)
 		}
-	} else if !apierrors.IsNotFound(err) {
-		return applyError(err)
 	}
 	return nil
 }
@@ -239,13 +262,13 @@ func upsertDeployment(ctx context.Context, client kubernetes.Interface, desired 
 	return nil, applyError(lastErr)
 }
 
-func upsertService(ctx context.Context, client kubernetes.Interface, desired *corev1.Service) error {
+func upsertService(ctx context.Context, client kubernetes.Interface, desired *corev1.Service) (*corev1.Service, error) {
 	var lastErr error
 	for attempt := 0; attempt < maxReconcileAttempts; attempt++ {
 		existing, err := client.CoreV1().Services(desired.Namespace).Get(ctx, desired.Name, metav1.GetOptions{})
 		if apierrors.IsNotFound(err) {
-			if _, createErr := client.CoreV1().Services(desired.Namespace).Create(ctx, desired.DeepCopy(), metav1.CreateOptions{}); createErr == nil {
-				return nil
+			if created, createErr := client.CoreV1().Services(desired.Namespace).Create(ctx, desired.DeepCopy(), metav1.CreateOptions{}); createErr == nil {
+				return created, nil
 			} else {
 				lastErr = createErr
 			}
@@ -258,21 +281,21 @@ func upsertService(ctx context.Context, client kubernetes.Interface, desired *co
 			continue
 		}
 		if !hasOwnership(existing.Labels, desired.Labels) {
-			return newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
+			return nil, newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
 		}
 		candidate := desired.DeepCopy()
 		preserveServiceAllocation(candidate, existing)
 		candidate.ResourceVersion = existing.ResourceVersion
-		if _, updateErr := client.CoreV1().Services(desired.Namespace).Update(ctx, candidate, metav1.UpdateOptions{}); updateErr == nil {
-			return nil
+		if updated, updateErr := client.CoreV1().Services(desired.Namespace).Update(ctx, candidate, metav1.UpdateOptions{}); updateErr == nil {
+			return updated, nil
 		} else {
 			lastErr = updateErr
 			if !apierrors.IsConflict(updateErr) {
-				return applyError(updateErr)
+				return nil, applyError(updateErr)
 			}
 		}
 	}
-	return applyError(lastErr)
+	return nil, applyError(lastErr)
 }
 
 func preserveServiceAllocation(desired, existing *corev1.Service) {
@@ -281,6 +304,18 @@ func preserveServiceAllocation(desired, existing *corev1.Service) {
 	desired.Spec.IPFamilies = append([]corev1.IPFamily(nil), existing.Spec.IPFamilies...)
 	desired.Spec.IPFamilyPolicy = existing.Spec.IPFamilyPolicy
 	desired.Spec.HealthCheckNodePort = existing.Spec.HealthCheckNodePort
+	for desiredIndex := range desired.Spec.Ports {
+		if desired.Spec.Ports[desiredIndex].NodePort != 0 {
+			continue
+		}
+		for _, existingPort := range existing.Spec.Ports {
+			if desired.Spec.Ports[desiredIndex].Name == existingPort.Name ||
+				(desired.Spec.Ports[desiredIndex].Name == "" && desired.Spec.Ports[desiredIndex].Port == existingPort.Port && desired.Spec.Ports[desiredIndex].Protocol == existingPort.Protocol) {
+				desired.Spec.Ports[desiredIndex].NodePort = existingPort.NodePort
+				break
+			}
+		}
+	}
 }
 
 func upsertIngress(ctx context.Context, client kubernetes.Interface, desired *networkingv1.Ingress) error {
