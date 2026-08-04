@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -76,7 +78,9 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 		Services:           make([]*corev1.Service, 0, len(containers)),
 		ExpectedSpecHashes: make(map[string]string, len(containers)),
 		Endpoints:          make([]provisioner.WorkloadEndpoint, 0),
-		Ingress: &networkingv1.Ingress{
+	}
+	if cluster.Config.ExposureMode != ExposureModeNodePort {
+		resources.Ingress = &networkingv1.Ingress{
 			ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: namespace, Labels: copyLabels(labels)},
 			Spec: networkingv1.IngressSpec{
 				Rules: []networkingv1.IngressRule{{
@@ -85,10 +89,10 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 					},
 				}},
 			},
-		},
-	}
-	if cluster.Config.IngressClass != "" {
-		resources.Ingress.Spec.IngressClassName = &cluster.Config.IngressClass
+		}
+		if cluster.Config.IngressClass != "" {
+			resources.Ingress.Spec.IngressClassName = &cluster.Config.IngressClass
+		}
 	}
 
 	for index, container := range containers {
@@ -151,11 +155,14 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 				Ports:    servicePorts,
 			},
 		}
+		if container.Expose && cluster.Config.ExposureMode == ExposureModeNodePort {
+			service.Spec.Type = corev1.ServiceTypeNodePort
+		}
 		resources.Deployments = append(resources.Deployments, deployment)
 		resources.Services = append(resources.Services, service)
 		resources.ExpectedSpecHashes[container.Name] = specHash
 
-		if container.Expose {
+		if container.Expose && cluster.Config.ExposureMode != ExposureModeNodePort {
 			for _, port := range container.Ports {
 				path := instancePathSegment + command.InstanceID
 				if len(resources.Endpoints) > 0 {
@@ -182,11 +189,47 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 	}
 
 	resources.RuntimeWorkloadID = RuntimeWorkloadID(command.TargetID, namespace)
-	resources.ServiceURL = resources.Endpoints[0].ServiceURL
+	if len(resources.Endpoints) > 0 {
+		resources.ServiceURL = resources.Endpoints[0].ServiceURL
+	}
 	resources.Deployment = resources.Deployments[0]
 	resources.Service = resources.Services[0]
 	resources.ExpectedSpecHash = resources.ExpectedSpecHashes[resources.Deployment.Name]
 	return resources, nil
+}
+
+func BuildNodePortEndpoints(publicGateway string, services []*corev1.Service) ([]provisioner.WorkloadEndpoint, error) {
+	gateway, err := url.Parse(publicGateway)
+	if err != nil || gateway.Scheme == "" || gateway.Hostname() == "" {
+		return nil, newRuntimeError("RESOURCE_APPLY_FAILED", true, err)
+	}
+
+	endpoints := make([]provisioner.WorkloadEndpoint, 0)
+	for _, service := range services {
+		if service == nil || service.Spec.Type != corev1.ServiceTypeNodePort {
+			continue
+		}
+		containerName := service.Labels[containerNameLabel]
+		if containerName == "" {
+			containerName = service.Name
+		}
+		for _, port := range service.Spec.Ports {
+			if port.NodePort <= 0 {
+				return nil, newRuntimeError("RESOURCE_APPLY_FAILED", true, nil)
+			}
+			endpointURL := *gateway
+			endpointURL.Host = net.JoinHostPort(gateway.Hostname(), strconv.Itoa(int(port.NodePort)))
+			endpoints = append(endpoints, provisioner.WorkloadEndpoint{
+				ContainerName: containerName,
+				Port:          int(port.Port),
+				ServiceURL:    endpointURL.String(),
+			})
+		}
+	}
+	if len(endpoints) == 0 {
+		return nil, newRuntimeError("RESOURCE_APPLY_FAILED", true, nil)
+	}
+	return endpoints, nil
 }
 
 func normalizedCommandContainers(command provisioner.CreateWorkloadCommand) []provisioner.WorkloadContainer {

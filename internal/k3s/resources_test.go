@@ -242,6 +242,67 @@ func TestBuildResourceSetCreatesMultipleContainerResources(t *testing.T) {
 	}
 }
 
+func TestBuildResourceSetUsesNodePortOnlyForExposedContainers(t *testing.T) {
+	command := validMultiCreateCommand("aws-dev")
+	cluster := validCluster("aws-dev")
+	cluster.Config.ExposureMode = ExposureModeNodePort
+	cluster.Config.PublicGateway = "http://203.0.113.10"
+
+	resources, err := BuildResourceSet(cluster, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resources.Ingress != nil {
+		t.Fatalf("Ingress = %#v, want nil in NodePort mode", resources.Ingress)
+	}
+	if resources.Services[0].Name != "web" || resources.Services[0].Spec.Type != corev1.ServiceTypeNodePort {
+		t.Fatalf("public service = %#v, want web NodePort", resources.Services[0])
+	}
+	if resources.Services[1].Name != "internal" || resources.Services[1].Spec.Type != corev1.ServiceTypeClusterIP {
+		t.Fatalf("internal service = %#v, want internal ClusterIP", resources.Services[1])
+	}
+	if len(resources.Endpoints) != 0 || resources.ServiceURL != "" {
+		t.Fatalf("unallocated endpoints = %#v, service URL = %q", resources.Endpoints, resources.ServiceURL)
+	}
+}
+
+func TestBuildNodePortEndpointsUsesKubernetesAllocationsInServiceOrder(t *testing.T) {
+	command := validMultiCreateCommand("aws-dev")
+	cluster := validCluster("aws-dev")
+	cluster.Config.ExposureMode = ExposureModeNodePort
+	cluster.Config.PublicGateway = "http://203.0.113.10"
+	resources, err := BuildResourceSet(cluster, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources.Services[0].Spec.Ports[0].NodePort = 31042
+
+	endpoints, err := BuildNodePortEndpoints(cluster.Config.PublicGateway, resources.Services)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []provisioner.WorkloadEndpoint{{ContainerName: "web", Port: 8080, ServiceURL: "http://203.0.113.10:31042"}}
+	if !reflect.DeepEqual(endpoints, want) {
+		t.Fatalf("endpoints = %#v, want %#v", endpoints, want)
+	}
+}
+
+func TestBuildNodePortEndpointsRejectsMissingAllocation(t *testing.T) {
+	command := validMultiCreateCommand("aws-dev")
+	cluster := validCluster("aws-dev")
+	cluster.Config.ExposureMode = ExposureModeNodePort
+	cluster.Config.PublicGateway = "http://203.0.113.10"
+	resources, err := BuildResourceSet(cluster, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = BuildNodePortEndpoints(cluster.Config.PublicGateway, resources.Services)
+	if runtimeErrorCode(t, err) != "RESOURCE_APPLY_FAILED" {
+		t.Fatalf("code = %q, want RESOURCE_APPLY_FAILED", runtimeErrorCode(t, err))
+	}
+}
+
 func TestBuildResourceSetRejectsInvalidCommandWithoutEmbeddingSensitiveData(t *testing.T) {
 	secretImage := "registry.example.invalid/private/secret-challenge:token-123"
 	for _, mutate := range []func(*provisioner.CreateWorkloadCommand){
