@@ -2,6 +2,18 @@
   "request_id": "runtime-create-018f3f1e-multi",
   "instance_id": "018f3f1e-21b8-7a91-a30b-63b3400fd001",
   "team_id": 18,
+  "challenge_ref": {
+    "challenge_id": "web-chall2",
+    "version": "2026.08.1"
+  },
+  "isolation_ref": {
+    "name": "STANDARD",
+    "version": "v1"
+  },
+  "resource_profile_ref": {
+    "name": "SMALL_MULTI",
+    "version": "v1"
+  },
   "target": {
     "runtime_type": "KUBERNETES",
     "target_id": "aws-k3s-001"
@@ -14,21 +26,38 @@
         "ports": [
           8080
         ],
-        "expose": true
+        "expose": true,
+        "run_as_user": 101,
+        "writable_paths": [
+          {
+            "path": "/tmp",
+            "size_mib": 64
+          }
+        ]
       },
       {
-        "name": "internal",
+        "name": "api",
         "image": "ghcr.io/msg-ctf/challenges/oob-test/web:latest",
         "ports": [
           8080
         ],
-        "expose": false
+        "expose": false,
+        "run_as_user": 10001
       }
     ],
+    "internal_connections": [
+      {
+        "source_container": "web",
+        "destination_container": "api",
+        "protocol": "TCP",
+        "port": 8080
+      }
+    ],
+    "outbound_mode": "NONE",
     "resource_limits": {
-      "cpu_millicores": 500,
-      "memory_mib": 512,
-      "ephemeral_storage_mib": 1024
+      "cpu_millicores": 200,
+      "memory_mib": 256,
+      "ephemeral_storage_mib": 256
     }
   }
 }

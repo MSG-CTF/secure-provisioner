@@ -48,6 +48,18 @@ Content-Type: application/json
   "request_id": "runtime-create-018f3f1e",
   "instance_id": "018f3f1e-21b8-7a91-a30b-63b3400fd001",
   "team_id": 18,
+  "challenge_ref": {
+    "challenge_id": "web-chall2",
+    "version": "2026.08.1"
+  },
+  "isolation_ref": {
+    "name": "STANDARD",
+    "version": "v1"
+  },
+  "resource_profile_ref": {
+    "name": "SMALL_MULTI",
+    "version": "v1"
+  },
   "target": {
     "runtime_type": "KUBERNETES",
     "target_id": "aws-k3s-001"
@@ -58,19 +70,33 @@ Content-Type: application/json
         "name": "web",
         "image": "ghcr.io/msg-ctf/challenges/oob-test/web:latest",
         "ports": [8080],
-        "expose": true
+        "expose": true,
+        "run_as_user": 101,
+        "writable_paths": [
+          {"path": "/tmp", "size_mib": 64}
+        ]
       },
       {
-        "name": "internal",
+        "name": "api",
         "image": "ghcr.io/msg-ctf/challenges/oob-test/web:latest",
-        "ports": [8080, 9090],
-        "expose": false
+        "ports": [8080],
+        "expose": false,
+        "run_as_user": 10001
       }
     ],
+    "internal_connections": [
+      {
+        "source_container": "web",
+        "destination_container": "api",
+        "protocol": "TCP",
+        "port": 8080
+      }
+    ],
+    "outbound_mode": "NONE",
     "resource_limits": {
-      "cpu_millicores": 500,
-      "memory_mib": 512,
-      "ephemeral_storage_mib": 1024
+      "cpu_millicores": 200,
+      "memory_mib": 256,
+      "ephemeral_storage_mib": 256
     }
   }
 }
@@ -80,13 +106,31 @@ Content-Type: application/json
 한다. 각 컨테이너는 내부 포트를 여러 개 가질 수 있다. `expose: true`인
 컨테이너의 포트만 Ingress 접속점으로 공개되며, 적어도 하나는 공개돼야 한다.
 
-`resource_limits`는 문제 런타임 전체의 합산값이다. 현재 구현은 컨테이너 수로
-각 값을 균등 분배하고 나머지를 요청 순서대로 1씩 더한다. 예를 들어 CPU
-501m을 컨테이너 2개에 요청하면 각각 251m, 250m을 배정한다.
+`challenge_ref`, `isolation_ref`, `resource_profile_ref`, `outbound_mode`와 각
+명시적 컨테이너의 `run_as_user`는 마이그레이션 중인 정책 필드다. 이 중 하나라도
+보내면 전부 보내야 하며 일부만 보내거나 빈 객체/값을 명시하면 `400
+INVALID_REQUEST`다. `writable_paths`와 `internal_connections`는 명시적 정책
+요청 안에서 선택 사항이며, 위 예제는 non-root UID, 크기가 제한된 `/tmp`,
+`web -> api:8080/TCP`, 외부 송신 차단 `NONE`을 선언한다. API는 raw Pod spec,
+SecurityContext, ServiceAccount, RBAC, RuntimeClass, host namespace/hostPath 같은
+Kubernetes 보안 설정을 받지 않는다.
+
+`resource_limits`는 문제 런타임 전체의 합산값이며 `resource_profile_ref`의
+trusted profile과 정확히 일치해야 한다. MVP는 `SMALL_SINGLE@v1`을
+100m/128MiB/128MiB, `SMALL_MULTI@v1`을 200m/256MiB/256MiB로 해석한다.
+일치하지 않거나 알려지지 않은 profile, root UID, 금지된 writable path,
+`PUBLIC_INTERNET` 같은 syntactically valid하지만 승인되지 않은 요구사항은
+`422 ISOLATION_POLICY_REJECTED`다.
 
 기존 단일 컨테이너 요청의 `image`와 `container_port`도 계속 허용한다. 이 형식은
 서버에서 이름 `challenge`, `expose: true`인 컨테이너 1개로 변환한다.
 `containers`와 기존 필드는 한 요청에서 함께 사용할 수 없다.
+
+정책 마이그레이션 필드를 **모두 생략한** 기존 요청도 계속 허용한다. 서버는
+`legacy@v1`, `STANDARD@v1`, 컨테이너 수에 따른 `SMALL_SINGLE@v1` 또는
+`SMALL_MULTI@v1`, 각 컨테이너 UID `10001`, 빈 writable/internal connection,
+`outbound_mode: NONE`을 적용하고 profile의 자원값으로 정규화한다. 이는 wire
+호환을 위한 임시 기본값이지 caller가 baseline을 선택하거나 덮어쓰는 기능이 아니다.
 
 예제의 GHCR 주소는 로컬 통합 테스트용 입력일 뿐이며 코드에 고정되지 않는다.
 비공개 Package라면 K3s 노드에 GHCR pull credential을 별도로 설정해야 한다.
@@ -113,6 +157,15 @@ Retry-After: 2
 
 동일한 요청을 반복하면 같은 `operation_id`와 현재 상태를 반환하며
 `created`는 `false`다.
+
+CREATE adapter가 성공한 뒤에만 Runtime Binding을 저장한다. Binding에는
+적용된 challenge ID/version, `STANDARD@v1` 같은 isolation profile identity,
+resource profile identity, resolver가 승인한 컨테이너 UID/port/writable path,
+내부 연결, outbound mode와 자원 합산값을 방어적으로 복사해 기록한다. raw 요청,
+이미지 credential, baseline 보안 플래그 또는 Kubernetes 설정은 기록하지 않는다.
+Adapter 실패나 생성 rollback은 Binding을 만들지 않으며, 같은 적용 결과의 멱등
+재실행은 기존 Binding을 보존한다. 같은 instance에 다른 적용 정책을 저장하려 하면
+충돌로 처리하고 생성 리소스를 rollback한다.
 
 ## 삭제 접수
 
@@ -419,6 +472,7 @@ Scheduler가 처리한 비동기 Operation의 최종 실패는 서로 다른 계
 | `POST /internal/v1/instances` | 400 | `INVALID_REQUEST` | JSON, UUID, enum 또는 필수 필드가 유효하지 않음 | 접수 거절; Operation/Worker 없음 |
 | `POST /internal/v1/instances` | 409 | `REQUEST_ID_CONFLICT` | `request_id`가 다른 명령에 이미 사용됨 | 접수 거절; 기존 Operation은 그대로 유지 |
 | `POST /internal/v1/instances` | 415 | `UNSUPPORTED_MEDIA_TYPE` | `Content-Type`이 `application/json`이 아님 | 접수 거절; Operation/Worker 없음 |
+| `POST /internal/v1/instances` | 422 | `ISOLATION_POLICY_REJECTED` | 형식은 유효하지만 trusted resolver가 profile 또는 요구사항을 승인하지 않음 | 접수 거절; Operation/Worker/Binding 없음 |
 | `POST /internal/v1/instances` | 502 | `CREATE_QUEUE_FAILED` | 생성 Operation을 queue에 기록하지 못함 | 접수 거절; Worker 실행 없음 |
 | `DELETE /internal/v1/instances/{instance_id}` | 400 | `INVALID_REQUEST` | JSON, 경로/본문 값, enum 또는 필수 필드가 유효하지 않음 | 접수 거절; Operation/Worker 없음 |
 | `DELETE /internal/v1/instances/{instance_id}` | 404 | `INSTANCE_NOT_FOUND` | Instance Binding이 없음 | 접수 거절; Operation/Worker 없음 |
@@ -491,3 +545,11 @@ Scheduler가 처리한 비동기 Operation의 최종 실패는 서로 다른 계
 현재 Operation Store와 Binding Store는 인메모리 구현이다. 프로세스를
 재시작하면 작업과 Binding이 복구되지 않는다. 운영 영속 저장소가
 구현되기 전까지 API는 재시작 내구성을 보장하지 않는다.
+
+MVP profile ref는 `name`과 `version`만 사용한다. immutable digest 또는 Catalog
+assignment authority가 아직 아니므로 이 ref만으로 production-grade policy
+attestation을 주장하지 않는다. Target Registry의 `security_capabilities`도
+NetworkPolicy provider와 DNS/Ingress selector를 운영자가 선언한 값이며 런타임
+검증 증명이 아니다. 실제 K3s NetworkPolicy 격리 효과는 `#11`, resident-node 및
+metadata host boundary attestation은 `#32`에서 완료해야 production 경계를
+충족한다.

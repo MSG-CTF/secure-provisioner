@@ -2,8 +2,11 @@ package runtimebinding
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"time"
+
+	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
 )
 
 type State string
@@ -22,15 +25,23 @@ var (
 )
 
 type Binding struct {
-	InstanceID        string
-	TeamID            int64
-	TargetID          string
-	Namespace         string
-	RuntimeWorkloadID string
-	State             State
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
-	DeletedAt         *time.Time
+	InstanceID            string
+	TeamID                int64
+	TargetID              string
+	Namespace             string
+	RuntimeWorkloadID     string
+	ChallengeID           string
+	ChallengeVersion      string
+	IsolationProfile      string
+	ResourceProfile       string
+	ContainerRequirements []isolation.ContainerRequirement
+	InternalConnections   []isolation.InternalConnection
+	OutboundMode          isolation.OutboundMode
+	ResourceLimits        isolation.ResourceLimits
+	State                 State
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+	DeletedAt             *time.Time
 }
 
 type Store interface {
@@ -58,11 +69,34 @@ func samePlacement(first, second Binding) bool {
 		first.TeamID == second.TeamID &&
 		first.TargetID == second.TargetID &&
 		first.Namespace == second.Namespace &&
-		first.RuntimeWorkloadID == second.RuntimeWorkloadID
+		first.RuntimeWorkloadID == second.RuntimeWorkloadID &&
+		first.ChallengeID == second.ChallengeID &&
+		first.ChallengeVersion == second.ChallengeVersion &&
+		first.IsolationProfile == second.IsolationProfile &&
+		first.ResourceProfile == second.ResourceProfile &&
+		reflect.DeepEqual(first.ContainerRequirements, second.ContainerRequirements) &&
+		reflect.DeepEqual(first.InternalConnections, second.InternalConnections) &&
+		first.OutboundMode == second.OutboundMode &&
+		first.ResourceLimits == second.ResourceLimits
 }
 
 func copyBinding(binding Binding) Binding {
 	copied := binding
+	if binding.ContainerRequirements != nil {
+		copied.ContainerRequirements = make([]isolation.ContainerRequirement, len(binding.ContainerRequirements))
+		for index, requirement := range binding.ContainerRequirements {
+			copied.ContainerRequirements[index] = requirement
+			if requirement.Ports != nil {
+				copied.ContainerRequirements[index].Ports = append([]int{}, requirement.Ports...)
+			}
+			if requirement.WritablePaths != nil {
+				copied.ContainerRequirements[index].WritablePaths = append([]isolation.WritablePath{}, requirement.WritablePaths...)
+			}
+		}
+	}
+	if binding.InternalConnections != nil {
+		copied.InternalConnections = append([]isolation.InternalConnection{}, binding.InternalConnections...)
+	}
 	if binding.DeletedAt != nil {
 		deletedAt := *binding.DeletedAt
 		copied.DeletedAt = &deletedAt

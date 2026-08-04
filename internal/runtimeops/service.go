@@ -112,16 +112,7 @@ func (s *Service) CreateWorkload(ctx context.Context, command provisioner.Create
 		return provisioner.CreateWorkloadResult{}, err
 	}
 	now := s.now().UTC()
-	_, _, err = s.bindings.SaveCreated(runtimebinding.Binding{
-		InstanceID:        command.InstanceID,
-		TeamID:            command.TeamID,
-		TargetID:          command.TargetID,
-		Namespace:         namespace,
-		RuntimeWorkloadID: result.RuntimeWorkloadID,
-		State:             runtimebinding.StateCreated,
-		CreatedAt:         now,
-		UpdatedAt:         now,
-	})
+	_, _, err = s.bindings.SaveCreated(createdBinding(command, result, namespace, now))
 	if err != nil {
 		return provisioner.CreateWorkloadResult{}, err
 	}
@@ -159,16 +150,7 @@ func (a *bindingCreateAdapter) CreateWorkload(ctx context.Context, command provi
 		return provisioner.CreateWorkloadResult{}, err
 	}
 	now := a.now().UTC()
-	binding := runtimebinding.Binding{
-		InstanceID:        command.InstanceID,
-		TeamID:            command.TeamID,
-		TargetID:          command.TargetID,
-		Namespace:         namespace,
-		RuntimeWorkloadID: result.RuntimeWorkloadID,
-		State:             runtimebinding.StateCreated,
-		CreatedAt:         now,
-		UpdatedAt:         now,
-	}
+	binding := createdBinding(command, result, namespace, now)
 	if _, _, err := a.bindings.SaveCreated(binding); err != nil {
 		cleanupErr := a.cleanup.DeleteWorkload(ctx, provisioner.DeleteWorkloadCommand{
 			RequestID:         command.RequestID,
@@ -185,6 +167,36 @@ func (a *bindingCreateAdapter) CreateWorkload(ctx context.Context, command provi
 		return provisioner.CreateWorkloadResult{}, err
 	}
 	return result, nil
+}
+
+func createdBinding(
+	command provisioner.CreateWorkloadCommand,
+	result provisioner.CreateWorkloadResult,
+	namespace string,
+	createdAt time.Time,
+) runtimebinding.Binding {
+	return runtimebinding.Binding{
+		InstanceID:            command.InstanceID,
+		TeamID:                command.TeamID,
+		TargetID:              command.TargetID,
+		Namespace:             namespace,
+		RuntimeWorkloadID:     result.RuntimeWorkloadID,
+		ChallengeID:           command.Policy.ChallengeID,
+		ChallengeVersion:      command.ChallengeRef.Version,
+		IsolationProfile:      profileIdentity(command.Policy.IsolationRef),
+		ResourceProfile:       profileIdentity(command.Policy.ResourceRef),
+		ContainerRequirements: command.Policy.Containers,
+		InternalConnections:   command.Policy.InternalConnections,
+		OutboundMode:          command.Policy.OutboundMode,
+		ResourceLimits:        command.Policy.ResourceLimits,
+		State:                 runtimebinding.StateCreated,
+		CreatedAt:             createdAt,
+		UpdatedAt:             createdAt,
+	}
+}
+
+func profileIdentity(ref isolation.ProfileRef) string {
+	return ref.Name + "@" + ref.Version
 }
 
 func (s *Service) GetRuntimeStatus(ctx context.Context, instanceID string) (k3s.RuntimeStatus, error) {

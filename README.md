@@ -15,9 +15,21 @@ CTF 문제 인스턴스의 K3s 워크로드 생성·삭제와 상태 조회를 �
 - 컨테이너 상태, 요청량·제한량, Metrics 사용량 조회
 - 단일 노드의 Condition, capacity, allocatable, requested, schedulable 조회
 - Registry에 등록된 AWS·GCP·NCP K3s target을 `target_id`로 직접 선택
+- `STANDARD@v1` 격리 baseline, non-root UID, 제한된 writable path,
+  명시적 내부 연결과 기본 `NONE` outbound 정책 적용
+- 적용된 challenge/profile identity와 resolver 승인 요구사항을 Runtime Binding에 기록
 
 API 계약은 [런타임 API 명세](docs/api/runtime-operations.md)와
 [OpenAPI](docs/api/secure-provisioner.openapi.yaml)에 정리되어 있습니다.
+
+새 Scheduler 요청은 `challenge_ref`, `isolation_ref`, `resource_profile_ref`,
+`outbound_mode`와 각 명시적 컨테이너의 `run_as_user`를 all-or-none으로 보냅니다.
+[다중 컨테이너 예제](examples/requests/create-multi-container.json)는 non-root
+`web`/`api`, 크기가 제한된 `/tmp`, `web -> api:8080/TCP`, outbound `NONE`을
+보여줍니다. raw Kubernetes/보안 설정은 API 계약이 아닙니다. 정책 필드를 모두
+생략한 기존 요청은 임시 호환 경로에서 `legacy@v1`, `STANDARD@v1`, 컨테이너
+수에 맞는 `SMALL_SINGLE@v1`/`SMALL_MULTI@v1`, UID `10001`, outbound `NONE`으로
+정규화됩니다. 일부 정책 필드만 보내는 요청은 호환 요청으로 간주하지 않습니다.
 
 ## 실행 설정
 
@@ -48,6 +60,14 @@ Registry 예시:
       "kubeconfig_path": "C:/secure/kubeconfigs/aws-k3s-001.yaml",
       "public_gateway": "https://gateway.example.com",
       "ingress_class": "traefik",
+      "security_capabilities": {
+        "network_policy_enforced": true,
+        "network_policy_provider": "kube-router",
+        "dns_namespace": "kube-system",
+        "dns_pod_selector": {"k8s-app": "kube-dns"},
+        "ingress_namespace": "kube-system",
+        "ingress_pod_selector": {"app.kubernetes.io/name": "traefik"}
+      },
       "enabled": true
     },
     {
@@ -58,6 +78,14 @@ Registry 예시:
       "kubeconfig_path": "C:/secure/kubeconfigs/gcp-k3s-001.yaml",
       "public_gateway": "https://gateway-gcp.example.com",
       "ingress_class": "traefik",
+      "security_capabilities": {
+        "network_policy_enforced": true,
+        "network_policy_provider": "kube-router",
+        "dns_namespace": "kube-system",
+        "dns_pod_selector": {"k8s-app": "kube-dns"},
+        "ingress_namespace": "kube-system",
+        "ingress_pod_selector": {"app.kubernetes.io/name": "traefik"}
+      },
       "enabled": true
     }
   ]
@@ -129,3 +157,9 @@ npx --yes @redocly/cli lint docs/api/secure-provisioner.openapi.yaml
 프로세스를 재시작하면 진행 중 작업과 바인딩이 복구되지 않으므로 운영 전
 영속 Store가 필요합니다. 실제 비공개 문제 이미지의 Registry 인증·pull
 통합 검증은 별도 단계입니다.
+
+MVP profile ref는 `name`/`version`뿐이며 immutable digest나 Catalog assignment
+authority가 아닙니다. Registry의 `security_capabilities`도 target capability의
+선언값이지 실제 enforcement attestation이 아닙니다. 실제 K3s NetworkPolicy 격리
+효과는 `#11`, resident-node/metadata host boundary는 `#32`에서 검증되기 전까지
+production 완료로 간주하지 않습니다.

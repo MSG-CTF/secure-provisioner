@@ -112,6 +112,45 @@ func TestServiceCreateWorkloadRejectsPolicyBeforeAdapter(t *testing.T) {
 	}
 }
 
+func TestCreateOperationStoresAppliedIsolationPolicy(t *testing.T) {
+	bindings := runtimebinding.NewMemoryStore()
+	create := &recordingCreate{result: provisioner.CreateWorkloadResult{
+		RuntimeWorkloadID: "aws-dev/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge",
+	}}
+	service := newTestService(t, create, &recordingStatus{}, &recordingDelete{}, bindings)
+	command := createPolicyCommand()
+
+	result, err := service.CreateWorkload(context.Background(), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := bindings.Get(command.InstanceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPolicy := validResolvedPolicyFor(command.PolicyRequest)
+	if binding.ChallengeID != "web-chall2" || binding.ChallengeVersion != "2026.08.1" ||
+		binding.IsolationProfile != "STANDARD@v1" || binding.ResourceProfile != "SMALL_MULTI@v1" ||
+		!reflect.DeepEqual(binding.ContainerRequirements, wantPolicy.Containers) ||
+		!reflect.DeepEqual(binding.InternalConnections, wantPolicy.InternalConnections) ||
+		binding.OutboundMode != isolation.OutboundNone || binding.ResourceLimits != wantPolicy.ResourceLimits {
+		t.Fatalf("binding = %#v; result = %#v", binding, result)
+	}
+}
+
+func TestDirectCreateFailureDoesNotRecordBinding(t *testing.T) {
+	bindings := runtimebinding.NewMemoryStore()
+	create := &recordingCreate{err: errors.New("create failed")}
+	service := newTestService(t, create, &recordingStatus{}, &recordingDelete{}, bindings)
+
+	if _, err := service.CreateWorkload(context.Background(), createPolicyCommand()); err == nil {
+		t.Fatal("CreateWorkload() error = nil")
+	}
+	if _, err := bindings.Get(createPolicyCommand().InstanceID); !errors.Is(err, runtimebinding.ErrNotFound) {
+		t.Fatalf("binding Get() error = %v", err)
+	}
+}
+
 func TestServiceProcessesCreateAndRecordsBinding(t *testing.T) {
 	bindings := runtimebinding.NewMemoryStore()
 	create := &recordingCreate{result: provisioner.CreateWorkloadResult{
@@ -138,7 +177,11 @@ func TestServiceProcessesCreateAndRecordsBinding(t *testing.T) {
 	}
 	if binding.TargetID != createCommand().TargetID || binding.TeamID != createCommand().TeamID ||
 		binding.Namespace != "ctf-018f3f1e21b87a91a30b63b3400fd001" ||
-		binding.RuntimeWorkloadID != create.result.RuntimeWorkloadID {
+		binding.RuntimeWorkloadID != create.result.RuntimeWorkloadID ||
+		binding.ChallengeID != "web-chall1" || binding.ChallengeVersion != "2026.08.1" ||
+		binding.IsolationProfile != "STANDARD@v1" || binding.ResourceProfile != "SMALL_SINGLE@v1" ||
+		!reflect.DeepEqual(binding.ContainerRequirements, validResolvedPolicy().Containers) ||
+		binding.OutboundMode != isolation.OutboundNone {
 		t.Fatalf("binding = %#v", binding)
 	}
 	stopWorker(t, cancel, workerDone)
@@ -196,6 +239,9 @@ func TestServiceCleansUpNamespaceWhenBindingSaveFails(t *testing.T) {
 		deleteAdapter.binding.Namespace != "ctf-018f3f1e21b87a91a30b63b3400fd001" {
 		t.Fatalf("cleanup command = %#v, binding = %#v", deleteAdapter.command, deleteAdapter.binding)
 	}
+	if _, err := store.Store.Get(createCommand().InstanceID); !errors.Is(err, runtimebinding.ErrNotFound) {
+		t.Fatalf("binding after rollback Get() error = %v", err)
+	}
 	stopWorker(t, cancel, workerDone)
 }
 
@@ -209,7 +255,7 @@ func TestServiceReadsStatusFromStoredTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.Phase != "READY" || source.binding != binding {
+	if status.Phase != "READY" || !reflect.DeepEqual(source.binding, binding) {
 		t.Fatalf("status = %#v, source binding = %#v", status, source.binding)
 	}
 }
@@ -527,11 +573,42 @@ func createCommand() provisioner.CreateWorkloadCommand {
 }
 
 func validResolvedPolicy() isolation.ResolvedPolicy {
-	policy, err := isolation.NewStaticResolver().Resolve(createCommand().PolicyRequest)
+	return validResolvedPolicyFor(createCommand().PolicyRequest)
+}
+
+func validResolvedPolicyFor(request isolation.Request) isolation.ResolvedPolicy {
+	policy, err := isolation.NewStaticResolver().Resolve(request)
 	if err != nil {
 		panic(err)
 	}
 	return policy
+}
+
+func createPolicyCommand() provisioner.CreateWorkloadCommand {
+	command := createCommand()
+	command.ChallengeRef = provisioner.ChallengeRef{ChallengeID: "web-chall2", Version: "2026.08.1"}
+	command.Containers = []provisioner.WorkloadContainer{
+		{Name: "web", Image: "registry.example.invalid/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Ports: []int{8000}, Expose: true},
+		{Name: "api", Image: "registry.example.invalid/api@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Ports: []int{8080}},
+	}
+	command.PolicyRequest = isolation.Request{
+		ChallengeID:  "web-chall2",
+		IsolationRef: isolation.ProfileRef{Name: "STANDARD", Version: "v1"},
+		ResourceRef:  isolation.ProfileRef{Name: "SMALL_MULTI", Version: "v1"},
+		Containers: []isolation.ContainerRequirement{
+			{Name: "web", Ports: []int{8000}, RunAsUser: 101, WritablePaths: []isolation.WritablePath{{Path: "/tmp", SizeMiB: 64}}},
+			{Name: "api", Ports: []int{8080}, RunAsUser: 10001},
+		},
+		InternalConnections: []isolation.InternalConnection{{
+			SourceContainer: "web", DestinationContainer: "api", Protocol: isolation.ProtocolTCP, Port: 8080,
+		}},
+		OutboundMode: isolation.OutboundNone,
+		ResourceLimits: isolation.ResourceLimits{
+			CPUMillicores: 200, MemoryMiB: 256, EphemeralStorageMiB: 256,
+		},
+	}
+	command.ResourceLimits = provisioner.ResourceLimits{CPUMillicores: 200, MemoryMiB: 256, EphemeralStorageMiB: 256}
+	return command
 }
 
 func savedBinding(t *testing.T, store runtimebinding.Store) runtimebinding.Binding {

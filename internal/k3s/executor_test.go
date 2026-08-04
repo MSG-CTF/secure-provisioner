@@ -72,7 +72,7 @@ func TestExecutorRoutesDeleteUsingStoredBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if deleteAdapter.calls != 1 || deleteAdapter.command != command || deleteAdapter.binding != binding {
+	if deleteAdapter.calls != 1 || deleteAdapter.command != command || !reflect.DeepEqual(deleteAdapter.binding, binding) {
 		t.Fatalf("delete call = %#v", deleteAdapter)
 	}
 	if !result.DeleteCompleted || result.Create != nil {
