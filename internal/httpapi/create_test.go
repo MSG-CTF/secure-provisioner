@@ -2,11 +2,13 @@ package httpapi
 
 import (
 	"encoding/json"
+	"os"
 	"reflect"
 	"testing"
 
 	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
+	"sigs.k8s.io/yaml"
 )
 
 func TestCreateWorkloadRequestDecodesMultipleContainers(t *testing.T) {
@@ -151,7 +153,7 @@ func TestCreateWorkloadRequestDefaultsLegacyMultiContainerPolicy(t *testing.T) {
 		"workload":{
 			"containers":[
 				{"name":"web","image":"web:latest","ports":[8080],"expose":true},
-				{"name":"api","image":"api:latest","ports":[8080],"expose":false}
+				{"name":"api","image":"api:latest","ports":[8080]}
 			],
 			"resource_limits":{"cpu_millicores":501,"memory_mib":513,"ephemeral_storage_mib":1025}
 		}
@@ -168,6 +170,79 @@ func TestCreateWorkloadRequestDefaultsLegacyMultiContainerPolicy(t *testing.T) {
 		command.PolicyRequest.Containers[1].RunAsUser != 10001 ||
 		command.PolicyRequest.ResourceLimits != (isolation.ResourceLimits{CPUMillicores: 200, MemoryMiB: 256, EphemeralStorageMiB: 256}) {
 		t.Fatalf("legacy multi command = %#v", command)
+	}
+}
+
+func TestCreateWorkloadRequestAcceptsNullableOptionalPolicyRequirements(t *testing.T) {
+	var request CreateWorkloadRequest
+	if err := json.Unmarshal([]byte(`{
+		"request_id":"req-nullable-policy",
+		"instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001",
+		"team_id":18,
+		"challenge_ref":{"challenge_id":"web-chall2","version":"2026.08.1"},
+		"isolation_ref":{"name":"STANDARD","version":"v1"},
+		"resource_profile_ref":{"name":"SMALL_MULTI","version":"v1"},
+		"target":{"runtime_type":"KUBERNETES","target_id":"aws-dev"},
+		"workload":{
+			"containers":[
+				{"name":"web","image":"web:latest","ports":[8080],"expose":true,"run_as_user":101,"writable_paths":null},
+				{"name":"api","image":"api:latest","ports":[8080],"expose":null,"run_as_user":10001}
+			],
+			"internal_connections":null,
+			"outbound_mode":"NONE",
+			"resource_limits":{"cpu_millicores":200,"memory_mib":256,"ephemeral_storage_mib":256}
+		}
+	}`), &request); err != nil {
+		t.Fatal(err)
+	}
+	if err := request.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	command := request.ToCommand()
+	if command.Containers[1].Expose || command.PolicyRequest.Containers[1].RunAsUser != 10001 ||
+		len(command.PolicyRequest.Containers[0].WritablePaths) != 0 || len(command.PolicyRequest.InternalConnections) != 0 {
+		t.Fatalf("command = %#v", command)
+	}
+}
+
+func TestDocumentedCreateRequestExamplesDecodeAndValidate(t *testing.T) {
+	specification, err := os.ReadFile("../../docs/api/secure-provisioner.openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Paths map[string]struct {
+			Post struct {
+				RequestBody struct {
+					Content map[string]struct {
+						Examples map[string]struct {
+							Value any `json:"value"`
+						} `json:"examples"`
+					} `json:"content"`
+				} `json:"requestBody"`
+			} `json:"post"`
+		} `json:"paths"`
+	}
+	if err := yaml.Unmarshal(specification, &document); err != nil {
+		t.Fatal(err)
+	}
+	examples := document.Paths["/internal/v1/instances"].Post.RequestBody.Content["application/json"].Examples
+	for _, name := range []string{"MultiContainer", "LegacyMultiContainer", "ExplicitNullableRequirements"} {
+		example, found := examples[name]
+		if !found {
+			t.Fatalf("OpenAPI create example %q not found", name)
+		}
+		encoded, err := json.Marshal(example.Value)
+		if err != nil {
+			t.Fatalf("marshal %s: %v", name, err)
+		}
+		var request CreateWorkloadRequest
+		if err := json.Unmarshal(encoded, &request); err != nil {
+			t.Fatalf("decode %s: %v", name, err)
+		}
+		if err := request.Validate(); err != nil {
+			t.Fatalf("validate %s: %v", name, err)
+		}
 	}
 }
 

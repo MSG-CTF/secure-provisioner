@@ -173,7 +173,8 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 		operations.NewMemoryStore(nil),
 		isolation.NewStaticResolver(),
 		runtimeops.Config{
-			MaxAttempts: config.MaxAttempts,
+			MaxAttempts:    config.MaxAttempts,
+			CleanupTimeout: config.RollbackTimeout,
 			Worker: operations.WorkerConfig{
 				Concurrency: config.WorkerConcurrency,
 				Backoff:     operationBackoff,

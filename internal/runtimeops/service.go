@@ -15,6 +15,8 @@ import (
 
 var ErrBindingMismatch = errors.New("instance runtime binding mismatch")
 
+const defaultCreateCleanupTimeout = 30 * time.Second
+
 type CreateAdapter interface {
 	CreateWorkload(context.Context, provisioner.CreateWorkloadCommand) (provisioner.CreateWorkloadResult, error)
 }
@@ -28,21 +30,23 @@ type DeleteAdapter interface {
 }
 
 type Config struct {
-	MaxAttempts int
-	Worker      operations.WorkerConfig
+	MaxAttempts    int
+	CleanupTimeout time.Duration
+	Worker         operations.WorkerConfig
 }
 
 type Service struct {
-	create      CreateAdapter
-	status      StatusSource
-	delete      DeleteAdapter
-	bindings    runtimebinding.Store
-	operations  operations.Store
-	resolver    isolation.Resolver
-	worker      *operations.Worker
-	maxAttempts int
-	now         func() time.Time
-	enqueueMu   sync.Mutex
+	create          CreateAdapter
+	status          StatusSource
+	delete          DeleteAdapter
+	bindings        runtimebinding.Store
+	operations      operations.Store
+	resolver        isolation.Resolver
+	worker          *operations.Worker
+	maxAttempts     int
+	now             func() time.Time
+	enqueueMu       sync.Mutex
+	createdBindings *createdBindingRecorder
 }
 
 func NewService(
@@ -54,14 +58,22 @@ func NewService(
 	resolver isolation.Resolver,
 	config Config,
 ) (*Service, error) {
-	if create == nil || status == nil || deleteAdapter == nil || bindings == nil || operationStore == nil || resolver == nil || config.MaxAttempts <= 0 {
+	if create == nil || status == nil || deleteAdapter == nil || bindings == nil || operationStore == nil || resolver == nil ||
+		config.MaxAttempts <= 0 || config.CleanupTimeout < 0 {
 		return nil, errors.New("runtime service dependencies are required")
 	}
+	if config.CleanupTimeout == 0 {
+		config.CleanupTimeout = defaultCreateCleanupTimeout
+	}
+	createdBindings := &createdBindingRecorder{
+		cleanup:        deleteAdapter,
+		bindings:       bindings,
+		cleanupTimeout: config.CleanupTimeout,
+		now:            time.Now,
+	}
 	recordingCreate := &bindingCreateAdapter{
-		inner:    create,
-		cleanup:  deleteAdapter,
-		bindings: bindings,
-		now:      time.Now,
+		inner:           create,
+		createdBindings: createdBindings,
 	}
 	recordingDelete := &bindingDeleteAdapter{inner: deleteAdapter, bindings: bindings, now: time.Now}
 	executor, err := k3s.NewExecutorWithDelete(recordingCreate, recordingDelete, bindings)
@@ -73,17 +85,18 @@ func NewService(
 		return nil, err
 	}
 	service := &Service{
-		create:      create,
-		status:      status,
-		delete:      deleteAdapter,
-		bindings:    bindings,
-		operations:  operationStore,
-		resolver:    resolver,
-		worker:      worker,
-		maxAttempts: config.MaxAttempts,
-		now:         time.Now,
+		create:          create,
+		status:          status,
+		delete:          deleteAdapter,
+		bindings:        bindings,
+		operations:      operationStore,
+		resolver:        resolver,
+		worker:          worker,
+		maxAttempts:     config.MaxAttempts,
+		now:             time.Now,
+		createdBindings: createdBindings,
 	}
-	recordingCreate.now = func() time.Time { return service.now() }
+	createdBindings.now = func() time.Time { return service.now() }
 	recordingDelete.now = func() time.Time { return service.now() }
 	return service, nil
 }
@@ -107,13 +120,7 @@ func (s *Service) CreateWorkload(ctx context.Context, command provisioner.Create
 	if err != nil {
 		return provisioner.CreateWorkloadResult{}, err
 	}
-	namespace, err := k3s.NamespaceForInstance(command.InstanceID)
-	if err != nil {
-		return provisioner.CreateWorkloadResult{}, err
-	}
-	now := s.now().UTC()
-	_, _, err = s.bindings.SaveCreated(createdBinding(command, result, namespace, now))
-	if err != nil {
+	if err := s.createdBindings.Save(ctx, command, result); err != nil {
 		return provisioner.CreateWorkloadResult{}, err
 	}
 	return result, nil
@@ -134,10 +141,8 @@ func (s *Service) resolveCreateCommand(command provisioner.CreateWorkloadCommand
 }
 
 type bindingCreateAdapter struct {
-	inner    CreateAdapter
-	cleanup  DeleteAdapter
-	bindings runtimebinding.Store
-	now      func() time.Time
+	inner           CreateAdapter
+	createdBindings *createdBindingRecorder
 }
 
 func (a *bindingCreateAdapter) CreateWorkload(ctx context.Context, command provisioner.CreateWorkloadCommand) (provisioner.CreateWorkloadResult, error) {
@@ -145,14 +150,33 @@ func (a *bindingCreateAdapter) CreateWorkload(ctx context.Context, command provi
 	if err != nil {
 		return provisioner.CreateWorkloadResult{}, err
 	}
-	namespace, err := k3s.NamespaceForInstance(command.InstanceID)
-	if err != nil {
+	if err := a.createdBindings.Save(ctx, command, result); err != nil {
 		return provisioner.CreateWorkloadResult{}, err
 	}
-	now := a.now().UTC()
-	binding := createdBinding(command, result, namespace, now)
-	if _, _, err := a.bindings.SaveCreated(binding); err != nil {
-		cleanupErr := a.cleanup.DeleteWorkload(ctx, provisioner.DeleteWorkloadCommand{
+	return result, nil
+}
+
+type createdBindingRecorder struct {
+	cleanup        DeleteAdapter
+	bindings       runtimebinding.Store
+	cleanupTimeout time.Duration
+	now            func() time.Time
+}
+
+func (r *createdBindingRecorder) Save(
+	_ context.Context,
+	command provisioner.CreateWorkloadCommand,
+	result provisioner.CreateWorkloadResult,
+) error {
+	namespace, err := k3s.NamespaceForInstance(command.InstanceID)
+	if err != nil {
+		return err
+	}
+	binding := createdBinding(command, result, namespace, r.now().UTC())
+	if _, _, saveErr := r.bindings.SaveCreated(binding); saveErr != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), r.cleanupTimeout)
+		defer cancel()
+		cleanupErr := r.cleanup.DeleteWorkload(cleanupCtx, provisioner.DeleteWorkloadCommand{
 			RequestID:         command.RequestID,
 			InstanceID:        command.InstanceID,
 			TeamID:            command.TeamID,
@@ -162,11 +186,20 @@ func (a *bindingCreateAdapter) CreateWorkload(ctx context.Context, command provi
 			Reason:            provisioner.DeleteReasonCreateFailedCleanup,
 		}, binding)
 		if cleanupErr != nil {
-			return provisioner.CreateWorkloadResult{}, errors.Join(err, cleanupErr)
+			return operations.NewExecutionError(
+				"ROLLBACK_FAILED",
+				isRetryableCleanupError(cleanupErr),
+				errors.Join(saveErr, cleanupErr),
+			)
 		}
-		return provisioner.CreateWorkloadResult{}, err
+		return operations.NewExecutionError("RUNTIME_BINDING_SAVE_FAILED", false, saveErr)
 	}
-	return result, nil
+	return nil
+}
+
+func isRetryableCleanupError(err error) bool {
+	var classified interface{ Retryable() bool }
+	return errors.As(err, &classified) && classified.Retryable()
 }
 
 func createdBinding(

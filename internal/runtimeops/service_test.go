@@ -141,13 +141,78 @@ func TestCreateOperationStoresAppliedIsolationPolicy(t *testing.T) {
 func TestDirectCreateFailureDoesNotRecordBinding(t *testing.T) {
 	bindings := runtimebinding.NewMemoryStore()
 	create := &recordingCreate{err: errors.New("create failed")}
-	service := newTestService(t, create, &recordingStatus{}, &recordingDelete{}, bindings)
+	deleteAdapter := &recordingDelete{}
+	service := newTestService(t, create, &recordingStatus{}, deleteAdapter, bindings)
 
 	if _, err := service.CreateWorkload(context.Background(), createPolicyCommand()); err == nil {
 		t.Fatal("CreateWorkload() error = nil")
 	}
+	if deleteAdapter.calls != 0 {
+		t.Fatalf("cleanup calls after adapter failure = %d", deleteAdapter.calls)
+	}
 	if _, err := bindings.Get(createPolicyCommand().InstanceID); !errors.Is(err, runtimebinding.ErrNotFound) {
 		t.Fatalf("binding Get() error = %v", err)
+	}
+}
+
+func TestDirectCreateCleansUpWithIndependentContextWhenBindingSaveFails(t *testing.T) {
+	store := &failingSaveBindingStore{
+		Store: runtimebinding.NewMemoryStore(),
+		err:   runtimebinding.ErrConflict,
+	}
+	create := &recordingCreate{result: provisioner.CreateWorkloadResult{
+		RuntimeWorkloadID: "aws-dev/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge",
+	}}
+	deleteAdapter := &recordingDelete{}
+	service := newTestService(t, create, &recordingStatus{}, deleteAdapter, store)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := service.CreateWorkload(ctx, createCommand())
+	if !errors.Is(err, runtimebinding.ErrConflict) {
+		t.Fatalf("CreateWorkload() error = %v, want binding save cause", err)
+	}
+	if code, retryable := operations.ClassifyExecutionError(err); code != "RUNTIME_BINDING_SAVE_FAILED" || retryable {
+		t.Fatalf("classification = %q, %v", code, retryable)
+	}
+	if create.calls != 1 || deleteAdapter.calls != 1 {
+		t.Fatalf("create calls = %d; cleanup calls = %d", create.calls, deleteAdapter.calls)
+	}
+	if deleteAdapter.contextErr != nil || !deleteAdapter.contextHasDeadline {
+		t.Fatalf("cleanup context error = %v; has deadline = %t", deleteAdapter.contextErr, deleteAdapter.contextHasDeadline)
+	}
+	if deleteAdapter.command.Reason != provisioner.DeleteReasonCreateFailedCleanup ||
+		deleteAdapter.command.RuntimeWorkloadID != create.result.RuntimeWorkloadID ||
+		deleteAdapter.binding.Namespace != "ctf-018f3f1e21b87a91a30b63b3400fd001" {
+		t.Fatalf("cleanup command = %#v; binding = %#v", deleteAdapter.command, deleteAdapter.binding)
+	}
+	if _, getErr := store.Store.Get(createCommand().InstanceID); !errors.Is(getErr, runtimebinding.ErrNotFound) {
+		t.Fatalf("binding after cleanup Get() error = %v", getErr)
+	}
+}
+
+func TestDirectCreatePreservesBindingSaveAndCleanupFailures(t *testing.T) {
+	saveCause := runtimebinding.ErrConflict
+	cleanupCause := errors.New("namespace cleanup failed")
+	store := &failingSaveBindingStore{Store: runtimebinding.NewMemoryStore(), err: saveCause}
+	create := &recordingCreate{result: provisioner.CreateWorkloadResult{
+		RuntimeWorkloadID: "aws-dev/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge",
+	}}
+	deleteAdapter := &recordingDelete{err: retryableTestError{cause: cleanupCause}}
+	service := newTestService(t, create, &recordingStatus{}, deleteAdapter, store)
+
+	_, err := service.CreateWorkload(context.Background(), createCommand())
+	if !errors.Is(err, saveCause) || !errors.Is(err, cleanupCause) {
+		t.Fatalf("CreateWorkload() error chain = %v", err)
+	}
+	if code, retryable := operations.ClassifyExecutionError(err); code != "ROLLBACK_FAILED" || !retryable {
+		t.Fatalf("classification = %q, %v", code, retryable)
+	}
+	if deleteAdapter.calls != 1 {
+		t.Fatalf("cleanup calls = %d", deleteAdapter.calls)
+	}
+	if _, getErr := store.Store.Get(createCommand().InstanceID); !errors.Is(getErr, runtimebinding.ErrNotFound) {
+		t.Fatalf("binding after failed cleanup Get() error = %v", getErr)
 	}
 }
 
@@ -230,7 +295,10 @@ func TestServiceCleansUpNamespaceWhenBindingSaveFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitForOperationStatus(t, service, operation.ID, operations.OperationStatusFailed)
+	operation = waitForOperationStatus(t, service, operation.ID, operations.OperationStatusFailed)
+	if operation.LastErrorCode != "RUNTIME_BINDING_SAVE_FAILED" {
+		t.Fatalf("operation = %#v", operation)
+	}
 	if deleteAdapter.calls != 1 {
 		t.Fatalf("cleanup delete calls = %d", deleteAdapter.calls)
 	}
@@ -509,16 +577,20 @@ func (s *recordingStatus) Get(_ context.Context, binding runtimebinding.Binding)
 }
 
 type recordingDelete struct {
-	calls   int
-	command provisioner.DeleteWorkloadCommand
-	binding runtimebinding.Binding
-	err     error
+	calls              int
+	command            provisioner.DeleteWorkloadCommand
+	binding            runtimebinding.Binding
+	err                error
+	contextErr         error
+	contextHasDeadline bool
 }
 
-func (a *recordingDelete) DeleteWorkload(_ context.Context, command provisioner.DeleteWorkloadCommand, binding runtimebinding.Binding) error {
+func (a *recordingDelete) DeleteWorkload(ctx context.Context, command provisioner.DeleteWorkloadCommand, binding runtimebinding.Binding) error {
 	a.calls++
 	a.command = command
 	a.binding = binding
+	a.contextErr = ctx.Err()
+	_, a.contextHasDeadline = ctx.Deadline()
 	return a.err
 }
 
@@ -529,6 +601,22 @@ type failingSaveBindingStore struct {
 
 func (s *failingSaveBindingStore) SaveCreated(runtimebinding.Binding) (runtimebinding.Binding, bool, error) {
 	return runtimebinding.Binding{}, false, s.err
+}
+
+type retryableTestError struct {
+	cause error
+}
+
+func (e retryableTestError) Error() string {
+	return e.cause.Error()
+}
+
+func (e retryableTestError) Unwrap() error {
+	return e.cause
+}
+
+func (retryableTestError) Retryable() bool {
+	return true
 }
 
 type failingDeleteOperationStore struct {

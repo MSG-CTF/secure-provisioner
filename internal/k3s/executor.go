@@ -73,6 +73,10 @@ func (e *Executor) Execute(ctx context.Context, operation operations.Operation) 
 }
 
 func classifyRuntimeExecutionError(err error) error {
+	var executionErr *operations.ExecutionError
+	if errors.As(err, &executionErr) {
+		return executionErr
+	}
 	var runtimeErr *RuntimeError
 	if errors.As(err, &runtimeErr) {
 		return operations.NewExecutionError(runtimeErr.Code(), runtimeErr.Retryable(), err)

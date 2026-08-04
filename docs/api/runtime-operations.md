@@ -118,9 +118,12 @@ Kubernetes 보안 설정을 받지 않는다.
 `resource_limits`는 문제 런타임 전체의 합산값이며 `resource_profile_ref`의
 trusted profile과 정확히 일치해야 한다. MVP는 `SMALL_SINGLE@v1`을
 100m/128MiB/128MiB, `SMALL_MULTI@v1`을 200m/256MiB/256MiB로 해석한다.
-일치하지 않거나 알려지지 않은 profile, root UID, 금지된 writable path,
-`PUBLIC_INTERNET` 같은 syntactically valid하지만 승인되지 않은 요구사항은
-`422 ISOLATION_POLICY_REJECTED`다.
+root UID(`run_as_user <= 0`), 잘못된 절대 경로·크기·중첩 writable path, 잘못된
+내부 연결과 지원하지 않는 outbound enum처럼 요청 자체가 유효하지 않으면 `400
+INVALID_REQUEST`다. 형식은 유효하지만 알려지지 않았거나 자원값과 일치하지 않는
+profile, `/proc`·`/sys`·`/var/run/secrets` 아래 writable path, writable 합계가
+ephemeral-storage 한도를 넘는 요청, 현재 승인하지 않는 `PUBLIC_INTERNET`은 trusted
+resolver가 `422 ISOLATION_POLICY_REJECTED`로 거절한다.
 
 기존 단일 컨테이너 요청의 `image`와 `container_port`도 계속 허용한다. 이 형식은
 서버에서 이름 `challenge`, `expose: true`인 컨테이너 1개로 변환한다.
@@ -165,7 +168,10 @@ resource profile identity, resolver가 승인한 컨테이너 UID/port/writable 
 이미지 credential, baseline 보안 플래그 또는 Kubernetes 설정은 기록하지 않는다.
 Adapter 실패나 생성 rollback은 Binding을 만들지 않으며, 같은 적용 결과의 멱등
 재실행은 기존 Binding을 보존한다. 같은 instance에 다른 적용 정책을 저장하려 하면
-충돌로 처리하고 생성 리소스를 rollback한다.
+충돌로 처리하고 생성 리소스를 rollback한다. Adapter 성공 뒤 Binding 저장이
+실패해도 요청 context와 독립된 제한 시간의 cleanup으로 방금 생성한 workload를
+삭제한다. cleanup이 성공하면 `RUNTIME_BINDING_SAVE_FAILED`, cleanup도 실패하면 두
+원인을 보존한 `ROLLBACK_FAILED`로 기록하며 어느 경우에도 Binding은 남기지 않는다.
 
 ## 삭제 접수
 
@@ -397,16 +403,34 @@ Ready EndpointSlice가 있을 때만 `true`다.
 ## 생성·삭제의 K3s 단위
 
 - 팀의 문제 런타임 인스턴스 1개마다 전용 Namespace 1개를 만든다.
-- 해당 Namespace 안에 컨테이너별 Deployment·Service와 공개용 Ingress 1개를 둔다.
+- 해당 Namespace 안에 전용 `challenge-runtime` ServiceAccount, ResourceQuota,
+  LimitRange, NetworkPolicy와 컨테이너별 Deployment·Service, 공개용 Ingress 1개를 둔다.
+- ServiceAccount와 Pod 양쪽에서 token 자동 마운트를 끄고, Pod·컨테이너에는 non-root
+  UID, read-only root filesystem, privilege escalation·privileged 금지, 모든 Linux
+  capability drop, `RuntimeDefault` seccomp와 host namespace 비활성화를 적용한다.
+  승인된 writable path만 크기가 제한된 `emptyDir`로 마운트한다.
+- ResourceQuota와 LimitRange는 승인된 resource profile의 CPU·memory·ephemeral-storage
+  합계와 namespaced object 수를 제한한다.
+- `default-deny-all`을 먼저 두고 DNS egress, 공개 컨테이너로 향하는 ingress,
+  명시적으로 승인된 컨테이너 간 TCP 연결만 NetworkPolicy allowlist로 연다. 현재
+  `outbound_mode`는 `NONE`만 승인하므로 그 밖의 외부 egress는 열지 않는다.
+- Namespace와 모든 기존 리소스의 소유권을 먼저 검사한 뒤 ServiceAccount →
+  ResourceQuota → LimitRange → NetworkPolicy 순으로 적용·read-back 검증한다. 이 보호
+  리소스가 모두 확인된 뒤에만 Deployment → Service → Ingress를 적용한다.
 - 생성은 모든 Deployment, Pod, Service Endpoint가 준비돼야 성공한다.
 - 생성 중 일부 리소스가 실패하면 해당 Namespace 전체를 롤백한다.
 - 삭제는 저장된 `target_id`, Namespace, 팀·인스턴스 소유권을 확인한 뒤
   Namespace 전체를 삭제한다.
 - 삭제가 반복됐는데 Namespace가 이미 없으면 성공으로 처리한다.
 
-NetworkPolicy, Pod Security, service account, seccomp 같은 강화 격리는 이번
-범위에 포함하지 않았다. Namespace 기반 팀·인스턴스 분리까지만 적용하며,
-세부 격리 정책은 별도 합의와 테스트 후 추가한다.
+이 baseline은 Provisioner가 생성한 리소스에 적용하는 방어 계층이다. 별도 Admission
+강제와 sandbox RuntimeClass 선택은 아직 없으므로 Provisioner 밖에서 만든 Pod까지
+cluster-wide로 강제하지 않으며, 고위험 workload의 커널 격리를 증명하지 않는다.
+또한 NetworkPolicy 객체의 생성·read-back과 Registry capability 선언은 dataplane의
+실제 enforcement 증명이 아니다. 표준 NetworkPolicy만으로 resident node에서 오거나
+resident node·metadata endpoint로 향하는 트래픽의 차단도 보장하지 않는다. 실제 K3s
+격리 효과는 `#11`, resident-node/metadata host boundary와 attestation은 `#32`에서
+검증해야 production 경계로 간주할 수 있다.
 
 ## 오류 응답
 
@@ -469,7 +493,7 @@ Scheduler가 처리한 비동기 Operation의 최종 실패는 서로 다른 계
 
 | Endpoint | HTTP | Stable code | 사유 | Scheduler 동작 |
 |---|---:|---|---|---|
-| `POST /internal/v1/instances` | 400 | `INVALID_REQUEST` | JSON, UUID, enum 또는 필수 필드가 유효하지 않음 | 접수 거절; Operation/Worker 없음 |
+| `POST /internal/v1/instances` | 400 | `INVALID_REQUEST` | JSON, UUID, enum, 필수 필드, root UID, writable path 또는 내부 연결 형식이 유효하지 않음 | 접수 거절; Operation/Worker 없음 |
 | `POST /internal/v1/instances` | 409 | `REQUEST_ID_CONFLICT` | `request_id`가 다른 명령에 이미 사용됨 | 접수 거절; 기존 Operation은 그대로 유지 |
 | `POST /internal/v1/instances` | 415 | `UNSUPPORTED_MEDIA_TYPE` | `Content-Type`이 `application/json`이 아님 | 접수 거절; Operation/Worker 없음 |
 | `POST /internal/v1/instances` | 422 | `ISOLATION_POLICY_REJECTED` | 형식은 유효하지만 trusted resolver가 profile 또는 요구사항을 승인하지 않음 | 접수 거절; Operation/Worker/Binding 없음 |
@@ -512,7 +536,8 @@ Scheduler가 처리한 비동기 Operation의 최종 실패는 서로 다른 계
 | `CREATE` | `RESOURCE_OWNERSHIP_CONFLICT` | 기존 Namespace, Deployment, Service 또는 Ingress의 소유권이 다름 | 즉시 `FAILED` |
 | `CREATE` | `RESOURCE_APPLY_FAILED` | Kubernetes 리소스 적용에 실패함 | 재시도 후 한도 도달 시 `FAILED` |
 | `CREATE` | `WORKLOAD_NOT_READY` | 준비 시간 안에 Workload가 ready가 되지 않음 | 재시도 후 한도 도달 시 `FAILED` |
-| `CREATE` | `ROLLBACK_FAILED` | 생성 실패 후 Namespace rollback에 실패함 | 재시도 후 한도 도달 시 `FAILED` |
+| `CREATE` | `RUNTIME_BINDING_SAVE_FAILED` | Workload 생성 뒤 Binding 저장에 실패했지만 생성 리소스 cleanup은 성공함 | 즉시 `FAILED` |
+| `CREATE` | `ROLLBACK_FAILED` | 생성 실패 뒤 Namespace rollback 또는 Binding 저장 실패 뒤 cleanup에도 실패함 | cleanup 오류 분류에 따라 재시도하며 한도 도달 시 `FAILED` |
 | `CREATE` | `EXECUTION_FAILED` | 코드화되지 않은 실행 실패 | 즉시 `FAILED` |
 | `CREATE` | `INVALID_OPERATION_RESULT` | 성공 결과가 Operation Store 검증을 통과하지 못함 | 즉시 `FAILED` |
 | `DELETE` | `INSTANCE_NOT_FOUND` | 실행 시점에 Instance Binding이 없음 | 즉시 `FAILED` |
