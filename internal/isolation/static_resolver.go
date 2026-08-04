@@ -72,6 +72,9 @@ func resourceProfile(ref ProfileRef) (ResourceLimits, error) {
 }
 
 func validateContainers(containers []ContainerRequirement, limits ResourceLimits) error {
+	if len(containers) == 0 {
+		return rejected("at least one container is required")
+	}
 	names := make(map[string]map[int]struct{}, len(containers))
 	totalWritableMiB := 0
 	for _, container := range containers {
@@ -121,12 +124,10 @@ func validateContainers(containers []ContainerRequirement, limits ResourceLimits
 
 func validateInternalConnections(containers []ContainerRequirement, connections []InternalConnection) error {
 	portsByContainer := make(map[string]map[int]struct{}, len(containers))
-	hasPortInventory := false
 	for _, container := range containers {
 		ports := make(map[int]struct{}, len(container.Ports))
 		for _, port := range container.Ports {
 			ports[port] = struct{}{}
-			hasPortInventory = true
 		}
 		portsByContainer[container.Name] = ports
 	}
@@ -141,7 +142,7 @@ func validateInternalConnections(containers []ContainerRequirement, connections 
 		if !exists {
 			return rejected("internal connection destination container does not exist")
 		}
-		if _, exists := destinationPorts[connection.Port]; hasPortInventory && !exists {
+		if _, exists := destinationPorts[connection.Port]; !exists {
 			return rejected("internal connection destination port does not exist")
 		}
 	}

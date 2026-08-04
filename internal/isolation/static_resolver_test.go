@@ -101,6 +101,20 @@ func TestStaticResolverRejectsInternalConnectionWithUnknownContainerOrPort(t *te
 	}
 }
 
+func TestStaticResolverRejectsInternalConnectionWithoutDeclaredDestinationPort(t *testing.T) {
+	request := validRequest()
+	request.Containers[0].Ports = nil
+	request.Containers[1].Ports = nil
+	assertRejected(t, request)
+}
+
+func TestStaticResolverRejectsEmptyContainerSet(t *testing.T) {
+	request := validRequest()
+	request.Containers = nil
+	request.InternalConnections = nil
+	assertRejected(t, request)
+}
+
 func TestStaticResolverRejectsPublicInternet(t *testing.T) {
 	request := validRequest()
 	request.OutboundMode = isolation.OutboundPublicInternet
@@ -113,8 +127,8 @@ func validRequest() isolation.Request {
 		IsolationRef: isolation.ProfileRef{Name: "STANDARD", Version: "v1"},
 		ResourceRef:  isolation.ProfileRef{Name: "SMALL_MULTI", Version: "v1"},
 		Containers: []isolation.ContainerRequirement{
-			{Name: "web", RunAsUser: 101, WritablePaths: []isolation.WritablePath{{Path: "/tmp", SizeMiB: 64}}},
-			{Name: "api", RunAsUser: 10001},
+			{Name: "web", Ports: []int{8080}, RunAsUser: 101, WritablePaths: []isolation.WritablePath{{Path: "/tmp", SizeMiB: 64}}},
+			{Name: "api", Ports: []int{8080}, RunAsUser: 10001},
 		},
 		InternalConnections: []isolation.InternalConnection{{
 			SourceContainer: "web", DestinationContainer: "api", Protocol: isolation.ProtocolTCP, Port: 8080,

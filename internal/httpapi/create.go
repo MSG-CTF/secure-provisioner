@@ -82,7 +82,7 @@ type CreateWorkloadResponse struct {
 	Endpoints         []WorkloadEndpointResponse `json:"endpoints"`
 }
 
-func (request CreateWorkloadRequest) Validate() error {
+func (request *CreateWorkloadRequest) Validate() error {
 	if strings.TrimSpace(request.RequestID) == "" {
 		return fmt.Errorf("request_id is required")
 	}
@@ -116,10 +116,44 @@ func (request CreateWorkloadRequest) Validate() error {
 		request.Workload.ResourceLimits.EphemeralStorageMiB < len(containers) {
 		return fmt.Errorf("resource limits must provide at least one unit per container")
 	}
+	request.applyLegacyPolicyDefaults(containers)
 	if err := request.validateIsolation(containers); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (request *CreateWorkloadRequest) applyLegacyPolicyDefaults(containers []provisioner.WorkloadContainer) {
+	if !request.usesLegacyPolicyContract() {
+		return
+	}
+	request.ChallengeRef = ChallengeRef{ChallengeID: "legacy", Version: "v1"}
+	request.IsolationRef = ProfileRef{Name: "STANDARD", Version: "v1"}
+	request.Workload.OutboundMode = string(isolation.OutboundNone)
+	if len(containers) == 1 {
+		request.ResourceProfileRef = ProfileRef{Name: "SMALL_SINGLE", Version: "v1"}
+		request.Workload.ResourceLimits = ResourceLimits{CPUMillicores: 100, MemoryMiB: 128, EphemeralStorageMiB: 128}
+	} else {
+		request.ResourceProfileRef = ProfileRef{Name: "SMALL_MULTI", Version: "v1"}
+		request.Workload.ResourceLimits = ResourceLimits{CPUMillicores: 200, MemoryMiB: 256, EphemeralStorageMiB: 256}
+	}
+	for index := range request.Workload.Containers {
+		request.Workload.Containers[index].RunAsUser = 10001
+	}
+}
+
+func (request CreateWorkloadRequest) usesLegacyPolicyContract() bool {
+	if request.ChallengeRef != (ChallengeRef{}) || request.IsolationRef != (ProfileRef{}) ||
+		request.ResourceProfileRef != (ProfileRef{}) || request.Workload.OutboundMode != "" ||
+		len(request.Workload.InternalConnections) != 0 {
+		return false
+	}
+	for _, container := range request.Workload.Containers {
+		if container.RunAsUser != 0 || len(container.WritablePaths) != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func (request CreateWorkloadRequest) ToCommand() provisioner.CreateWorkloadCommand {

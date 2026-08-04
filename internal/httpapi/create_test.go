@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 )
 
@@ -137,6 +138,36 @@ func TestCreateWorkloadRequestRejectsUnknownRuntimeType(t *testing.T) {
 	request.Target.RuntimeType = RuntimeType("DOCKER")
 	if err := request.Validate(); err == nil {
 		t.Fatal("Validate() error = nil")
+	}
+}
+
+func TestCreateWorkloadRequestDefaultsLegacyMultiContainerPolicy(t *testing.T) {
+	var request CreateWorkloadRequest
+	if err := json.Unmarshal([]byte(`{
+		"request_id":"req-legacy-multi",
+		"instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001",
+		"team_id":18,
+		"target":{"runtime_type":"KUBERNETES","target_id":"aws-dev"},
+		"workload":{
+			"containers":[
+				{"name":"web","image":"web:latest","ports":[8080],"expose":true},
+				{"name":"api","image":"api:latest","ports":[8080],"expose":false}
+			],
+			"resource_limits":{"cpu_millicores":501,"memory_mib":513,"ephemeral_storage_mib":1025}
+		}
+	}`), &request); err != nil {
+		t.Fatal(err)
+	}
+	if err := request.Validate(); err != nil {
+		t.Fatal(err)
+	}
+
+	command := request.ToCommand()
+	if command.PolicyRequest.ResourceRef != (isolation.ProfileRef{Name: "SMALL_MULTI", Version: "v1"}) ||
+		command.PolicyRequest.Containers[0].RunAsUser != 10001 ||
+		command.PolicyRequest.Containers[1].RunAsUser != 10001 ||
+		command.PolicyRequest.ResourceLimits != (isolation.ResourceLimits{CPUMillicores: 200, MemoryMiB: 256, EphemeralStorageMiB: 256}) {
+		t.Fatalf("legacy multi command = %#v", command)
 	}
 }
 
