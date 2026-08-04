@@ -146,14 +146,15 @@ type bindingCreateAdapter struct {
 }
 
 func (a *bindingCreateAdapter) CreateWorkload(ctx context.Context, command provisioner.CreateWorkloadCommand) (provisioner.CreateWorkloadResult, error) {
-	result, err := a.inner.CreateWorkload(ctx, command)
-	if err != nil {
-		return provisioner.CreateWorkloadResult{}, err
-	}
-	if err := a.createdBindings.Save(ctx, command, result); err != nil {
-		return provisioner.CreateWorkloadResult{}, err
-	}
-	return result, nil
+	return a.inner.CreateWorkload(ctx, command)
+}
+
+func (a *bindingCreateAdapter) FinalizeCreate(
+	ctx context.Context,
+	command provisioner.CreateWorkloadCommand,
+	result provisioner.CreateWorkloadResult,
+) error {
+	return a.createdBindings.Save(ctx, command, result)
 }
 
 type createdBindingRecorder struct {

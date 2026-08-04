@@ -359,6 +359,34 @@ func TestGetOperationReturnsCreateAndDeleteResults(t *testing.T) {
 	}
 }
 
+func TestGetOperationDoesNotExposeRetryingCreateCheckpoint(t *testing.T) {
+	checkpoint := provisioner.CreateWorkloadResult{
+		RuntimeWorkloadID: "aws-dev/ns/challenge",
+		NamespaceUID:      "namespace-uid-01",
+		ServiceURL:        "https://challenge.example.test",
+	}
+	runtime := &recordingRuntimeUseCase{operation: operations.Operation{
+		ID:               "operation-create-01",
+		RequestID:        "req-create-01",
+		Type:             operations.OperationTypeCreate,
+		Status:           operations.OperationStatusRetrying,
+		CreateCheckpoint: &checkpoint,
+		Attempt:          1,
+		MaxAttempts:      3,
+		LastErrorCode:    "ROLLBACK_FAILED",
+	}}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/internal/v1/operations/operation-create-01", nil)
+
+	NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+
+	body := response.Body.String()
+	if response.Code != http.StatusOK || strings.Contains(body, "namespace_uid") ||
+		strings.Contains(body, "checkpoint") || strings.Contains(body, `"result"`) {
+		t.Fatalf("retrying checkpoint leaked through public response: status=%d body=%s", response.Code, body)
+	}
+}
+
 func TestGetOperationMapsLookupErrorsWithoutLeakingDetails(t *testing.T) {
 	for _, test := range []struct {
 		name          string

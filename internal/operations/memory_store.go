@@ -120,6 +120,30 @@ func (s *MemoryStore) MarkRunning(id string) (Operation, error) {
 	return copyOperation(*operation), nil
 }
 
+func (s *MemoryStore) CheckpointCreateResult(id string, result provisioner.CreateWorkloadResult) (Operation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	operation, err := s.find(id)
+	if err != nil {
+		return Operation{}, err
+	}
+	if operation.Status != OperationStatusRunning || operation.Type != OperationTypeCreate || operation.CreateCommand == nil {
+		return Operation{}, ErrInvalidTransition
+	}
+	if !validCreateWorkloadResult(result) {
+		return Operation{}, ErrInvalidOperationResult
+	}
+	if operation.CreateCheckpoint != nil {
+		if !sameCreateWorkloadResult(*operation.CreateCheckpoint, result) {
+			return Operation{}, ErrCreateCheckpointConflict
+		}
+		return copyOperation(*operation), nil
+	}
+	checkpoint := copyCreateWorkloadResult(result)
+	operation.CreateCheckpoint = &checkpoint
+	return copyOperation(*operation), nil
+}
+
 func (s *MemoryStore) MarkRetrying(id, errorCode string) (Operation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -173,6 +197,17 @@ func (s *MemoryStore) MarkSucceeded(id string, result OperationResult) (Operatio
 	}
 	if !operationResultMatchesType(operation.Type, result) {
 		return Operation{}, ErrInvalidOperationResult
+	}
+	if operation.Type == OperationTypeCreate {
+		if operation.CreateCheckpoint == nil {
+			return Operation{}, ErrInvalidTransition
+		}
+		if !sameCreateWorkloadResult(*operation.CreateCheckpoint, *result.Create) {
+			return Operation{}, ErrCreateCheckpointConflict
+		}
+		checkpoint := copyCreateWorkloadResult(*operation.CreateCheckpoint)
+		result.Create = &checkpoint
+		operation.CreateCheckpoint = nil
 	}
 	operation.Status = OperationStatusSucceeded
 	operation.Result = copyOperationResult(result)
@@ -326,6 +361,10 @@ func copyOperation(operation Operation) Operation {
 		command := *operation.DeleteCommand
 		copy.DeleteCommand = &command
 	}
+	if operation.CreateCheckpoint != nil {
+		checkpoint := copyCreateWorkloadResult(*operation.CreateCheckpoint)
+		copy.CreateCheckpoint = &checkpoint
+	}
 	copy.Result = copyOperationResult(operation.Result)
 	return copy
 }
@@ -333,8 +372,7 @@ func copyOperation(operation Operation) Operation {
 func copyOperationResult(result OperationResult) OperationResult {
 	copy := result
 	if result.Create != nil {
-		create := *result.Create
-		create.Endpoints = append([]provisioner.WorkloadEndpoint(nil), result.Create.Endpoints...)
+		create := copyCreateWorkloadResult(*result.Create)
 		copy.Create = &create
 	}
 	return copy

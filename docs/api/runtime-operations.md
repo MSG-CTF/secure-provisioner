@@ -167,6 +167,12 @@ resource profile identity, resolver가 승인한 컨테이너 UID/port/writable 
 내부 연결, outbound mode, 자원 합산값과 Kubernetes Namespace UID를 방어적으로
 복사해 기록한다. Namespace UID는 내부 소유권 확인에만 사용하며 API 응답에는 노출하지 않는다. raw 요청,
 이미지 credential, baseline 보안 플래그 또는 Kubernetes 설정은 기록하지 않는다.
+CREATE adapter의 성공 결과는 Binding 저장보다 먼저 Operation 내부 checkpoint에
+기록한다. checkpoint에는 Namespace UID가 포함되지만 공개 Operation `result`로는
+노출하지 않는다. Binding 저장 또는 UID-bound cleanup이 재시도되면 Worker는 이
+checkpoint에서 후속 처리를 재개하며 CREATE adapter를 다시 호출하지 않는다. Binding
+저장이 끝난 뒤에만 checkpoint를 최종 `result`로 승격하고 Operation을 `SUCCEEDED`로
+표시한다.
 Adapter 실패나 생성 rollback은 Binding을 만들지 않으며, 같은 적용 결과의 멱등
 재실행은 기존 Binding을 보존한다. 같은 instance에 다른 적용 정책을 저장하려 하면
 충돌로 처리하고 생성 리소스를 rollback한다. Adapter 성공 뒤 Binding 저장이
@@ -575,8 +581,9 @@ Scheduler가 처리한 비동기 Operation의 최종 실패는 서로 다른 계
 ## 로컬 구현 제한
 
 현재 Operation Store와 Binding Store는 인메모리 구현이다. 프로세스를
-재시작하면 작업과 Binding이 복구되지 않는다. 운영 영속 저장소가
-구현되기 전까지 API는 재시작 내구성을 보장하지 않는다.
+재시작하면 진행 중 create checkpoint, 작업과 Binding이 복구되지 않는다. checkpoint는
+동일 프로세스 안의 Worker 재시도와 cancellation/requeue에서만 CREATE 재호출을 막는다.
+운영 영속 저장소가 구현되기 전까지 API는 재시작 내구성을 보장하지 않는다.
 
 MVP profile ref는 `name`과 `version`만 사용한다. immutable digest 또는 Catalog
 assignment authority가 아직 아니므로 이 ref만으로 production-grade policy

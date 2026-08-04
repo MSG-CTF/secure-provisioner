@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -324,6 +325,118 @@ func TestServiceCleansUpNamespaceWhenBindingSaveFails(t *testing.T) {
 	stopWorker(t, cancel, workerDone)
 }
 
+func TestServiceWorkerCreateCheckpointRetriesBindingWithoutRecreating(t *testing.T) {
+	bindings := &failOnceSaveBindingStore{Store: runtimebinding.NewMemoryStore(), err: runtimebinding.ErrConflict}
+	create := &recordingCreate{result: provisioner.CreateWorkloadResult{
+		RuntimeWorkloadID: "aws-dev/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge",
+		NamespaceUID:      "namespace-uid-01",
+		ServiceURL:        "https://gateway.example.invalid/instances/018f3f1e21b87a91a30b63b3400fd001",
+	}}
+	cleanup := &recordingDelete{err: retryableTestError{cause: errors.New("temporary namespace cleanup failure")}}
+	service := newTestService(t, create, &recordingStatus{}, cleanup, bindings)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	workerDone := make(chan error, 1)
+	go func() { workerDone <- service.Run(ctx) }()
+
+	operation, _, err := service.EnqueueCreate(createCommand())
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation = waitForOperationStatus(t, service, operation.ID, operations.OperationStatusSucceeded)
+	if operation.Attempt != 2 || operation.CreateCheckpoint != nil || operation.Result.Create == nil ||
+		operation.Result.Create.NamespaceUID != create.result.NamespaceUID {
+		t.Fatalf("operation = %#v", operation)
+	}
+	if create.calls != 1 || cleanup.calls != 1 {
+		t.Fatalf("create calls = %d; cleanup calls = %d; want 1 and 1", create.calls, cleanup.calls)
+	}
+	binding, err := bindings.Store.Get(createCommand().InstanceID)
+	if err != nil || binding.NamespaceUID != create.result.NamespaceUID {
+		t.Fatalf("binding = %#v, error = %v", binding, err)
+	}
+	stopWorker(t, cancel, workerDone)
+}
+
+func TestServiceWorkerCreateCheckpointPreservesTerminalCleanupOutcomes(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		cleanupErr   error
+		wantCode     string
+		wantAttempts int
+		wantCleanups int
+	}{
+		{name: "cleanup succeeds", wantCode: "RUNTIME_BINDING_SAVE_FAILED", wantAttempts: 1, wantCleanups: 1},
+		{name: "cleanup fails nonretryably", cleanupErr: errors.New("permanent cleanup failure"), wantCode: "ROLLBACK_FAILED", wantAttempts: 1, wantCleanups: 1},
+		{name: "cleanup fails retryably to max attempts", cleanupErr: retryableTestError{cause: errors.New("temporary cleanup failure")}, wantCode: "ROLLBACK_FAILED", wantAttempts: 2, wantCleanups: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			bindings := &failingSaveBindingStore{Store: runtimebinding.NewMemoryStore(), err: runtimebinding.ErrConflict}
+			create := &recordingCreate{result: provisioner.CreateWorkloadResult{
+				RuntimeWorkloadID: "aws-dev/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge",
+				NamespaceUID:      "namespace-uid-01",
+			}}
+			cleanup := &recordingDelete{err: test.cleanupErr}
+			service := newTestService(t, create, &recordingStatus{}, cleanup, bindings)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			workerDone := make(chan error, 1)
+			go func() { workerDone <- service.Run(ctx) }()
+
+			operation, _, err := service.EnqueueCreate(createCommand())
+			if err != nil {
+				t.Fatal(err)
+			}
+			operation = waitForOperationStatus(t, service, operation.ID, operations.OperationStatusFailed)
+			if operation.LastErrorCode != test.wantCode || operation.Attempt != test.wantAttempts ||
+				operation.CreateCheckpoint == nil || operation.CreateCheckpoint.NamespaceUID != create.result.NamespaceUID || operation.Result.Create != nil {
+				t.Fatalf("operation = %#v", operation)
+			}
+			if create.calls != 1 || cleanup.calls != test.wantCleanups {
+				t.Fatalf("create calls = %d; cleanup calls = %d; want 1 and %d", create.calls, cleanup.calls, test.wantCleanups)
+			}
+			stopWorker(t, cancel, workerDone)
+		})
+	}
+}
+
+func TestServiceWorkerCreateCheckpointWaitsForBindingBeforeSuccess(t *testing.T) {
+	bindings := &blockingSaveBindingStore{
+		Store:   runtimebinding.NewMemoryStore(),
+		entered: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	create := &recordingCreate{result: provisioner.CreateWorkloadResult{
+		RuntimeWorkloadID: "aws-dev/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge",
+		NamespaceUID:      "namespace-uid-01",
+	}}
+	service := newTestService(t, create, &recordingStatus{}, &recordingDelete{}, bindings)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	workerDone := make(chan error, 1)
+	go func() { workerDone <- service.Run(ctx) }()
+
+	operation, _, err := service.EnqueueCreate(createCommand())
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-bindings.entered:
+	case <-time.After(time.Second):
+		t.Fatal("binding save did not start")
+	}
+	running, err := service.GetOperation(operation.ID)
+	if err != nil || running.Status != operations.OperationStatusRunning || running.CreateCheckpoint == nil || running.Result.Create != nil {
+		t.Fatalf("operation during binding save = %#v, %v", running, err)
+	}
+	close(bindings.release)
+	succeeded := waitForOperationStatus(t, service, operation.ID, operations.OperationStatusSucceeded)
+	if succeeded.CreateCheckpoint != nil || succeeded.Result.Create == nil || create.calls != 1 {
+		t.Fatalf("succeeded operation = %#v; create calls = %d", succeeded, create.calls)
+	}
+	stopWorker(t, cancel, workerDone)
+}
+
 func TestServiceReadsStatusFromStoredTarget(t *testing.T) {
 	bindings := runtimebinding.NewMemoryStore()
 	binding := savedBinding(t, bindings)
@@ -608,6 +721,36 @@ func (a *recordingDelete) DeleteWorkload(ctx context.Context, command provisione
 type failingSaveBindingStore struct {
 	runtimebinding.Store
 	err error
+}
+
+type failOnceSaveBindingStore struct {
+	runtimebinding.Store
+	mu     sync.Mutex
+	err    error
+	failed bool
+}
+
+func (s *failOnceSaveBindingStore) SaveCreated(binding runtimebinding.Binding) (runtimebinding.Binding, bool, error) {
+	s.mu.Lock()
+	if !s.failed {
+		s.failed = true
+		s.mu.Unlock()
+		return runtimebinding.Binding{}, false, s.err
+	}
+	s.mu.Unlock()
+	return s.Store.SaveCreated(binding)
+}
+
+type blockingSaveBindingStore struct {
+	runtimebinding.Store
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingSaveBindingStore) SaveCreated(binding runtimebinding.Binding) (runtimebinding.Binding, bool, error) {
+	s.entered <- struct{}{}
+	<-s.release
+	return s.Store.SaveCreated(binding)
 }
 
 func (s *failingSaveBindingStore) SaveCreated(runtimebinding.Binding) (runtimebinding.Binding, bool, error) {

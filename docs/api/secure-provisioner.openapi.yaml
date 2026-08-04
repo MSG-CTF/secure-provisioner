@@ -395,12 +395,17 @@ paths:
                       code: INSTANCE_NOT_FOUND
                       message: instance runtime binding was not found
         "409":
-          description: Runtime ownership does not match the stored binding
+          description: Runtime identity or ownership does not match the stored binding
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               examples:
+                RuntimeIdentityMismatch:
+                  value:
+                    error:
+                      code: RUNTIME_IDENTITY_MISMATCH
+                      message: runtime identity does not match the stored binding
                 RuntimeOwnershipMismatch:
                   value:
                     error:

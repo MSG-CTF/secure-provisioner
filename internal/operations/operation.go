@@ -4,6 +4,7 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"strings"
 
 	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
@@ -32,16 +33,31 @@ type OperationResult struct {
 }
 
 type Operation struct {
-	ID            string
-	RequestID     string
-	Type          OperationType
-	Status        OperationStatus
-	CreateCommand *provisioner.CreateWorkloadCommand
-	DeleteCommand *provisioner.DeleteWorkloadCommand
-	Attempt       int
-	MaxAttempts   int
-	Result        OperationResult
-	LastErrorCode string
+	ID               string
+	RequestID        string
+	Type             OperationType
+	Status           OperationStatus
+	CreateCommand    *provisioner.CreateWorkloadCommand
+	DeleteCommand    *provisioner.DeleteWorkloadCommand
+	CreateCheckpoint *provisioner.CreateWorkloadResult
+	Attempt          int
+	MaxAttempts      int
+	Result           OperationResult
+	LastErrorCode    string
+}
+
+func validCreateWorkloadResult(result provisioner.CreateWorkloadResult) bool {
+	return strings.TrimSpace(result.RuntimeWorkloadID) != "" && strings.TrimSpace(result.NamespaceUID) != ""
+}
+
+func copyCreateWorkloadResult(result provisioner.CreateWorkloadResult) provisioner.CreateWorkloadResult {
+	copied := result
+	copied.Endpoints = slices.Clone(result.Endpoints)
+	return copied
+}
+
+func sameCreateWorkloadResult(first, second provisioner.CreateWorkloadResult) bool {
+	return reflect.DeepEqual(first, second)
 }
 
 var ErrInvalidOperation = errors.New("invalid operation")
