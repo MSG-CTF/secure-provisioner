@@ -78,6 +78,82 @@ func TestBuildResourceSetAppliesNonNegotiablePodBaseline(t *testing.T) {
 	}
 }
 
+func TestBuildResourceSetDerivesRunAsGroupFromEachMappedNonRootUID(t *testing.T) {
+	command := validMultiCreateCommand("aws-dev")
+	command.Policy.Containers[0].RunAsUser = 101
+	command.Policy.Containers[1].RunAsUser = 20002
+	command.Policy.Containers[0], command.Policy.Containers[1] = command.Policy.Containers[1], command.Policy.Containers[0]
+
+	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wantGroup := map[string]int64{"web": 101, "internal": 20002}
+	for _, deployment := range resources.Deployments {
+		pod := deployment.Spec.Template.Spec
+		container := pod.Containers[0]
+		want := wantGroup[container.Name]
+		if pod.SecurityContext == nil || pod.SecurityContext.RunAsGroup == nil || *pod.SecurityContext.RunAsGroup != want {
+			t.Fatalf("%s pod runAsGroup = %#v, want %d", container.Name, pod.SecurityContext, want)
+		}
+		security := container.SecurityContext
+		if security == nil || security.RunAsGroup == nil || *security.RunAsGroup != want {
+			t.Fatalf("%s container runAsGroup = %#v, want %d", container.Name, security, want)
+		}
+		if pod.SecurityContext.RunAsUser == nil || *pod.SecurityContext.RunAsUser != want ||
+			security.RunAsUser == nil || *security.RunAsUser != want {
+			t.Fatalf("%s UID/GID derivation diverged: pod=%#v container=%#v", container.Name, pod.SecurityContext, security)
+		}
+	}
+}
+
+func TestBuildResourceSetSpecHashTracksIdentityUsedForDerivedGroup(t *testing.T) {
+	command := validMultiCreateCommand("aws-dev")
+	initial, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	command.Policy.Containers[0].RunAsUser = 101
+	revised, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if revised.ExpectedSpecHashes["web"] == initial.ExpectedSpecHashes["web"] {
+		t.Fatal("approved UID and derived group change did not change web spec hash")
+	}
+	if revised.ExpectedSpecHashes["internal"] != initial.ExpectedSpecHashes["internal"] {
+		t.Fatal("web identity change changed internal spec hash")
+	}
+	pod := revised.Deployments[0].Spec.Template.Spec
+	if pod.SecurityContext.RunAsGroup == nil || *pod.SecurityContext.RunAsGroup != 101 ||
+		pod.Containers[0].SecurityContext.RunAsGroup == nil || *pod.Containers[0].SecurityContext.RunAsGroup != 101 {
+		t.Fatalf("revised derived group = pod %#v, container %#v", pod.SecurityContext, pod.Containers[0].SecurityContext)
+	}
+}
+
+func TestDeploymentSpecVerificationIncludesDerivedRunAsGroup(t *testing.T) {
+	resources, err := BuildResourceSet(validCluster("aws-dev"), validCreateCommand("aws-dev"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	desired := resources.Deployment
+
+	withoutPodGroup := desired.DeepCopy()
+	withoutPodGroup.Spec.Template.Spec.SecurityContext.RunAsGroup = nil
+	if sameDeploymentSpec(withoutPodGroup, desired) {
+		t.Fatal("deployment verification accepted a missing pod runAsGroup")
+	}
+
+	withoutContainerGroup := desired.DeepCopy()
+	withoutContainerGroup.Spec.Template.Spec.Containers[0].SecurityContext.RunAsGroup = nil
+	if sameDeploymentSpec(withoutContainerGroup, desired) {
+		t.Fatal("deployment verification accepted a missing container runAsGroup")
+	}
+}
+
 func TestBuildResourceSetCreatesQuotaAndLimitRangeFromSingleContainerPolicy(t *testing.T) {
 	command := validCreateCommand("aws-dev")
 	resources, err := BuildResourceSet(validCluster("aws-dev"), command)

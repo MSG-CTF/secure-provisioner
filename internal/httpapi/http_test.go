@@ -217,6 +217,21 @@ func TestCreateInstanceStillRejectsRawContainerSecuritySettings(t *testing.T) {
 	assertErrorCode(t, response, "INVALID_REQUEST")
 }
 
+func TestCreateInstanceRejectsCallerControlledRuntimeGroup(t *testing.T) {
+	body := strings.Replace(legacyMultiWireRequestJSON(), `"expose":true`, `"expose":true,"run_as_group":0`, 1)
+	runtime := &recordingRuntimeUseCase{}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+
+	NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest || runtime.createCalls != 0 {
+		t.Fatalf("status = %d; calls = %d; body = %s", response.Code, runtime.createCalls, response.Body.String())
+	}
+	assertErrorCode(t, response, "INVALID_REQUEST")
+}
+
 func TestCreateInstanceRejectsDuplicateJSONKeysAtEveryObjectLevel(t *testing.T) {
 	legacySingle := legacyWireRequestJSON()
 	legacyMulti := legacyMultiWireRequestJSON()
