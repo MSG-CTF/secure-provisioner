@@ -93,6 +93,51 @@ func TestLoadClusterConfigsKeepsDisabledLegacyTargetLoadable(t *testing.T) {
 	}
 }
 
+func TestLoadClusterConfigsRejectsDuplicateJSONKeysRecursively(t *testing.T) {
+	capabilityTail := `"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`
+	clusterPrefix := `{"target_id":"lab","provider":"AWS","region":"ap-northeast-2","architecture":"amd64","kubeconfig_path":"lab.yaml","public_gateway":"https://lab.example","enabled":true,`
+	for _, test := range []struct {
+		name    string
+		cluster string
+	}{
+		{
+			name:    "exact duplicate capability field",
+			cluster: clusterPrefix + `"security_capabilities":` + completeSecurityCapabilitiesJSON + `,"security_capabilities":` + completeSecurityCapabilitiesJSON + `}`,
+		},
+		{
+			name:    "case variant duplicate capability field",
+			cluster: clusterPrefix + `"security_capabilities":` + completeSecurityCapabilitiesJSON + `,"SECURITY_CAPABILITIES":` + completeSecurityCapabilitiesJSON + `}`,
+		},
+		{
+			name:    "exact duplicate enforcement field",
+			cluster: clusterPrefix + `"security_capabilities":{"network_policy_enforced":true,"network_policy_enforced":true,` + capabilityTail + `}`,
+		},
+		{
+			name:    "case variant duplicate enforcement field",
+			cluster: clusterPrefix + `"security_capabilities":{"network_policy_enforced":true,"NETWORK_POLICY_ENFORCED":true,` + capabilityTail + `}`,
+		},
+		{
+			name:    "duplicate selector field",
+			cluster: clusterPrefix + `"security_capabilities":{"network_policy_enforced":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"DNS_POD_SELECTOR":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}}`,
+		},
+		{
+			name:    "duplicate key inside selector",
+			cluster: clusterPrefix + `"security_capabilities":{"network_policy_enforced":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns","K8S-APP":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}}`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			factory := &sequenceFactory{clients: []kubernetes.Interface{fake.NewSimpleClientset()}}
+			_, err := LoadRegistry(writeRegistryFile(t, `{"clusters":[`+test.cluster+`]}`), factory)
+			if code := runtimeErrorCode(t, err); code != "CONFIG_INVALID" {
+				t.Fatalf("code = %q, want CONFIG_INVALID", code)
+			}
+			if factory.calls != 0 {
+				t.Fatalf("client factory calls = %d, want 0", factory.calls)
+			}
+		})
+	}
+}
+
 func TestLoadRegistryRejectsUnknownFieldsAndMultipleJSONValues(t *testing.T) {
 	validJSON := `{"clusters":[{"target_id":"aws-dev","provider":"AWS","region":"test-region","architecture":"amd64","kubeconfig_path":"aws-kubeconfig","public_gateway":"https://gateway.example.invalid","enabled":true,"security_capabilities":` + completeSecurityCapabilitiesJSON + `}]}`
 	for _, content := range []string{

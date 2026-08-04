@@ -2,8 +2,10 @@ package k3s
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
@@ -42,6 +44,13 @@ func LoadRegistry(path string, factory ClientFactory) (*Registry, error) {
 	}
 	defer file.Close()
 
+	if err := rejectDuplicateRegistryJSONKeys(file); err != nil {
+		return nil, newRuntimeError("CONFIG_INVALID", false, err)
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return nil, newRuntimeError("CONFIG_INVALID", false, err)
+	}
+
 	decoder := json.NewDecoder(file)
 	decoder.DisallowUnknownFields()
 	var config registryFile
@@ -64,6 +73,80 @@ func LoadRegistry(path string, factory ClientFactory) (*Registry, error) {
 		clusters[index] = cluster
 	}
 	return NewRegistry(clusters, factory)
+}
+
+func rejectDuplicateRegistryJSONKeys(reader io.Reader) error {
+	decoder := json.NewDecoder(reader)
+	decoder.UseNumber()
+	if err := scanRegistryJSONValue(decoder); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("registry must contain one JSON value")
+		}
+		return err
+	}
+	return nil
+}
+
+func scanRegistryJSONValue(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, isDelimiter := token.(json.Delim)
+	if !isDelimiter {
+		return nil
+	}
+
+	switch delimiter {
+	case '{':
+		seen := make([]string, 0)
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return fmt.Errorf("JSON object field name must be a string")
+			}
+			for _, existing := range seen {
+				if strings.EqualFold(existing, key) {
+					return fmt.Errorf("duplicate JSON field %q", key)
+				}
+			}
+			seen = append(seen, key)
+			if err := scanRegistryJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+		end, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		if end != json.Delim('}') {
+			return fmt.Errorf("invalid JSON object")
+		}
+		return nil
+	case '[':
+		for decoder.More() {
+			if err := scanRegistryJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+		end, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		if end != json.Delim(']') {
+			return fmt.Errorf("invalid JSON array")
+		}
+		return nil
+	default:
+		return fmt.Errorf("unexpected JSON delimiter %q", delimiter)
+	}
 }
 
 func (c registryClusterConfig) clusterConfig() (ClusterConfig, bool) {

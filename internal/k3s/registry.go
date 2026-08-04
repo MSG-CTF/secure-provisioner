@@ -84,7 +84,7 @@ func (r *Registry) LookupForCreate(targetID string) (Cluster, error) {
 	if !cluster.Config.Enabled {
 		return Cluster{}, newRuntimeError("TARGET_DISABLED", false, nil)
 	}
-	return cluster, nil
+	return copyCluster(cluster), nil
 }
 
 func (r *Registry) LookupForMaintenance(targetID string) (Cluster, error) {
@@ -95,7 +95,7 @@ func (r *Registry) LookupForMaintenance(targetID string) (Cluster, error) {
 	if cluster.Client == nil || cluster.Metrics == nil {
 		return Cluster{}, newRuntimeError("K3S_UNAVAILABLE", true, nil)
 	}
-	return cluster, nil
+	return copyCluster(cluster), nil
 }
 
 func validateClusterConfig(config ClusterConfig, seenTargetIDs map[string]struct{}) (ClusterConfig, error) {
@@ -119,8 +119,31 @@ func validateClusterConfig(config ClusterConfig, seenTargetIDs map[string]struct
 	gateway.Path = strings.TrimRight(gateway.Path, "/")
 	gateway.RawPath = ""
 	config.PublicGateway = gateway.String()
+	config.SecurityCapabilities = copySecurityCapabilities(config.SecurityCapabilities)
 	seenTargetIDs[config.TargetID] = struct{}{}
 	return config, nil
+}
+
+func copyCluster(cluster Cluster) Cluster {
+	cluster.Config.SecurityCapabilities = copySecurityCapabilities(cluster.Config.SecurityCapabilities)
+	return cluster
+}
+
+func copySecurityCapabilities(capabilities SecurityCapabilities) SecurityCapabilities {
+	capabilities.DNSPodSelector = copySelector(capabilities.DNSPodSelector)
+	capabilities.IngressPodSelector = copySelector(capabilities.IngressPodSelector)
+	return capabilities
+}
+
+func copySelector(selector map[string]string) map[string]string {
+	if selector == nil {
+		return nil
+	}
+	copied := make(map[string]string, len(selector))
+	for key, value := range selector {
+		copied[key] = value
+	}
+	return copied
 }
 
 func validSecurityCapabilities(capabilities SecurityCapabilities) bool {
