@@ -91,20 +91,18 @@ func NewService(
 func (s *Service) EnqueueCreate(command provisioner.CreateWorkloadCommand) (operations.Operation, bool, error) {
 	s.enqueueMu.Lock()
 	defer s.enqueueMu.Unlock()
-	policy, err := s.resolver.Resolve(command.PolicyRequest)
+	command, err := s.resolveCreateCommand(command)
 	if err != nil {
 		return operations.Operation{}, false, err
-	}
-	command.Policy = policy
-	command.ResourceLimits = provisioner.ResourceLimits{
-		CPUMillicores:       policy.ResourceLimits.CPUMillicores,
-		MemoryMiB:           policy.ResourceLimits.MemoryMiB,
-		EphemeralStorageMiB: policy.ResourceLimits.EphemeralStorageMiB,
 	}
 	return s.operations.EnqueueCreate(command, s.maxAttempts)
 }
 
 func (s *Service) CreateWorkload(ctx context.Context, command provisioner.CreateWorkloadCommand) (provisioner.CreateWorkloadResult, error) {
+	command, err := s.resolveCreateCommand(command)
+	if err != nil {
+		return provisioner.CreateWorkloadResult{}, err
+	}
 	result, err := s.create.CreateWorkload(ctx, command)
 	if err != nil {
 		return provisioner.CreateWorkloadResult{}, err
@@ -128,6 +126,20 @@ func (s *Service) CreateWorkload(ctx context.Context, command provisioner.Create
 		return provisioner.CreateWorkloadResult{}, err
 	}
 	return result, nil
+}
+
+func (s *Service) resolveCreateCommand(command provisioner.CreateWorkloadCommand) (provisioner.CreateWorkloadCommand, error) {
+	policy, err := s.resolver.Resolve(command.PolicyRequest)
+	if err != nil {
+		return provisioner.CreateWorkloadCommand{}, err
+	}
+	command.Policy = policy
+	command.ResourceLimits = provisioner.ResourceLimits{
+		CPUMillicores:       policy.ResourceLimits.CPUMillicores,
+		MemoryMiB:           policy.ResourceLimits.MemoryMiB,
+		EphemeralStorageMiB: policy.ResourceLimits.EphemeralStorageMiB,
+	}
+	return command, nil
 }
 
 type bindingCreateAdapter struct {

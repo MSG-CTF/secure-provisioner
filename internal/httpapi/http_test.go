@@ -139,6 +139,84 @@ func TestCreateInstanceAcceptsLegacyWireContractWithSafePolicyDefaults(t *testin
 	}
 }
 
+func TestCreateInstanceRejectsExplicitEmptyLegacyPolicyFields(t *testing.T) {
+	legacySingle := legacyWireRequestJSON()
+	legacyMulti := legacyMultiWireRequestJSON()
+	testCases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "empty isolation ref",
+			body: strings.Replace(legacySingle, `"team_id":1,`, `"team_id":1,"isolation_ref":{},`, 1),
+		},
+		{
+			name: "null isolation ref",
+			body: strings.Replace(legacySingle, `"team_id":1,`, `"team_id":1,"isolation_ref":null,`, 1),
+		},
+		{
+			name: "noncanonical empty isolation ref",
+			body: strings.Replace(legacySingle, `"team_id":1,`, `"team_id":1,"ISOLATION_REF":{},`, 1),
+		},
+		{
+			name: "empty outbound mode",
+			body: strings.Replace(legacySingle, `"workload":{`, `"workload":{"outbound_mode":"",`, 1),
+		},
+		{
+			name: "noncanonical workload with empty outbound mode",
+			body: strings.Replace(legacySingle, `"workload":{`, `"WORKLOAD":{"outbound_mode":"",`, 1),
+		},
+		{
+			name: "zero run as user",
+			body: strings.Replace(legacyMulti, `"expose":true`, `"expose":true,"run_as_user":0`, 1),
+		},
+		{
+			name: "empty writable paths",
+			body: strings.Replace(legacyMulti, `"expose":true`, `"expose":true,"writable_paths":[]`, 1),
+		},
+		{
+			name: "empty internal connections",
+			body: strings.Replace(legacySingle, `"workload":{`, `"workload":{"internal_connections":[],`, 1),
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			runtime := &recordingRuntimeUseCase{}
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(testCase.body))
+			request.Header.Set("Content-Type", "application/json")
+
+			NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+
+			if response.Code != http.StatusBadRequest || runtime.createCalls != 0 {
+				t.Fatalf("status = %d; calls = %d; body = %s", response.Code, runtime.createCalls, response.Body.String())
+			}
+			assertErrorCode(t, response, "INVALID_REQUEST")
+		})
+	}
+}
+
+func TestCreateInstanceStillRejectsRawContainerSecuritySettings(t *testing.T) {
+	body := strings.Replace(
+		legacyMultiWireRequestJSON(),
+		`"expose":true`,
+		`"expose":true,"security_context":{"privileged":true}`,
+		1,
+	)
+	runtime := &recordingRuntimeUseCase{}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+
+	NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest || runtime.createCalls != 0 {
+		t.Fatalf("status = %d; calls = %d; body = %s", response.Code, runtime.createCalls, response.Body.String())
+	}
+	assertErrorCode(t, response, "INVALID_REQUEST")
+}
+
 func TestCreateInstanceIncludesFalseCreatedForIdempotentReplay(t *testing.T) {
 	runtime := &recordingRuntimeUseCase{
 		operation: operations.Operation{
@@ -299,6 +377,36 @@ type recordingCreateUseCase struct {
 	err     error
 	command provisioner.CreateWorkloadCommand
 	calls   int
+}
+
+func legacyWireRequestJSON() string {
+	return `{
+		"request_id":"req-legacy",
+		"instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001",
+		"team_id":1,
+		"target":{"runtime_type":"KUBERNETES","target_id":"cluster-main"},
+		"workload":{
+			"image":"registry.msgctf.local/challenges/web-01@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"container_port":8080,
+			"resource_limits":{"cpu_millicores":500,"memory_mib":512,"ephemeral_storage_mib":1024}
+		}
+	}`
+}
+
+func legacyMultiWireRequestJSON() string {
+	return `{
+		"request_id":"req-legacy-multi",
+		"instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001",
+		"team_id":18,
+		"target":{"runtime_type":"KUBERNETES","target_id":"aws-dev"},
+		"workload":{
+			"containers":[
+				{"name":"web","image":"web:latest","ports":[8080],"expose":true},
+				{"name":"api","image":"api:latest","ports":[8080],"expose":false}
+			],
+			"resource_limits":{"cpu_millicores":501,"memory_mib":513,"ephemeral_storage_mib":1025}
+		}
+	}`
 }
 
 func (useCase *recordingCreateUseCase) CreateWorkload(_ context.Context, command provisioner.CreateWorkloadCommand) (provisioner.CreateWorkloadResult, error) {

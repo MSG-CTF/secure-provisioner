@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"path"
 	"strings"
@@ -66,14 +68,83 @@ type ResourceLimits struct {
 }
 
 type CreateWorkloadRequest struct {
-	RequestID          string          `json:"request_id"`
-	InstanceID         string          `json:"instance_id"`
-	TeamID             int64           `json:"team_id"`
-	ChallengeRef       ChallengeRef    `json:"challenge_ref"`
-	IsolationRef       ProfileRef      `json:"isolation_ref"`
-	ResourceProfileRef ProfileRef      `json:"resource_profile_ref"`
-	Target             RuntimeTarget   `json:"target"`
-	Workload           RuntimeWorkload `json:"workload"`
+	RequestID           string          `json:"request_id"`
+	InstanceID          string          `json:"instance_id"`
+	TeamID              int64           `json:"team_id"`
+	ChallengeRef        ChallengeRef    `json:"challenge_ref"`
+	IsolationRef        ProfileRef      `json:"isolation_ref"`
+	ResourceProfileRef  ProfileRef      `json:"resource_profile_ref"`
+	Target              RuntimeTarget   `json:"target"`
+	Workload            RuntimeWorkload `json:"workload"`
+	policyFieldsPresent bool
+}
+
+func (request *CreateWorkloadRequest) UnmarshalJSON(data []byte) error {
+	type wireRequest CreateWorkloadRequest
+	var decoded wireRequest
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	*request = CreateWorkloadRequest(decoded)
+	request.policyFieldsPresent = hasPolicyFieldPresence(data)
+	return nil
+}
+
+func hasPolicyFieldPresence(data []byte) bool {
+	var topLevel map[string]json.RawMessage
+	if json.Unmarshal(data, &topLevel) != nil {
+		return false
+	}
+	if hasAnyJSONKey(topLevel, "challenge_ref", "isolation_ref", "resource_profile_ref") {
+		return true
+	}
+
+	var workload map[string]json.RawMessage
+	workloadJSON, _ := jsonField(topLevel, "workload")
+	if json.Unmarshal(workloadJSON, &workload) != nil {
+		return false
+	}
+	if hasAnyJSONKey(workload, "outbound_mode", "internal_connections") {
+		return true
+	}
+
+	var containers []json.RawMessage
+	containersJSON, _ := jsonField(workload, "containers")
+	if json.Unmarshal(containersJSON, &containers) != nil {
+		return false
+	}
+	for _, rawContainer := range containers {
+		var container map[string]json.RawMessage
+		if json.Unmarshal(rawContainer, &container) != nil {
+			continue
+		}
+		if hasAnyJSONKey(container, "run_as_user", "writable_paths") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAnyJSONKey(fields map[string]json.RawMessage, names ...string) bool {
+	for key := range fields {
+		for _, name := range names {
+			if strings.EqualFold(key, name) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func jsonField(fields map[string]json.RawMessage, name string) (json.RawMessage, bool) {
+	for key, value := range fields {
+		if strings.EqualFold(key, name) {
+			return value, true
+		}
+	}
+	return nil, false
 }
 
 type CreateWorkloadResponse struct {
@@ -143,7 +214,7 @@ func (request *CreateWorkloadRequest) applyLegacyPolicyDefaults(containers []pro
 }
 
 func (request CreateWorkloadRequest) usesLegacyPolicyContract() bool {
-	if request.ChallengeRef != (ChallengeRef{}) || request.IsolationRef != (ProfileRef{}) ||
+	if request.policyFieldsPresent || request.ChallengeRef != (ChallengeRef{}) || request.IsolationRef != (ProfileRef{}) ||
 		request.ResourceProfileRef != (ProfileRef{}) || request.Workload.OutboundMode != "" ||
 		len(request.Workload.InternalConnections) != 0 {
 		return false

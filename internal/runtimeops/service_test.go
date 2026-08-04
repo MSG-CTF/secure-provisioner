@@ -72,6 +72,46 @@ func TestEnqueueCreateRejectsPolicyBeforePersistingOperation(t *testing.T) {
 	}
 }
 
+func TestServiceCreateWorkloadResolvesZeroBaselineBeforeAdapter(t *testing.T) {
+	resolver := &recordingResolver{resolved: validResolvedPolicy()}
+	create := &recordingCreate{result: provisioner.CreateWorkloadResult{
+		RuntimeWorkloadID: "aws-dev/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge",
+	}}
+	service := newTestServiceWithCreateAndResolver(
+		t,
+		create,
+		resolver,
+		operations.NewMemoryStore(func() (string, error) { return "operation-direct", nil }),
+	)
+	command := createCommand()
+	command.Policy = isolation.ResolvedPolicy{}
+	command.ResourceLimits.MemoryMiB = 999
+
+	if _, err := service.CreateWorkload(context.Background(), command); err != nil {
+		t.Fatal(err)
+	}
+	if resolver.calls != 1 || create.calls != 1 || !create.command.Policy.Baseline.RunAsNonRoot ||
+		create.command.ResourceLimits.MemoryMiB != 128 {
+		t.Fatalf("resolver calls = %d; create calls = %d; command = %#v", resolver.calls, create.calls, create.command)
+	}
+}
+
+func TestServiceCreateWorkloadRejectsPolicyBeforeAdapter(t *testing.T) {
+	resolver := &recordingResolver{err: isolation.ErrPolicyRejected}
+	create := &recordingCreate{}
+	service := newTestServiceWithCreateAndResolver(
+		t,
+		create,
+		resolver,
+		operations.NewMemoryStore(func() (string, error) { return "operation-direct", nil }),
+	)
+
+	_, err := service.CreateWorkload(context.Background(), createCommand())
+	if !errors.Is(err, isolation.ErrPolicyRejected) || create.calls != 0 {
+		t.Fatalf("CreateWorkload() error = %v; adapter calls = %d", err, create.calls)
+	}
+}
+
 func TestServiceProcessesCreateAndRecordsBinding(t *testing.T) {
 	bindings := runtimebinding.NewMemoryStore()
 	create := &recordingCreate{result: provisioner.CreateWorkloadResult{
@@ -354,8 +394,18 @@ func newTestServiceWithOperationStore(
 
 func newTestServiceWithResolver(t *testing.T, resolver isolation.Resolver, operationStore operations.Store) *Service {
 	t.Helper()
+	return newTestServiceWithCreateAndResolver(t, &recordingCreate{}, resolver, operationStore)
+}
+
+func newTestServiceWithCreateAndResolver(
+	t *testing.T,
+	create CreateAdapter,
+	resolver isolation.Resolver,
+	operationStore operations.Store,
+) *Service {
+	t.Helper()
 	service, err := NewService(
-		&recordingCreate{},
+		create,
 		&recordingStatus{},
 		&recordingDelete{},
 		runtimebinding.NewMemoryStore(),
