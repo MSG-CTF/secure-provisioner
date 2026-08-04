@@ -476,6 +476,37 @@ func TestAdapterAcceptsDocumentedDeploymentAPIServerDefaults(t *testing.T) {
 	}
 }
 
+func TestDefaultImagePullPolicyMatchesKubernetesTagAndDigestRules(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	for _, test := range []struct {
+		name  string
+		image string
+		want  corev1.PullPolicy
+	}{
+		{name: "latest tag with digest", image: "registry.example/challenge:latest@sha256:" + digest, want: corev1.PullAlways},
+		{name: "version tag with digest", image: "registry.example/challenge:v2@sha256:" + digest, want: corev1.PullIfNotPresent},
+		{name: "digest without tag", image: "registry.example/challenge@sha256:" + digest, want: corev1.PullIfNotPresent},
+		{name: "registry port without tag", image: "registry.example:5000/challenge", want: corev1.PullAlways},
+		{name: "registry port and digest without tag", image: "registry.example:5000/challenge@sha256:" + digest, want: corev1.PullIfNotPresent},
+		{name: "registry port latest tag and digest", image: "registry.example:5000/challenge:latest@sha256:" + digest, want: corev1.PullAlways},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := defaultImagePullPolicy(test.image); got != test.want {
+				t.Fatalf("defaultImagePullPolicy(%q) = %q, want %q", test.image, got, test.want)
+			}
+		})
+	}
+
+	container := corev1.Container{
+		Image:           "registry.example/challenge:latest@sha256:" + digest,
+		ImagePullPolicy: corev1.PullNever,
+	}
+	normalizeContainerAPIDefaults(&container)
+	if container.ImagePullPolicy != corev1.PullNever {
+		t.Fatalf("explicit imagePullPolicy = %q, want unchanged %q", container.ImagePullPolicy, corev1.PullNever)
+	}
+}
+
 func TestAdapterAcceptsCanonicalNetworkPolicyReadbackAfterAPINormalizesEmptySlices(t *testing.T) {
 	command := validCreateCommand("aws-dev")
 	client := readyClient(t, command)
@@ -1595,6 +1626,88 @@ func TestAdapterDoesNotSanitizeForeignProtectionFromAlreadyExistsRace(t *testing
 	}
 	assertCreateActionCount(t, client, "deployments", 0)
 	assertDeleteActionCount(t, client, "namespaces", 0)
+}
+
+func TestAdapterRejectsServiceAccountSemanticMetadataFromAlreadyExistsRaceWithoutUpdate(t *testing.T) {
+	command := validCreateCommand("aws-dev")
+	client := readyClient(t, command)
+	client.PrependReactor("create", "serviceaccounts", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		account := action.(k8stesting.CreateAction).GetObject().(*corev1.ServiceAccount).DeepCopy()
+		account.Annotations["eks.amazonaws.com/role-arn"] = "arn:aws:iam::123456789012:role/injected"
+		if err := client.Tracker().Create(action.GetResource(), account, action.GetNamespace()); err != nil {
+			t.Fatal(err)
+		}
+		return true, nil, apierrors.NewAlreadyExists(action.GetResource().GroupResource(), account.Name)
+	})
+	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
+
+	_, err := adapter.CreateWorkload(context.Background(), command)
+	if runtimeErrorCode(t, err) != "RESOURCE_OWNERSHIP_CONFLICT" {
+		t.Fatalf("code = %q, want RESOURCE_OWNERSHIP_CONFLICT", runtimeErrorCode(t, err))
+	}
+	if got := actionCount(client, "update", "serviceaccounts"); got != 0 {
+		t.Fatalf("serviceaccount update actions = %d, want 0", got)
+	}
+	assertCreateActionCount(t, client, "deployments", 0)
+	assertDeleteActionCount(t, client, "namespaces", 0)
+}
+
+func TestAdapterRechecksResourceQuotaSemanticMetadataAfterUpdateConflict(t *testing.T) {
+	command := validCreateCommand("aws-dev")
+	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := readyClient(t, command)
+	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
+	if _, err := adapter.CreateWorkload(context.Background(), command); err != nil {
+		t.Fatal(err)
+	}
+
+	gvr, quota := trackedProtection(t, client, resources, "resourcequotas")
+	metadata := quota.(metav1.Object)
+	metadata.SetResourceVersion("1")
+	annotations := metadata.GetAnnotations()
+	annotations[specHashAnnotation] = "stale"
+	metadata.SetAnnotations(annotations)
+	if err := client.Tracker().Update(gvr, quota, resources.Namespace.Name); err != nil {
+		t.Fatal(err)
+	}
+	client.ClearActions()
+
+	client.PrependReactor("update", "resourcequotas", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		latest, trackerErr := client.Tracker().Get(gvr, action.GetNamespace(), metadata.GetName())
+		if trackerErr != nil {
+			t.Fatal(trackerErr)
+		}
+		latestMetadata := latest.(metav1.Object)
+		latestLabels := latestMetadata.GetLabels()
+		latestLabels["platform.example/injected"] = "true"
+		latestMetadata.SetLabels(latestLabels)
+		latestMetadata.SetResourceVersion("2")
+		if trackerErr := client.Tracker().Update(gvr, latest, action.GetNamespace()); trackerErr != nil {
+			t.Fatal(trackerErr)
+		}
+		return true, nil, apierrors.NewConflict(action.GetResource().GroupResource(), metadata.GetName(), errors.New("stale resource version"))
+	})
+
+	_, err = adapter.CreateWorkload(context.Background(), command)
+	if runtimeErrorCode(t, err) != "RESOURCE_OWNERSHIP_CONFLICT" {
+		t.Fatalf("code = %q, want RESOURCE_OWNERSHIP_CONFLICT", runtimeErrorCode(t, err))
+	}
+	if got := actionCount(client, "update", "resourcequotas"); got != 1 {
+		t.Fatalf("resourcequota update actions = %d, want only the pre-conflict update", got)
+	}
+	stored, err := client.Tracker().Get(gvr, resources.Namespace.Name, metadata.GetName())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.(metav1.Object).GetLabels()["platform.example/injected"] != "true" {
+		t.Fatal("latest ResourceQuota metadata was sanitized after conflict")
+	}
+	if got := actionCount(client, "update", "deployments"); got != 0 {
+		t.Fatalf("deployment update actions = %d, want 0", got)
+	}
 }
 
 func TestAdapterPreflightsForeignServiceAndIngressBeforeAnyChildWrite(t *testing.T) {

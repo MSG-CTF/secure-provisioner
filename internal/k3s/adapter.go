@@ -347,8 +347,7 @@ func upsertProtection(operations protectionOperations) error {
 		}
 		actualMetadata := existing.(metav1.Object)
 		desiredMetadata := operations.desired.(metav1.Object)
-		if !hasOwnership(actualMetadata.GetLabels(), desiredMetadata.GetLabels()) ||
-			!approvedStructuralMetadata(actualMetadata, desiredMetadata) {
+		if !approvedSemanticMetadata(actualMetadata, desiredMetadata, true) {
 			return newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
 		}
 		if err := verifyProtectionObject(existing, operations.desired, operations.sameSpec); err == nil {
@@ -719,11 +718,19 @@ func normalizeContainerAPIDefaults(container *corev1.Container) {
 }
 
 func defaultImagePullPolicy(image string) corev1.PullPolicy {
-	lastComponent := image
-	if slash := strings.LastIndex(lastComponent, "/"); slash >= 0 {
-		lastComponent = lastComponent[slash+1:]
+	nameAndTag := image
+	hasDigest := false
+	if separator := strings.Index(nameAndTag, "@"); separator >= 0 {
+		nameAndTag = nameAndTag[:separator]
+		hasDigest = true
 	}
-	if !strings.Contains(image, "@") && (!strings.Contains(lastComponent, ":") || strings.HasSuffix(lastComponent, ":latest")) {
+	lastSlash := strings.LastIndex(nameAndTag, "/")
+	lastColon := strings.LastIndex(nameAndTag, ":")
+	hasTag := lastColon > lastSlash
+	if hasTag && nameAndTag[lastColon+1:] == "latest" {
+		return corev1.PullAlways
+	}
+	if !hasTag && !hasDigest {
 		return corev1.PullAlways
 	}
 	return corev1.PullIfNotPresent
