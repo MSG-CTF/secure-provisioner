@@ -217,6 +217,57 @@ func TestCreateInstanceStillRejectsRawContainerSecuritySettings(t *testing.T) {
 	assertErrorCode(t, response, "INVALID_REQUEST")
 }
 
+func TestCreateInstanceRejectsDuplicateJSONKeysAtEveryObjectLevel(t *testing.T) {
+	legacySingle := legacyWireRequestJSON()
+	legacyMulti := legacyMultiWireRequestJSON()
+	testCases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "exact duplicate parent",
+			body: strings.Replace(legacySingle, `"workload":{`, `"workload":null,"workload":{`, 1),
+		},
+		{
+			name: "case variant duplicate parent",
+			body: strings.Replace(legacySingle, `"workload":{`, `"WORKLOAD":null,"workload":{`, 1),
+		},
+		{
+			name: "duplicate policy child",
+			body: strings.Replace(
+				validCreateRequestJSON(),
+				`"isolation_ref":{"name":"STANDARD","version":"v1"}`,
+				`"isolation_ref":{"name":"STANDARD","name":"STANDARD","version":"v1"}`,
+				1,
+			),
+		},
+		{
+			name: "duplicate container field",
+			body: strings.Replace(legacyMulti, `"ports":[8080]`, `"ports":[8080],"ports":[8080]`, 1),
+		},
+		{
+			name: "case variant duplicate resource field",
+			body: strings.Replace(legacySingle, `"memory_mib":512`, `"memory_mib":512,"MEMORY_MIB":512`, 1),
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			runtime := &recordingRuntimeUseCase{}
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(testCase.body))
+			request.Header.Set("Content-Type", "application/json")
+
+			NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+
+			if response.Code != http.StatusBadRequest || runtime.createCalls != 0 {
+				t.Fatalf("status = %d; calls = %d; body = %s", response.Code, runtime.createCalls, response.Body.String())
+			}
+			assertErrorCode(t, response, "INVALID_REQUEST")
+		})
+	}
+}
+
 func TestCreateInstanceIncludesFalseCreatedForIdempotentReplay(t *testing.T) {
 	runtime := &recordingRuntimeUseCase{
 		operation: operations.Operation{

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"path"
 	"strings"
 
@@ -80,6 +81,9 @@ type CreateWorkloadRequest struct {
 }
 
 func (request *CreateWorkloadRequest) UnmarshalJSON(data []byte) error {
+	if err := rejectDuplicateJSONKeys(data); err != nil {
+		return err
+	}
 	type wireRequest CreateWorkloadRequest
 	var decoded wireRequest
 	decoder := json.NewDecoder(bytes.NewReader(data))
@@ -90,6 +94,80 @@ func (request *CreateWorkloadRequest) UnmarshalJSON(data []byte) error {
 	*request = CreateWorkloadRequest(decoded)
 	request.policyFieldsPresent = hasPolicyFieldPresence(data)
 	return nil
+}
+
+func rejectDuplicateJSONKeys(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := scanJSONValue(decoder); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("request must contain one JSON value")
+		}
+		return err
+	}
+	return nil
+}
+
+func scanJSONValue(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, isDelimiter := token.(json.Delim)
+	if !isDelimiter {
+		return nil
+	}
+
+	switch delimiter {
+	case '{':
+		seen := make([]string, 0)
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return fmt.Errorf("JSON object field name must be a string")
+			}
+			for _, existing := range seen {
+				if strings.EqualFold(existing, key) {
+					return fmt.Errorf("duplicate JSON field %q", key)
+				}
+			}
+			seen = append(seen, key)
+			if err := scanJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+		end, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		if end != json.Delim('}') {
+			return fmt.Errorf("invalid JSON object")
+		}
+		return nil
+	case '[':
+		for decoder.More() {
+			if err := scanJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+		end, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		if end != json.Delim(']') {
+			return fmt.Errorf("invalid JSON array")
+		}
+		return nil
+	default:
+		return fmt.Errorf("unexpected JSON delimiter %q", delimiter)
+	}
 }
 
 func hasPolicyFieldPresence(data []byte) bool {
