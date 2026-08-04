@@ -35,6 +35,7 @@ func validateResolvedPolicy(
 
 	approved := make(map[string]isolation.ContainerRequirement, len(policy.Containers))
 	totalWritableMiB := int64(0)
+	totalEphemeralMiB := int64(policy.ResourceLimits.EphemeralStorageMiB)
 	for _, requirement := range policy.Containers {
 		if requirement.RunAsUser <= 0 {
 			return nil, false
@@ -63,17 +64,30 @@ func validateResolvedPolicy(
 				}
 			}
 			cleanPaths = append(cleanPaths, writable.Path)
-			totalWritableMiB += int64(writable.SizeMiB)
-			if totalWritableMiB > int64(policy.ResourceLimits.EphemeralStorageMiB) {
+			writableMiB := int64(writable.SizeMiB)
+			if writableMiB > totalEphemeralMiB-totalWritableMiB {
 				return nil, false
 			}
+			totalWritableMiB += writableMiB
 		}
 		approved[requirement.Name] = requirement
 	}
 
-	for _, container := range containers {
+	for index, container := range containers {
 		requirement, found := approved[container.Name]
 		if !found || !samePorts(container.Ports, requirement.Ports) {
+			return nil, false
+		}
+		containerWritableMiB := int64(0)
+		for _, writable := range requirement.WritablePaths {
+			containerWritableMiB += int64(writable.SizeMiB)
+		}
+		containerEphemeralMiB := distributedResourceLimits(
+			resolvedResourceLimits(policy.ResourceLimits),
+			len(containers),
+			index,
+		).EphemeralStorageMiB
+		if containerWritableMiB > int64(containerEphemeralMiB) {
 			return nil, false
 		}
 	}

@@ -149,6 +149,40 @@ func TestBuildResourceSetCreatesOnlyApprovedSizedWritablePathsWithCollisionSafeN
 	}
 }
 
+func TestBuildResourceSetRejectsWritablePathsBeyondContainerEphemeralAllocation(t *testing.T) {
+	command := validMultiCreateCommand("aws-dev")
+	command.Policy.Containers[0].WritablePaths = []isolation.WritablePath{{Path: "/tmp", SizeMiB: 514}}
+
+	_, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if runtimeErrorCode(t, err) != "INVALID_CREATE_COMMAND" {
+		t.Fatalf("error = %v, want INVALID_CREATE_COMMAND", err)
+	}
+}
+
+func TestBuildResourceSetAcceptsWritablePathsAtEachContainerEphemeralBoundary(t *testing.T) {
+	command := validMultiCreateCommand("aws-dev")
+	command.Policy.Containers[0].WritablePaths = []isolation.WritablePath{{Path: "/tmp", SizeMiB: 513}}
+	command.Policy.Containers[1].WritablePaths = []isolation.WritablePath{{Path: "/work", SizeMiB: 512}}
+	command.Policy.Containers[0], command.Policy.Containers[1] = command.Policy.Containers[1], command.Policy.Containers[0]
+
+	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wantByContainer := map[string]string{"web": "513Mi", "internal": "512Mi"}
+	for _, deployment := range resources.Deployments {
+		pod := deployment.Spec.Template.Spec
+		if len(pod.Volumes) != 1 || pod.Volumes[0].EmptyDir == nil || pod.Volumes[0].EmptyDir.SizeLimit == nil {
+			t.Fatalf("%s volumes = %#v", deployment.Name, pod.Volumes)
+		}
+		want := resource.MustParse(wantByContainer[deployment.Name])
+		if pod.Volumes[0].EmptyDir.SizeLimit.Cmp(want) != 0 {
+			t.Fatalf("%s writable size = %s, want %s", deployment.Name, pod.Volumes[0].EmptyDir.SizeLimit.String(), want.String())
+		}
+	}
+}
+
 func TestBuildResourceSetRejectsUnsafeOrUnresolvableResolvedPolicy(t *testing.T) {
 	testCases := []struct {
 		name   string
