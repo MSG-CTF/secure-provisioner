@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -86,9 +87,9 @@ func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.Create
 	createdNamespace, err := ensureNamespace(ctx, cluster.Client, resources.Namespace)
 	if err != nil {
 		if parentErr := ctx.Err(); parentErr != nil {
-			return provisioner.CreateWorkloadResult{}, operationCancelledError(parentErr)
+			return provisioner.CreateWorkloadResult{}, a.failAfterNamespace(cluster.Client, createdNamespace, "OPERATION_CANCELLED", parentErr)
 		}
-		return provisioner.CreateWorkloadResult{}, err
+		return provisioner.CreateWorkloadResult{}, a.failAfterNamespace(cluster.Client, createdNamespace, "RESOURCE_APPLY_FAILED", err)
 	}
 	appliedDeployments, err := applyResourceSet(ctx, cluster.Client, resources)
 	if err != nil {
@@ -128,39 +129,32 @@ func ensureNamespace(ctx context.Context, client kubernetes.Interface, desired *
 	for attempt := 0; attempt < maxReconcileAttempts; attempt++ {
 		existing, err := client.CoreV1().Namespaces().Get(ctx, desired.Name, metav1.GetOptions{})
 		if err == nil {
-			if !hasOwnership(existing.Labels, desired.Labels) {
+			if !approvedSemanticMetadata(existing, desired, true) {
 				return nil, newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
 			}
 			return nil, nil
 		}
 		if !apierrors.IsNotFound(err) {
 			lastErr = err
+			if !kubernetesErrorRetryable(err) {
+				return nil, applyError(err)
+			}
 			continue
 		}
 
 		created, createErr := client.CoreV1().Namespaces().Create(ctx, desired.DeepCopy(), metav1.CreateOptions{})
 		if createErr == nil {
-			if !hasOwnership(created.Labels, desired.Labels) {
-				return nil, newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
+			if !approvedSemanticMetadata(created, desired, false) {
+				return created.DeepCopy(), applyError(errors.New("namespace read-back verification failed"))
 			}
 			return created.DeepCopy(), nil
 		}
-		lastErr = createErr
-		readBack, readErr := client.CoreV1().Namespaces().Get(ctx, desired.Name, metav1.GetOptions{})
-		if readErr == nil {
-			if !hasOwnership(readBack.Labels, desired.Labels) {
-				return nil, newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
-			}
-			// A failed Create response cannot prove that this operation created the
-			// Namespace. Treat the read-back as preexisting so rollback can never
-			// delete a Namespace committed by another actor.
-			return nil, nil
-		}
-		if !apierrors.IsNotFound(readErr) {
-			lastErr = readErr
-		}
+		// A failed Create response can never prove that this invocation created
+		// the Namespace. Do not adopt a later GET result or write children; an
+		// independent retry will preflight the now-current Namespace.
+		return nil, applyError(createErr)
 	}
-	return nil, newRuntimeError("RESOURCE_APPLY_FAILED", true, lastErr)
+	return nil, applyError(lastErr)
 }
 
 func applyResourceSet(ctx context.Context, client kubernetes.Interface, resources ResourceSet) ([]*appsv1.Deployment, error) {
@@ -243,7 +237,7 @@ func preflightOwnedResource(get func() (metav1.Object, error), desired metav1.Ob
 	if err != nil {
 		return applyError(err)
 	}
-	if !hasOwnership(existing.GetLabels(), desired.GetLabels()) {
+	if !approvedSemanticMetadata(existing, desired, true) {
 		return newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
 	}
 	return nil
@@ -274,11 +268,20 @@ func prepareProtectionHashes(resources ResourceSet) error {
 		}{object: policy, spec: policy.Spec})
 	}
 	for _, protection := range protections {
-		hash, err := desiredSpecHash(protection.spec)
+		annotations := copyStringMap(protection.object.GetAnnotations())
+		delete(annotations, specHashAnnotation)
+		hash, err := desiredSpecHash(struct {
+			Labels      map[string]string `json:"labels"`
+			Annotations map[string]string `json:"annotations"`
+			Spec        any               `json:"spec"`
+		}{
+			Labels:      copyStringMap(protection.object.GetLabels()),
+			Annotations: annotations,
+			Spec:        protection.spec,
+		})
 		if err != nil {
 			return err
 		}
-		annotations := copyStringMap(protection.object.GetAnnotations())
 		annotations[specHashAnnotation] = hash
 		protection.object.SetAnnotations(annotations)
 	}
@@ -327,14 +330,26 @@ func upsertProtection(operations protectionOperations) error {
 				return verifyProtectionReadback(operations)
 			} else {
 				lastErr = createErr
+				if !kubernetesErrorRetryable(createErr) {
+					return applyError(createErr)
+				}
 			}
 			existing, err = operations.get()
 		}
 		if err != nil {
 			if !apierrors.IsNotFound(err) {
 				lastErr = err
+				if !kubernetesErrorRetryable(err) {
+					return applyError(err)
+				}
 			}
 			continue
+		}
+		actualMetadata := existing.(metav1.Object)
+		desiredMetadata := operations.desired.(metav1.Object)
+		if !hasOwnership(actualMetadata.GetLabels(), desiredMetadata.GetLabels()) ||
+			!approvedStructuralMetadata(actualMetadata, desiredMetadata) {
+			return newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
 		}
 		if err := verifyProtectionObject(existing, operations.desired, operations.sameSpec); err == nil {
 			return nil
@@ -366,10 +381,11 @@ func verifyProtectionReadback(operations protectionOperations) error {
 func verifyProtectionObject(actual, desired runtime.Object, sameSpec func(runtime.Object, runtime.Object) bool) error {
 	actualMetadata := actual.(metav1.Object)
 	desiredMetadata := desired.(metav1.Object)
-	if !hasOwnership(actualMetadata.GetLabels(), desiredMetadata.GetLabels()) {
+	if !hasOwnership(actualMetadata.GetLabels(), desiredMetadata.GetLabels()) ||
+		!approvedStructuralMetadata(actualMetadata, desiredMetadata) {
 		return newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
 	}
-	if actualMetadata.GetAnnotations()[specHashAnnotation] != desiredMetadata.GetAnnotations()[specHashAnnotation] ||
+	if !approvedSemanticMetadata(actualMetadata, desiredMetadata, false) ||
 		!sameSpec(actual, desired) {
 		return applyError(errors.New("protection resource read-back verification failed"))
 	}
@@ -492,16 +508,85 @@ func networkPolicyProtectionOperations(ctx context.Context, client kubernetes.In
 }
 
 func reconcileProtectionMetadata(candidate, desired metav1.Object) {
-	labels := copyStringMap(candidate.GetLabels())
-	for key, value := range desired.GetLabels() {
-		labels[key] = value
+	candidate.SetLabels(copyStringMap(desired.GetLabels()))
+	candidate.SetAnnotations(copyStringMap(desired.GetAnnotations()))
+}
+
+// approvedSemanticMetadata rejects admission/controller metadata with workload
+// semantics. Kubernetes' namespace-name label and the Deployment controller's
+// positive decimal revision are the only server-managed semantic metadata this
+// provisioner accepts. UID, resourceVersion, generation, timestamps, and
+// managedFields remain ordinary server fields on a deep-copied object.
+func approvedSemanticMetadata(actual, desired metav1.Object, allowStaleSpecHash bool) bool {
+	if !approvedStructuralMetadata(actual, desired) {
+		return false
 	}
-	candidate.SetLabels(labels)
-	annotations := copyStringMap(candidate.GetAnnotations())
+
+	allowedLabels := copyStringMap(desired.GetLabels())
+	if namespace, ok := actual.(*corev1.Namespace); ok {
+		allowedLabels[corev1.LabelMetadataName] = namespace.Name
+	}
+	if !equalStringMap(actual.GetLabels(), allowedLabels) && !equalStringMap(actual.GetLabels(), desired.GetLabels()) {
+		return false
+	}
+
 	for key, value := range desired.GetAnnotations() {
-		annotations[key] = value
+		if allowStaleSpecHash && key == specHashAnnotation {
+			continue
+		}
+		if actual.GetAnnotations()[key] != value {
+			return false
+		}
 	}
-	candidate.SetAnnotations(annotations)
+	for key, value := range actual.GetAnnotations() {
+		if _, ok := desired.GetAnnotations()[key]; ok {
+			continue
+		}
+		if _, ok := actual.(*appsv1.Deployment); ok && key == "deployment.kubernetes.io/revision" && positiveDecimal(value) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func approvedStructuralMetadata(actual, desired metav1.Object) bool {
+	return actual.GetDeletionTimestamp() == nil &&
+		equalOwnerReferences(actual.GetOwnerReferences(), desired.GetOwnerReferences()) &&
+		equalStringSlice(actual.GetFinalizers(), desired.GetFinalizers())
+}
+
+func equalOwnerReferences(left, right []metav1.OwnerReference) bool {
+	return len(left) == len(right) && (len(left) == 0 || apiequality.Semantic.DeepEqual(left, right))
+}
+
+func equalStringSlice(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func equalStringMap(left, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, value := range left {
+		if right[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
+func positiveDecimal(value string) bool {
+	revision, err := strconv.ParseUint(value, 10, 64)
+	return err == nil && revision > 0
 }
 
 func copyStringMap(source map[string]string) map[string]string {
@@ -521,31 +606,39 @@ func copyBoolPointer(value *bool) *bool {
 }
 
 func upsertDeployment(ctx context.Context, client kubernetes.Interface, desired *appsv1.Deployment) (*appsv1.Deployment, error) {
+	deployments := client.AppsV1().Deployments(desired.Namespace)
 	var lastErr error
 	for attempt := 0; attempt < maxReconcileAttempts; attempt++ {
-		existing, err := client.AppsV1().Deployments(desired.Namespace).Get(ctx, desired.Name, metav1.GetOptions{})
+		existing, err := deployments.Get(ctx, desired.Name, metav1.GetOptions{})
 		if apierrors.IsNotFound(err) {
-			created, createErr := client.AppsV1().Deployments(desired.Namespace).Create(ctx, desired.DeepCopy(), metav1.CreateOptions{})
+			_, createErr := deployments.Create(ctx, desired.DeepCopy(), metav1.CreateOptions{})
 			if createErr == nil {
-				return created, nil
+				return verifiedDeploymentReadback(ctx, deployments, desired)
 			}
 			lastErr = createErr
-			existing, err = client.AppsV1().Deployments(desired.Namespace).Get(ctx, desired.Name, metav1.GetOptions{})
+			if !kubernetesErrorRetryable(createErr) {
+				return nil, applyError(createErr)
+			}
+			existing, err = deployments.Get(ctx, desired.Name, metav1.GetOptions{})
 		}
 		if err != nil {
 			if !apierrors.IsNotFound(err) {
 				lastErr = err
+				if !kubernetesErrorRetryable(err) {
+					return nil, applyError(err)
+				}
 			}
 			continue
 		}
-		if !hasOwnership(existing.Labels, desired.Labels) {
+		if !approvedSemanticMetadata(existing, desired, true) {
 			return nil, newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
 		}
-		candidate := desired.DeepCopy()
-		candidate.ResourceVersion = existing.ResourceVersion
-		updated, updateErr := client.AppsV1().Deployments(desired.Namespace).Update(ctx, candidate, metav1.UpdateOptions{})
+		candidate := existing.DeepCopy()
+		reconcileWorkloadMetadata(candidate, desired)
+		candidate.Spec = *desired.Spec.DeepCopy()
+		_, updateErr := deployments.Update(ctx, candidate, metav1.UpdateOptions{})
 		if updateErr == nil {
-			return updated, nil
+			return verifiedDeploymentReadback(ctx, deployments, desired)
 		}
 		lastErr = updateErr
 		if !apierrors.IsConflict(updateErr) {
@@ -555,32 +648,133 @@ func upsertDeployment(ctx context.Context, client kubernetes.Interface, desired 
 	return nil, applyError(lastErr)
 }
 
+type deploymentGetter interface {
+	Get(context.Context, string, metav1.GetOptions) (*appsv1.Deployment, error)
+}
+
+func verifiedDeploymentReadback(ctx context.Context, deployments deploymentGetter, desired *appsv1.Deployment) (*appsv1.Deployment, error) {
+	actual, err := deployments.Get(ctx, desired.Name, metav1.GetOptions{})
+	if err != nil {
+		return nil, applyError(err)
+	}
+	if !approvedSemanticMetadata(actual, desired, false) || !sameDeploymentSpec(actual, desired) {
+		return nil, applyError(errors.New("deployment read-back verification failed"))
+	}
+	expected := desired.DeepCopy()
+	expected.UID = actual.UID
+	expected.ResourceVersion = actual.ResourceVersion
+	expected.Generation = actual.Generation
+	return expected, nil
+}
+
+func sameDeploymentSpec(actual, desired *appsv1.Deployment) bool {
+	actualCopy := actual.DeepCopy()
+	desiredCopy := desired.DeepCopy()
+	normalizeDeploymentAPIDefaults(actualCopy)
+	normalizeDeploymentAPIDefaults(desiredCopy)
+	return apiequality.Semantic.DeepEqual(actualCopy.Spec, desiredCopy.Spec)
+}
+
+func normalizeDeploymentAPIDefaults(deployment *appsv1.Deployment) {
+	if deployment.Spec.ProgressDeadlineSeconds == nil {
+		deployment.Spec.ProgressDeadlineSeconds = int32Pointer(600)
+	}
+	podSpec := &deployment.Spec.Template.Spec
+	if podSpec.RestartPolicy == "" {
+		podSpec.RestartPolicy = corev1.RestartPolicyAlways
+	}
+	if podSpec.DNSPolicy == "" {
+		podSpec.DNSPolicy = corev1.DNSClusterFirst
+	}
+	if podSpec.SchedulerName == "" {
+		podSpec.SchedulerName = corev1.DefaultSchedulerName
+	}
+	if podSpec.TerminationGracePeriodSeconds == nil {
+		value := int64(corev1.DefaultTerminationGracePeriodSeconds)
+		podSpec.TerminationGracePeriodSeconds = &value
+	}
+	for index := range podSpec.Containers {
+		normalizeContainerAPIDefaults(&podSpec.Containers[index])
+	}
+	for index := range podSpec.InitContainers {
+		normalizeContainerAPIDefaults(&podSpec.InitContainers[index])
+	}
+}
+
+func normalizeContainerAPIDefaults(container *corev1.Container) {
+	if container.TerminationMessagePath == "" {
+		container.TerminationMessagePath = corev1.TerminationMessagePathDefault
+	}
+	if container.TerminationMessagePolicy == "" {
+		container.TerminationMessagePolicy = corev1.TerminationMessageReadFile
+	}
+	if container.ImagePullPolicy == "" {
+		container.ImagePullPolicy = defaultImagePullPolicy(container.Image)
+	}
+	for index := range container.Ports {
+		if container.Ports[index].Protocol == "" {
+			container.Ports[index].Protocol = corev1.ProtocolTCP
+		}
+	}
+}
+
+func defaultImagePullPolicy(image string) corev1.PullPolicy {
+	lastComponent := image
+	if slash := strings.LastIndex(lastComponent, "/"); slash >= 0 {
+		lastComponent = lastComponent[slash+1:]
+	}
+	if !strings.Contains(image, "@") && (!strings.Contains(lastComponent, ":") || strings.HasSuffix(lastComponent, ":latest")) {
+		return corev1.PullAlways
+	}
+	return corev1.PullIfNotPresent
+}
+
+func reconcileWorkloadMetadata(candidate, desired metav1.Object) {
+	labels := copyStringMap(desired.GetLabels())
+	annotations := copyStringMap(desired.GetAnnotations())
+	if _, ok := candidate.(*appsv1.Deployment); ok {
+		if revision := candidate.GetAnnotations()["deployment.kubernetes.io/revision"]; positiveDecimal(revision) {
+			annotations["deployment.kubernetes.io/revision"] = revision
+		}
+	}
+	candidate.SetLabels(labels)
+	candidate.SetAnnotations(annotations)
+}
+
 func upsertService(ctx context.Context, client kubernetes.Interface, desired *corev1.Service) error {
+	services := client.CoreV1().Services(desired.Namespace)
 	var lastErr error
 	for attempt := 0; attempt < maxReconcileAttempts; attempt++ {
-		existing, err := client.CoreV1().Services(desired.Namespace).Get(ctx, desired.Name, metav1.GetOptions{})
+		existing, err := services.Get(ctx, desired.Name, metav1.GetOptions{})
 		if apierrors.IsNotFound(err) {
-			if _, createErr := client.CoreV1().Services(desired.Namespace).Create(ctx, desired.DeepCopy(), metav1.CreateOptions{}); createErr == nil {
-				return nil
+			if _, createErr := services.Create(ctx, desired.DeepCopy(), metav1.CreateOptions{}); createErr == nil {
+				return verifyServiceReadback(ctx, services, desired)
 			} else {
 				lastErr = createErr
+				if !kubernetesErrorRetryable(createErr) {
+					return applyError(createErr)
+				}
 			}
-			existing, err = client.CoreV1().Services(desired.Namespace).Get(ctx, desired.Name, metav1.GetOptions{})
+			existing, err = services.Get(ctx, desired.Name, metav1.GetOptions{})
 		}
 		if err != nil {
 			if !apierrors.IsNotFound(err) {
 				lastErr = err
+				if !kubernetesErrorRetryable(err) {
+					return applyError(err)
+				}
 			}
 			continue
 		}
-		if !hasOwnership(existing.Labels, desired.Labels) {
+		if !approvedSemanticMetadata(existing, desired, true) {
 			return newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
 		}
-		candidate := desired.DeepCopy()
+		candidate := existing.DeepCopy()
+		reconcileWorkloadMetadata(candidate, desired)
+		candidate.Spec = *desired.Spec.DeepCopy()
 		preserveServiceAllocation(candidate, existing)
-		candidate.ResourceVersion = existing.ResourceVersion
-		if _, updateErr := client.CoreV1().Services(desired.Namespace).Update(ctx, candidate, metav1.UpdateOptions{}); updateErr == nil {
-			return nil
+		if _, updateErr := services.Update(ctx, candidate, metav1.UpdateOptions{}); updateErr == nil {
+			return verifyServiceReadback(ctx, services, desired)
 		} else {
 			lastErr = updateErr
 			if !apierrors.IsConflict(updateErr) {
@@ -589,6 +783,45 @@ func upsertService(ctx context.Context, client kubernetes.Interface, desired *co
 		}
 	}
 	return applyError(lastErr)
+}
+
+type serviceGetter interface {
+	Get(context.Context, string, metav1.GetOptions) (*corev1.Service, error)
+}
+
+func verifyServiceReadback(ctx context.Context, services serviceGetter, desired *corev1.Service) error {
+	actual, err := services.Get(ctx, desired.Name, metav1.GetOptions{})
+	if err != nil {
+		return applyError(err)
+	}
+	if !approvedSemanticMetadata(actual, desired, false) || !sameServiceSpec(actual, desired) {
+		return applyError(errors.New("service read-back verification failed"))
+	}
+	return nil
+}
+
+func sameServiceSpec(actual, desired *corev1.Service) bool {
+	actualCopy := actual.DeepCopy()
+	desiredCopy := desired.DeepCopy()
+	preserveServiceAllocation(desiredCopy, actualCopy)
+	normalizeServiceAPIDefaults(actualCopy)
+	normalizeServiceAPIDefaults(desiredCopy)
+	return apiequality.Semantic.DeepEqual(actualCopy.Spec, desiredCopy.Spec)
+}
+
+func normalizeServiceAPIDefaults(service *corev1.Service) {
+	if service.Spec.SessionAffinity == "" {
+		service.Spec.SessionAffinity = corev1.ServiceAffinityNone
+	}
+	if service.Spec.InternalTrafficPolicy == nil {
+		value := corev1.ServiceInternalTrafficPolicyCluster
+		service.Spec.InternalTrafficPolicy = &value
+	}
+	for index := range service.Spec.Ports {
+		if service.Spec.Ports[index].Protocol == "" {
+			service.Spec.Ports[index].Protocol = corev1.ProtocolTCP
+		}
+	}
 }
 
 func preserveServiceAllocation(desired, existing *corev1.Service) {
@@ -596,34 +829,41 @@ func preserveServiceAllocation(desired, existing *corev1.Service) {
 	desired.Spec.ClusterIPs = append([]string(nil), existing.Spec.ClusterIPs...)
 	desired.Spec.IPFamilies = append([]corev1.IPFamily(nil), existing.Spec.IPFamilies...)
 	desired.Spec.IPFamilyPolicy = existing.Spec.IPFamilyPolicy
-	desired.Spec.HealthCheckNodePort = existing.Spec.HealthCheckNodePort
 }
 
 func upsertIngress(ctx context.Context, client kubernetes.Interface, desired *networkingv1.Ingress) error {
+	ingresses := client.NetworkingV1().Ingresses(desired.Namespace)
 	var lastErr error
 	for attempt := 0; attempt < maxReconcileAttempts; attempt++ {
-		existing, err := client.NetworkingV1().Ingresses(desired.Namespace).Get(ctx, desired.Name, metav1.GetOptions{})
+		existing, err := ingresses.Get(ctx, desired.Name, metav1.GetOptions{})
 		if apierrors.IsNotFound(err) {
-			if _, createErr := client.NetworkingV1().Ingresses(desired.Namespace).Create(ctx, desired.DeepCopy(), metav1.CreateOptions{}); createErr == nil {
-				return nil
+			if _, createErr := ingresses.Create(ctx, desired.DeepCopy(), metav1.CreateOptions{}); createErr == nil {
+				return verifyIngressReadback(ctx, ingresses, desired)
 			} else {
 				lastErr = createErr
+				if !kubernetesErrorRetryable(createErr) {
+					return applyError(createErr)
+				}
 			}
-			existing, err = client.NetworkingV1().Ingresses(desired.Namespace).Get(ctx, desired.Name, metav1.GetOptions{})
+			existing, err = ingresses.Get(ctx, desired.Name, metav1.GetOptions{})
 		}
 		if err != nil {
 			if !apierrors.IsNotFound(err) {
 				lastErr = err
+				if !kubernetesErrorRetryable(err) {
+					return applyError(err)
+				}
 			}
 			continue
 		}
-		if !hasOwnership(existing.Labels, desired.Labels) {
+		if !approvedSemanticMetadata(existing, desired, true) {
 			return newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
 		}
-		candidate := desired.DeepCopy()
-		candidate.ResourceVersion = existing.ResourceVersion
-		if _, updateErr := client.NetworkingV1().Ingresses(desired.Namespace).Update(ctx, candidate, metav1.UpdateOptions{}); updateErr == nil {
-			return nil
+		candidate := existing.DeepCopy()
+		reconcileWorkloadMetadata(candidate, desired)
+		candidate.Spec = *desired.Spec.DeepCopy()
+		if _, updateErr := ingresses.Update(ctx, candidate, metav1.UpdateOptions{}); updateErr == nil {
+			return verifyIngressReadback(ctx, ingresses, desired)
 		} else {
 			lastErr = updateErr
 			if !apierrors.IsConflict(updateErr) {
@@ -632,6 +872,23 @@ func upsertIngress(ctx context.Context, client kubernetes.Interface, desired *ne
 		}
 	}
 	return applyError(lastErr)
+}
+
+type ingressGetter interface {
+	Get(context.Context, string, metav1.GetOptions) (*networkingv1.Ingress, error)
+}
+
+func verifyIngressReadback(ctx context.Context, ingresses ingressGetter, desired *networkingv1.Ingress) error {
+	actual, err := ingresses.Get(ctx, desired.Name, metav1.GetOptions{})
+	if err != nil {
+		return applyError(err)
+	}
+	actualCopy := actual.DeepCopy()
+	desiredCopy := desired.DeepCopy()
+	if !approvedSemanticMetadata(actual, desired, false) || !apiequality.Semantic.DeepEqual(actualCopy.Spec, desiredCopy.Spec) {
+		return applyError(errors.New("ingress read-back verification failed"))
+	}
+	return nil
 }
 
 func applyError(err error) error {
@@ -642,7 +899,23 @@ func applyError(err error) error {
 	if errors.As(err, &runtimeErr) {
 		return err
 	}
-	return newRuntimeError("RESOURCE_APPLY_FAILED", true, err)
+	return newRuntimeError("RESOURCE_APPLY_FAILED", kubernetesErrorRetryable(err), err)
+}
+
+func kubernetesErrorRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	var runtimeErr *RuntimeError
+	if errors.As(err, &runtimeErr) {
+		return runtimeErr.Retryable()
+	}
+	if apierrors.IsInvalid(err) || apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) || apierrors.IsBadRequest(err) {
+		return false
+	}
+	// Admission implementations do not always return StatusReasonInvalid for
+	// immutable-field rejection. Keep this narrow and case-insensitive.
+	return !strings.Contains(strings.ToLower(err.Error()), "field is immutable")
 }
 
 func operationCancelledError(cause error) error {
@@ -654,7 +927,11 @@ func failureWithoutRollback(code string, cause error) error {
 	if errors.As(cause, &runtimeErr) {
 		return runtimeErr
 	}
-	return newRuntimeError(code, code == "RESOURCE_APPLY_FAILED" || code == "WORKLOAD_NOT_READY" || code == "OPERATION_CANCELLED", cause)
+	retryable := code == "WORKLOAD_NOT_READY" || code == "OPERATION_CANCELLED"
+	if code == "RESOURCE_APPLY_FAILED" {
+		retryable = kubernetesErrorRetryable(cause)
+	}
+	return newRuntimeError(code, retryable, cause)
 }
 
 func (a *Adapter) failAfterNamespace(
@@ -677,33 +954,60 @@ func (a *Adapter) failWithRollback(client kubernetes.Interface, namespace *corev
 	rollbackCtx, cancel := context.WithTimeout(context.Background(), a.config.RollbackTimeout)
 	defer cancel()
 	if err := rollbackNamespace(rollbackCtx, client, namespace, a.config.PollInterval); err != nil {
-		return newRuntimeError("ROLLBACK_FAILED", true, errors.Join(cause, err))
+		return newRuntimeError("ROLLBACK_FAILED", rollbackErrorRetryable(err), errors.Join(cause, err))
 	}
-	return newRuntimeError(code, code == "RESOURCE_APPLY_FAILED" || code == "WORKLOAD_NOT_READY" || code == "OPERATION_CANCELLED", cause)
+	return failureWithoutRollback(code, cause)
 }
 
 func rollbackNamespace(ctx context.Context, client kubernetes.Interface, desired *corev1.Namespace, pollInterval time.Duration) error {
-	existing, err := client.CoreV1().Namespaces().Get(ctx, desired.Name, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		return nil
+	expectedUID := desired.UID
+	deleteAccepted := false
+	var lastErr error
+	for attempt := 0; attempt < maxReconcileAttempts; attempt++ {
+		existing, err := client.CoreV1().Namespaces().Get(ctx, desired.Name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			lastErr = err
+			if !kubernetesErrorRetryable(err) {
+				return err
+			}
+			continue
+		}
+		if !hasOwnership(existing.Labels, desired.Labels) {
+			return errNamespaceOwnership
+		}
+		if expectedUID == "" {
+			expectedUID = existing.UID
+		}
+		if existing.UID != expectedUID {
+			return errNamespaceIdentity
+		}
+		if existing.DeletionTimestamp != nil {
+			deleteAccepted = true
+			break
+		}
+
+		propagation := metav1.DeletePropagationBackground
+		preconditions := &metav1.Preconditions{UID: &expectedUID, ResourceVersion: &existing.ResourceVersion}
+		err = client.CoreV1().Namespaces().Delete(ctx, desired.Name, metav1.DeleteOptions{
+			PropagationPolicy: &propagation,
+			Preconditions:     preconditions,
+		})
+		if err == nil || apierrors.IsNotFound(err) {
+			deleteAccepted = true
+			break
+		}
+		lastErr = err
+		if !kubernetesErrorRetryable(err) {
+			return err
+		}
 	}
-	if err != nil {
-		return err
+	if !deleteAccepted {
+		return lastErr
 	}
-	if !hasOwnership(existing.Labels, desired.Labels) {
-		return errors.New("namespace ownership cannot be confirmed")
-	}
-	if desired.UID != "" && existing.UID != desired.UID {
-		return errors.New("namespace identity cannot be confirmed")
-	}
-	propagation := metav1.DeletePropagationBackground
-	preconditions := &metav1.Preconditions{UID: &existing.UID, ResourceVersion: &existing.ResourceVersion}
-	if err := client.CoreV1().Namespaces().Delete(ctx, desired.Name, metav1.DeleteOptions{
-		PropagationPolicy: &propagation,
-		Preconditions:     preconditions,
-	}); err != nil {
-		return err
-	}
+
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 	for {
@@ -712,10 +1016,13 @@ func rollbackNamespace(ctx context.Context, client kubernetes.Interface, desired
 			return nil
 		}
 		if getErr != nil {
-			return getErr
-		}
-		if current.UID != existing.UID || !hasOwnership(current.Labels, desired.Labels) {
-			return errors.New("namespace ownership cannot be confirmed")
+			if !kubernetesErrorRetryable(getErr) {
+				return getErr
+			}
+		} else if current.UID != expectedUID {
+			return errNamespaceIdentity
+		} else if !hasOwnership(current.Labels, desired.Labels) {
+			return errNamespaceOwnership
 		}
 		select {
 		case <-ctx.Done():
@@ -723,6 +1030,18 @@ func rollbackNamespace(ctx context.Context, client kubernetes.Interface, desired
 		case <-ticker.C:
 		}
 	}
+}
+
+var (
+	errNamespaceOwnership = errors.New("namespace ownership cannot be confirmed")
+	errNamespaceIdentity  = errors.New("namespace identity cannot be confirmed")
+)
+
+func rollbackErrorRetryable(err error) bool {
+	if errors.Is(err, errNamespaceOwnership) || errors.Is(err, errNamespaceIdentity) {
+		return false
+	}
+	return kubernetesErrorRetryable(err)
 }
 
 func hasOwnership(actual, expected map[string]string) bool {
@@ -800,10 +1119,14 @@ func currentDeploymentReady(ctx context.Context, client kubernetes.Interface, ex
 	if err != nil {
 		return false, err
 	}
-	return current.UID == expected.UID &&
-		current.Generation == expected.Generation &&
-		current.Annotations[specHashAnnotation] == expectedSpecHash &&
-		current.Status.ObservedGeneration >= current.Generation &&
+	if current.UID != expected.UID || current.Generation != expected.Generation ||
+		current.Annotations[specHashAnnotation] != expectedSpecHash {
+		return false, nil
+	}
+	if !approvedSemanticMetadata(current, expected, false) || !sameDeploymentSpec(current, expected) {
+		return false, applyError(errors.New("deployment readiness verification failed"))
+	}
+	return current.Status.ObservedGeneration >= current.Generation &&
 		current.Status.UpdatedReplicas >= 1 &&
 		current.Status.AvailableReplicas >= 1, nil
 }
