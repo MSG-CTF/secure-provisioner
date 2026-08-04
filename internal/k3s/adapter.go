@@ -2,6 +2,9 @@ package k3s
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -11,9 +14,11 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -68,26 +73,29 @@ func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.Create
 	if cluster.Client == nil {
 		return provisioner.CreateWorkloadResult{}, newRuntimeError("K3S_UNAVAILABLE", true, nil)
 	}
-
-	namespaceNeedsRollback, err := ensureNamespace(ctx, cluster.Client, resources.Namespace)
-	if err != nil {
+	if err := prepareProtectionHashes(resources); err != nil {
+		return provisioner.CreateWorkloadResult{}, newRuntimeError("INVALID_CREATE_COMMAND", false, nil)
+	}
+	if err := preflightResourceSet(ctx, cluster.Client, resources); err != nil {
 		if parentErr := ctx.Err(); parentErr != nil {
-			if namespaceNeedsRollback {
-				return provisioner.CreateWorkloadResult{}, a.failWithRollback(cluster.Client, resources.Namespace, "OPERATION_CANCELLED", parentErr)
-			}
 			return provisioner.CreateWorkloadResult{}, operationCancelledError(parentErr)
 		}
-		if namespaceNeedsRollback {
-			return provisioner.CreateWorkloadResult{}, a.failWithRollback(cluster.Client, resources.Namespace, "RESOURCE_APPLY_FAILED", err)
+		return provisioner.CreateWorkloadResult{}, failureWithoutRollback("RESOURCE_APPLY_FAILED", err)
+	}
+
+	createdNamespace, err := ensureNamespace(ctx, cluster.Client, resources.Namespace)
+	if err != nil {
+		if parentErr := ctx.Err(); parentErr != nil {
+			return provisioner.CreateWorkloadResult{}, operationCancelledError(parentErr)
 		}
 		return provisioner.CreateWorkloadResult{}, err
 	}
 	appliedDeployments, err := applyResourceSet(ctx, cluster.Client, resources)
 	if err != nil {
 		if parentErr := ctx.Err(); parentErr != nil {
-			return provisioner.CreateWorkloadResult{}, a.failWithRollback(cluster.Client, resources.Namespace, "OPERATION_CANCELLED", parentErr)
+			return provisioner.CreateWorkloadResult{}, a.failAfterNamespace(cluster.Client, createdNamespace, "OPERATION_CANCELLED", parentErr)
 		}
-		return provisioner.CreateWorkloadResult{}, a.failWithRollback(cluster.Client, resources.Namespace, "RESOURCE_APPLY_FAILED", err)
+		return provisioner.CreateWorkloadResult{}, a.failAfterNamespace(cluster.Client, createdNamespace, "RESOURCE_APPLY_FAILED", err)
 	}
 
 	readyCtx, cancel := context.WithTimeout(ctx, a.config.ReadyTimeout)
@@ -100,13 +108,13 @@ func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.Create
 		a.config.PollInterval,
 	); err != nil {
 		if parentErr := ctx.Err(); parentErr != nil {
-			return provisioner.CreateWorkloadResult{}, a.failWithRollback(cluster.Client, resources.Namespace, "OPERATION_CANCELLED", parentErr)
+			return provisioner.CreateWorkloadResult{}, a.failAfterNamespace(cluster.Client, createdNamespace, "OPERATION_CANCELLED", parentErr)
 		}
 		code := "RESOURCE_APPLY_FAILED"
 		if readyCtx.Err() == context.DeadlineExceeded {
 			code = "WORKLOAD_NOT_READY"
 		}
-		return provisioner.CreateWorkloadResult{}, a.failWithRollback(cluster.Client, resources.Namespace, code, err)
+		return provisioner.CreateWorkloadResult{}, a.failAfterNamespace(cluster.Client, createdNamespace, code, err)
 	}
 	return provisioner.CreateWorkloadResult{
 		RuntimeWorkloadID: resources.RuntimeWorkloadID,
@@ -115,43 +123,48 @@ func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.Create
 	}, nil
 }
 
-func ensureNamespace(ctx context.Context, client kubernetes.Interface, desired *corev1.Namespace) (bool, error) {
+func ensureNamespace(ctx context.Context, client kubernetes.Interface, desired *corev1.Namespace) (*corev1.Namespace, error) {
 	var lastErr error
-	createAttempted := false
 	for attempt := 0; attempt < maxReconcileAttempts; attempt++ {
 		existing, err := client.CoreV1().Namespaces().Get(ctx, desired.Name, metav1.GetOptions{})
 		if err == nil {
 			if !hasOwnership(existing.Labels, desired.Labels) {
-				return false, newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
+				return nil, newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
 			}
-			return false, nil
+			return nil, nil
 		}
 		if !apierrors.IsNotFound(err) {
 			lastErr = err
 			continue
 		}
 
-		createAttempted = true
-		if _, err = client.CoreV1().Namespaces().Create(ctx, desired.DeepCopy(), metav1.CreateOptions{}); err == nil {
-			return true, nil
+		created, createErr := client.CoreV1().Namespaces().Create(ctx, desired.DeepCopy(), metav1.CreateOptions{})
+		if createErr == nil {
+			if !hasOwnership(created.Labels, desired.Labels) {
+				return nil, newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
+			}
+			return created.DeepCopy(), nil
 		}
-		lastErr = err
+		lastErr = createErr
 		readBack, readErr := client.CoreV1().Namespaces().Get(ctx, desired.Name, metav1.GetOptions{})
 		if readErr == nil {
 			if !hasOwnership(readBack.Labels, desired.Labels) {
-				return false, newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
+				return nil, newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
 			}
-			return true, nil
+			// A failed Create response cannot prove that this operation created the
+			// Namespace. Treat the read-back as preexisting so rollback can never
+			// delete a Namespace committed by another actor.
+			return nil, nil
 		}
 		if !apierrors.IsNotFound(readErr) {
 			lastErr = readErr
 		}
 	}
-	return createAttempted, newRuntimeError("RESOURCE_APPLY_FAILED", true, lastErr)
+	return nil, newRuntimeError("RESOURCE_APPLY_FAILED", true, lastErr)
 }
 
 func applyResourceSet(ctx context.Context, client kubernetes.Interface, resources ResourceSet) ([]*appsv1.Deployment, error) {
-	if err := preflightResourceSet(ctx, client, resources); err != nil {
+	if err := applyProtectionResourceSet(ctx, client, resources); err != nil {
 		return nil, err
 	}
 	appliedDeployments := make([]*appsv1.Deployment, 0, len(resources.Deployments))
@@ -174,37 +187,337 @@ func applyResourceSet(ctx context.Context, client kubernetes.Interface, resource
 }
 
 func preflightResourceSet(ctx context.Context, client kubernetes.Interface, resources ResourceSet) error {
+	if err := preflightOwnedResource(func() (metav1.Object, error) {
+		return client.CoreV1().Namespaces().Get(ctx, resources.Namespace.Name, metav1.GetOptions{})
+	}, resources.Namespace); err != nil {
+		return err
+	}
+	if err := preflightOwnedResource(func() (metav1.Object, error) {
+		return client.CoreV1().ServiceAccounts(resources.ServiceAccount.Namespace).Get(ctx, resources.ServiceAccount.Name, metav1.GetOptions{})
+	}, resources.ServiceAccount); err != nil {
+		return err
+	}
+	if err := preflightOwnedResource(func() (metav1.Object, error) {
+		return client.CoreV1().ResourceQuotas(resources.ResourceQuota.Namespace).Get(ctx, resources.ResourceQuota.Name, metav1.GetOptions{})
+	}, resources.ResourceQuota); err != nil {
+		return err
+	}
+	if err := preflightOwnedResource(func() (metav1.Object, error) {
+		return client.CoreV1().LimitRanges(resources.LimitRange.Namespace).Get(ctx, resources.LimitRange.Name, metav1.GetOptions{})
+	}, resources.LimitRange); err != nil {
+		return err
+	}
+	for _, desired := range resources.NetworkPolicies {
+		if err := preflightOwnedResource(func() (metav1.Object, error) {
+			return client.NetworkingV1().NetworkPolicies(desired.Namespace).Get(ctx, desired.Name, metav1.GetOptions{})
+		}, desired); err != nil {
+			return err
+		}
+	}
 	for _, desired := range resources.Deployments {
-		deployment, err := client.AppsV1().Deployments(desired.Namespace).Get(ctx, desired.Name, metav1.GetOptions{})
-		if err == nil {
-			if !hasOwnership(deployment.Labels, desired.Labels) {
-				return newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
-			}
-		} else if !apierrors.IsNotFound(err) {
-			return applyError(err)
+		if err := preflightOwnedResource(func() (metav1.Object, error) {
+			return client.AppsV1().Deployments(desired.Namespace).Get(ctx, desired.Name, metav1.GetOptions{})
+		}, desired); err != nil {
+			return err
 		}
 	}
 
 	for _, desired := range resources.Services {
-		service, err := client.CoreV1().Services(desired.Namespace).Get(ctx, desired.Name, metav1.GetOptions{})
-		if err == nil {
-			if !hasOwnership(service.Labels, desired.Labels) {
-				return newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
-			}
-		} else if !apierrors.IsNotFound(err) {
-			return applyError(err)
+		if err := preflightOwnedResource(func() (metav1.Object, error) {
+			return client.CoreV1().Services(desired.Namespace).Get(ctx, desired.Name, metav1.GetOptions{})
+		}, desired); err != nil {
+			return err
 		}
 	}
 
-	ingress, err := client.NetworkingV1().Ingresses(resources.Ingress.Namespace).Get(ctx, resources.Ingress.Name, metav1.GetOptions{})
-	if err == nil {
-		if !hasOwnership(ingress.Labels, resources.Ingress.Labels) {
-			return newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
-		}
-	} else if !apierrors.IsNotFound(err) {
+	return preflightOwnedResource(func() (metav1.Object, error) {
+		return client.NetworkingV1().Ingresses(resources.Ingress.Namespace).Get(ctx, resources.Ingress.Name, metav1.GetOptions{})
+	}, resources.Ingress)
+}
+
+func preflightOwnedResource(get func() (metav1.Object, error), desired metav1.Object) error {
+	existing, err := get()
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
 		return applyError(err)
 	}
+	if !hasOwnership(existing.GetLabels(), desired.GetLabels()) {
+		return newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
+	}
 	return nil
+}
+
+type protectionOperations struct {
+	desired   runtime.Object
+	get       func() (runtime.Object, error)
+	create    func(runtime.Object) (runtime.Object, error)
+	update    func(runtime.Object) (runtime.Object, error)
+	reconcile func(runtime.Object, runtime.Object) runtime.Object
+	sameSpec  func(runtime.Object, runtime.Object) bool
+}
+
+func prepareProtectionHashes(resources ResourceSet) error {
+	protections := []struct {
+		object metav1.Object
+		spec   any
+	}{
+		{object: resources.ServiceAccount, spec: serviceAccountDesiredSpec(resources.ServiceAccount)},
+		{object: resources.ResourceQuota, spec: resources.ResourceQuota.Spec},
+		{object: resources.LimitRange, spec: resources.LimitRange.Spec},
+	}
+	for _, policy := range resources.NetworkPolicies {
+		protections = append(protections, struct {
+			object metav1.Object
+			spec   any
+		}{object: policy, spec: policy.Spec})
+	}
+	for _, protection := range protections {
+		hash, err := desiredSpecHash(protection.spec)
+		if err != nil {
+			return err
+		}
+		annotations := copyStringMap(protection.object.GetAnnotations())
+		annotations[specHashAnnotation] = hash
+		protection.object.SetAnnotations(annotations)
+	}
+	return nil
+}
+
+func desiredSpecHash(spec any) (string, error) {
+	encoded, err := json.Marshal(spec)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:]), nil
+}
+
+func serviceAccountDesiredSpec(account *corev1.ServiceAccount) any {
+	return struct {
+		AutomountServiceAccountToken *bool `json:"automountServiceAccountToken,omitempty"`
+	}{AutomountServiceAccountToken: account.AutomountServiceAccountToken}
+}
+
+func applyProtectionResourceSet(ctx context.Context, client kubernetes.Interface, resources ResourceSet) error {
+	if err := upsertProtection(serviceAccountProtectionOperations(ctx, client, resources.ServiceAccount)); err != nil {
+		return err
+	}
+	if err := upsertProtection(resourceQuotaProtectionOperations(ctx, client, resources.ResourceQuota)); err != nil {
+		return err
+	}
+	if err := upsertProtection(limitRangeProtectionOperations(ctx, client, resources.LimitRange)); err != nil {
+		return err
+	}
+	for _, policy := range resources.NetworkPolicies {
+		if err := upsertProtection(networkPolicyProtectionOperations(ctx, client, policy)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func upsertProtection(operations protectionOperations) error {
+	var lastErr error
+	for attempt := 0; attempt < maxReconcileAttempts; attempt++ {
+		existing, err := operations.get()
+		if apierrors.IsNotFound(err) {
+			if _, createErr := operations.create(operations.desired.DeepCopyObject()); createErr == nil {
+				return verifyProtectionReadback(operations)
+			} else {
+				lastErr = createErr
+			}
+			existing, err = operations.get()
+		}
+		if err != nil {
+			if !apierrors.IsNotFound(err) {
+				lastErr = err
+			}
+			continue
+		}
+		if err := verifyProtectionObject(existing, operations.desired, operations.sameSpec); err == nil {
+			return nil
+		} else if runtimeErrorCodeValue(err) == "RESOURCE_OWNERSHIP_CONFLICT" {
+			return err
+		}
+
+		candidate := operations.reconcile(existing, operations.desired)
+		if _, updateErr := operations.update(candidate); updateErr == nil {
+			return verifyProtectionReadback(operations)
+		} else {
+			lastErr = updateErr
+			if !apierrors.IsConflict(updateErr) {
+				return applyError(updateErr)
+			}
+		}
+	}
+	return applyError(lastErr)
+}
+
+func verifyProtectionReadback(operations protectionOperations) error {
+	readBack, err := operations.get()
+	if err != nil {
+		return applyError(err)
+	}
+	return verifyProtectionObject(readBack, operations.desired, operations.sameSpec)
+}
+
+func verifyProtectionObject(actual, desired runtime.Object, sameSpec func(runtime.Object, runtime.Object) bool) error {
+	actualMetadata := actual.(metav1.Object)
+	desiredMetadata := desired.(metav1.Object)
+	if !hasOwnership(actualMetadata.GetLabels(), desiredMetadata.GetLabels()) {
+		return newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
+	}
+	if actualMetadata.GetAnnotations()[specHashAnnotation] != desiredMetadata.GetAnnotations()[specHashAnnotation] ||
+		!sameSpec(actual, desired) {
+		return applyError(errors.New("protection resource read-back verification failed"))
+	}
+	return nil
+}
+
+func runtimeErrorCodeValue(err error) string {
+	var runtimeErr *RuntimeError
+	if errors.As(err, &runtimeErr) {
+		return runtimeErr.Code()
+	}
+	return ""
+}
+
+func serviceAccountProtectionOperations(ctx context.Context, client kubernetes.Interface, desired *corev1.ServiceAccount) protectionOperations {
+	accounts := client.CoreV1().ServiceAccounts(desired.Namespace)
+	return protectionOperations{
+		desired: desired,
+		get: func() (runtime.Object, error) {
+			return accounts.Get(ctx, desired.Name, metav1.GetOptions{})
+		},
+		create: func(object runtime.Object) (runtime.Object, error) {
+			return accounts.Create(ctx, object.(*corev1.ServiceAccount), metav1.CreateOptions{})
+		},
+		update: func(object runtime.Object) (runtime.Object, error) {
+			return accounts.Update(ctx, object.(*corev1.ServiceAccount), metav1.UpdateOptions{})
+		},
+		reconcile: func(existing, wanted runtime.Object) runtime.Object {
+			candidate := existing.(*corev1.ServiceAccount).DeepCopy()
+			desiredAccount := wanted.(*corev1.ServiceAccount)
+			reconcileProtectionMetadata(candidate, desiredAccount)
+			candidate.AutomountServiceAccountToken = copyBoolPointer(desiredAccount.AutomountServiceAccountToken)
+			return candidate
+		},
+		sameSpec: func(actual, wanted runtime.Object) bool {
+			return apiequality.Semantic.DeepEqual(
+				serviceAccountDesiredSpec(actual.(*corev1.ServiceAccount)),
+				serviceAccountDesiredSpec(wanted.(*corev1.ServiceAccount)),
+			)
+		},
+	}
+}
+
+func resourceQuotaProtectionOperations(ctx context.Context, client kubernetes.Interface, desired *corev1.ResourceQuota) protectionOperations {
+	quotas := client.CoreV1().ResourceQuotas(desired.Namespace)
+	return protectionOperations{
+		desired: desired,
+		get: func() (runtime.Object, error) {
+			return quotas.Get(ctx, desired.Name, metav1.GetOptions{})
+		},
+		create: func(object runtime.Object) (runtime.Object, error) {
+			return quotas.Create(ctx, object.(*corev1.ResourceQuota), metav1.CreateOptions{})
+		},
+		update: func(object runtime.Object) (runtime.Object, error) {
+			return quotas.Update(ctx, object.(*corev1.ResourceQuota), metav1.UpdateOptions{})
+		},
+		reconcile: func(existing, wanted runtime.Object) runtime.Object {
+			candidate := existing.(*corev1.ResourceQuota).DeepCopy()
+			desiredQuota := wanted.(*corev1.ResourceQuota)
+			reconcileProtectionMetadata(candidate, desiredQuota)
+			candidate.Spec = *desiredQuota.Spec.DeepCopy()
+			return candidate
+		},
+		sameSpec: func(actual, wanted runtime.Object) bool {
+			return apiequality.Semantic.DeepEqual(actual.(*corev1.ResourceQuota).Spec, wanted.(*corev1.ResourceQuota).Spec)
+		},
+	}
+}
+
+func limitRangeProtectionOperations(ctx context.Context, client kubernetes.Interface, desired *corev1.LimitRange) protectionOperations {
+	limitRanges := client.CoreV1().LimitRanges(desired.Namespace)
+	return protectionOperations{
+		desired: desired,
+		get: func() (runtime.Object, error) {
+			return limitRanges.Get(ctx, desired.Name, metav1.GetOptions{})
+		},
+		create: func(object runtime.Object) (runtime.Object, error) {
+			return limitRanges.Create(ctx, object.(*corev1.LimitRange), metav1.CreateOptions{})
+		},
+		update: func(object runtime.Object) (runtime.Object, error) {
+			return limitRanges.Update(ctx, object.(*corev1.LimitRange), metav1.UpdateOptions{})
+		},
+		reconcile: func(existing, wanted runtime.Object) runtime.Object {
+			candidate := existing.(*corev1.LimitRange).DeepCopy()
+			desiredLimitRange := wanted.(*corev1.LimitRange)
+			reconcileProtectionMetadata(candidate, desiredLimitRange)
+			candidate.Spec = *desiredLimitRange.Spec.DeepCopy()
+			return candidate
+		},
+		sameSpec: func(actual, wanted runtime.Object) bool {
+			return apiequality.Semantic.DeepEqual(actual.(*corev1.LimitRange).Spec, wanted.(*corev1.LimitRange).Spec)
+		},
+	}
+}
+
+func networkPolicyProtectionOperations(ctx context.Context, client kubernetes.Interface, desired *networkingv1.NetworkPolicy) protectionOperations {
+	policies := client.NetworkingV1().NetworkPolicies(desired.Namespace)
+	return protectionOperations{
+		desired: desired,
+		get: func() (runtime.Object, error) {
+			return policies.Get(ctx, desired.Name, metav1.GetOptions{})
+		},
+		create: func(object runtime.Object) (runtime.Object, error) {
+			return policies.Create(ctx, object.(*networkingv1.NetworkPolicy), metav1.CreateOptions{})
+		},
+		update: func(object runtime.Object) (runtime.Object, error) {
+			return policies.Update(ctx, object.(*networkingv1.NetworkPolicy), metav1.UpdateOptions{})
+		},
+		reconcile: func(existing, wanted runtime.Object) runtime.Object {
+			candidate := existing.(*networkingv1.NetworkPolicy).DeepCopy()
+			desiredPolicy := wanted.(*networkingv1.NetworkPolicy)
+			reconcileProtectionMetadata(candidate, desiredPolicy)
+			candidate.Spec = *desiredPolicy.Spec.DeepCopy()
+			return candidate
+		},
+		sameSpec: func(actual, wanted runtime.Object) bool {
+			return apiequality.Semantic.DeepEqual(actual.(*networkingv1.NetworkPolicy).Spec, wanted.(*networkingv1.NetworkPolicy).Spec)
+		},
+	}
+}
+
+func reconcileProtectionMetadata(candidate, desired metav1.Object) {
+	labels := copyStringMap(candidate.GetLabels())
+	for key, value := range desired.GetLabels() {
+		labels[key] = value
+	}
+	candidate.SetLabels(labels)
+	annotations := copyStringMap(candidate.GetAnnotations())
+	for key, value := range desired.GetAnnotations() {
+		annotations[key] = value
+	}
+	candidate.SetAnnotations(annotations)
+}
+
+func copyStringMap(source map[string]string) map[string]string {
+	copy := make(map[string]string, len(source)+1)
+	for key, value := range source {
+		copy[key] = value
+	}
+	return copy
+}
+
+func copyBoolPointer(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
 }
 
 func upsertDeployment(ctx context.Context, client kubernetes.Interface, desired *appsv1.Deployment) (*appsv1.Deployment, error) {
@@ -336,6 +649,26 @@ func operationCancelledError(cause error) error {
 	return newRuntimeError("OPERATION_CANCELLED", true, cause)
 }
 
+func failureWithoutRollback(code string, cause error) error {
+	var runtimeErr *RuntimeError
+	if errors.As(cause, &runtimeErr) {
+		return runtimeErr
+	}
+	return newRuntimeError(code, code == "RESOURCE_APPLY_FAILED" || code == "WORKLOAD_NOT_READY" || code == "OPERATION_CANCELLED", cause)
+}
+
+func (a *Adapter) failAfterNamespace(
+	client kubernetes.Interface,
+	createdNamespace *corev1.Namespace,
+	code string,
+	cause error,
+) error {
+	if createdNamespace == nil {
+		return failureWithoutRollback(code, cause)
+	}
+	return a.failWithRollback(client, createdNamespace, code, cause)
+}
+
 func (a *Adapter) failWithRollback(client kubernetes.Interface, namespace *corev1.Namespace, code string, cause error) error {
 	var runtimeErr *RuntimeError
 	if errors.As(cause, &runtimeErr) && runtimeErr.Code() == "RESOURCE_OWNERSHIP_CONFLICT" {
@@ -359,6 +692,9 @@ func rollbackNamespace(ctx context.Context, client kubernetes.Interface, desired
 	}
 	if !hasOwnership(existing.Labels, desired.Labels) {
 		return errors.New("namespace ownership cannot be confirmed")
+	}
+	if desired.UID != "" && existing.UID != desired.UID {
+		return errors.New("namespace identity cannot be confirmed")
 	}
 	propagation := metav1.DeletePropagationBackground
 	preconditions := &metav1.Preconditions{UID: &existing.UID, ResourceVersion: &existing.ResourceVersion}
