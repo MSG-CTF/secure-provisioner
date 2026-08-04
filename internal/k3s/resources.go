@@ -31,6 +31,8 @@ const (
 type ResourceSet struct {
 	Namespace          *corev1.Namespace
 	ServiceAccount     *corev1.ServiceAccount
+	ResourceQuota      *corev1.ResourceQuota
+	LimitRange         *corev1.LimitRange
 	Deployments        []*appsv1.Deployment
 	Services           []*corev1.Service
 	Ingress            *networkingv1.Ingress
@@ -79,6 +81,8 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 			ObjectMeta: metav1.ObjectMeta{Name: namespace, Labels: copyLabels(labels)},
 		},
 		ServiceAccount:     buildRuntimeServiceAccount(namespace, labels),
+		ResourceQuota:      buildRuntimeResourceQuota(namespace, labels, command.Policy, len(containers)),
+		LimitRange:         buildRuntimeLimitRange(namespace, labels, command.Policy, len(containers)),
 		Deployments:        make([]*appsv1.Deployment, 0, len(containers)),
 		Services:           make([]*corev1.Service, 0, len(containers)),
 		ExpectedSpecHashes: make(map[string]string, len(containers)),

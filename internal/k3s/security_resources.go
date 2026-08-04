@@ -14,7 +14,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-const runtimeServiceAccountName = "challenge-runtime"
+const (
+	runtimeServiceAccountName   = "challenge-runtime"
+	runtimeResourceControlsName = "challenge-runtime"
+)
 
 func validateResolvedPolicy(
 	command provisioner.CreateWorkloadCommand,
@@ -143,6 +146,69 @@ func buildRuntimeServiceAccount(namespace string, labels map[string]string) *cor
 		ObjectMeta:                   metav1.ObjectMeta{Name: runtimeServiceAccountName, Namespace: namespace, Labels: copyLabels(labels)},
 		AutomountServiceAccountToken: boolPointer(false),
 	}
+}
+
+func buildRuntimeResourceQuota(
+	namespace string,
+	labels map[string]string,
+	policy isolation.ResolvedPolicy,
+	containerCount int,
+) *corev1.ResourceQuota {
+	totals := resourceList(resolvedResourceLimits(policy.ResourceLimits))
+	return &corev1.ResourceQuota{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      runtimeResourceControlsName,
+			Namespace: namespace,
+			Labels:    copyLabels(labels),
+		},
+		Spec: corev1.ResourceQuotaSpec{Hard: corev1.ResourceList{
+			corev1.ResourceRequestsCPU:                          totals[corev1.ResourceCPU],
+			corev1.ResourceLimitsCPU:                            totals[corev1.ResourceCPU],
+			corev1.ResourceRequestsMemory:                       totals[corev1.ResourceMemory],
+			corev1.ResourceLimitsMemory:                         totals[corev1.ResourceMemory],
+			corev1.ResourceRequestsEphemeralStorage:             totals[corev1.ResourceEphemeralStorage],
+			corev1.ResourceLimitsEphemeralStorage:               totals[corev1.ResourceEphemeralStorage],
+			corev1.ResourcePods:                                 countQuantity(containerCount),
+			corev1.ResourceServices:                             countQuantity(containerCount),
+			corev1.ResourceServicesLoadBalancers:                countQuantity(0),
+			corev1.ResourceServicesNodePorts:                    countQuantity(0),
+			corev1.ResourceName("count/deployments.apps"):       countQuantity(containerCount),
+			corev1.ResourceName("count/replicasets.apps"):       countQuantity(2 * containerCount),
+			corev1.ResourceName("count/secrets"):                countQuantity(0),
+			corev1.ResourceName("count/configmaps"):             countQuantity(0),
+			corev1.ResourceName("count/persistentvolumeclaims"): countQuantity(0),
+		}},
+	}
+}
+
+func buildRuntimeLimitRange(
+	namespace string,
+	labels map[string]string,
+	policy isolation.ResolvedPolicy,
+	containerCount int,
+) *corev1.LimitRange {
+	maximumSlice := resourceList(distributedResourceLimits(
+		resolvedResourceLimits(policy.ResourceLimits),
+		containerCount,
+		0,
+	))
+	return &corev1.LimitRange{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      runtimeResourceControlsName,
+			Namespace: namespace,
+			Labels:    copyLabels(labels),
+		},
+		Spec: corev1.LimitRangeSpec{Limits: []corev1.LimitRangeItem{{
+			Type:           corev1.LimitTypeContainer,
+			Max:            maximumSlice.DeepCopy(),
+			Default:        maximumSlice.DeepCopy(),
+			DefaultRequest: maximumSlice.DeepCopy(),
+		}}},
+	}
+}
+
+func countQuantity(value int) resource.Quantity {
+	return *resource.NewQuantity(int64(value), resource.DecimalSI)
 }
 
 func applyPodSecurityBaseline(pod *corev1.PodSpec, container *corev1.Container, requirement isolation.ContainerRequirement) {
