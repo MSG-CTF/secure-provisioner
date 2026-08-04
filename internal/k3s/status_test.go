@@ -112,6 +112,79 @@ func TestStatusReaderSupportsExposedServiceNamedForContainer(t *testing.T) {
 	}
 }
 
+func TestStatusReaderUsesReadyNodePortServicesAndIgnoresInternalServices(t *testing.T) {
+	binding, objects, _ := statusFixture(t)
+	endpoint := objects[3].(*discoveryv1.EndpointSlice)
+	endpoint.Labels[discoveryv1.LabelServiceName] = "web"
+	objects = objects[:5]
+	objects = append(objects,
+		&corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: binding.Namespace,
+				Name:      "web",
+				Labels: map[string]string{
+					"app.kubernetes.io/managed-by": "secure-provisioner",
+					"msgctf.io/instance-id":        binding.InstanceID,
+				},
+			},
+			Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeNodePort, Ports: []corev1.ServicePort{{Port: 8080, NodePort: 31042}}},
+		},
+		&corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: binding.Namespace,
+				Name:      "database",
+				Labels: map[string]string{
+					"app.kubernetes.io/managed-by": "secure-provisioner",
+					"msgctf.io/instance-id":        binding.InstanceID,
+				},
+			},
+			Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, Ports: []corev1.ServicePort{{Port: 5432}}},
+		},
+	)
+	config := validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")
+	config.ExposureMode = ExposureModeNodePort
+	config.PublicGateway = "http://203.0.113.10"
+	reader, _ := NewStatusReader(statusRegistryWithConfig(t, config, objects, nil))
+
+	status, err := reader.Get(context.Background(), binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.EndpointReady || status.Phase != "READY" {
+		t.Fatalf("status = %#v, want ready NodePort endpoint", status)
+	}
+}
+
+func TestStatusReaderRequiresEveryNodePortServiceEndpoint(t *testing.T) {
+	binding, objects, _ := statusFixture(t)
+	objects = objects[:5]
+	objects = append(objects,
+		&corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: binding.Namespace,
+				Name:      "web",
+				Labels: map[string]string{
+					"app.kubernetes.io/managed-by": "secure-provisioner",
+					"msgctf.io/instance-id":        binding.InstanceID,
+				},
+			},
+			Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeNodePort, Ports: []corev1.ServicePort{{Port: 8080, NodePort: 31042}}},
+		},
+	)
+	config := validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")
+	config.ExposureMode = ExposureModeNodePort
+	config.PublicGateway = "http://203.0.113.10"
+	reader, _ := NewStatusReader(statusRegistryWithConfig(t, config, objects, nil))
+
+	status, err := reader.Get(context.Background(), binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.EndpointReady || status.Phase != "DEGRADED" {
+		t.Fatalf("status = %#v, want missing NodePort endpoint", status)
+	}
+}
+
 func TestStatusReaderCalculatesSingleNodeResources(t *testing.T) {
 	binding, objects, metric := statusFixture(t)
 	objects = append(objects,
@@ -394,6 +467,11 @@ func statusFixture(t *testing.T) (runtimebinding.Binding, []runtime.Object, *met
 
 func statusRegistry(t *testing.T, objects []runtime.Object, metric *metricsv1beta1.PodMetrics) *Registry {
 	t.Helper()
+	return statusRegistryWithConfig(t, validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig"), objects, metric)
+}
+
+func statusRegistryWithConfig(t *testing.T, config ClusterConfig, objects []runtime.Object, metric *metricsv1beta1.PodMetrics) *Registry {
+	t.Helper()
 	kubeClient := fake.NewSimpleClientset(objects...)
 	metricsClient := metricsfake.NewSimpleClientset()
 	if metric != nil {
@@ -412,7 +490,7 @@ func statusRegistry(t *testing.T, objects []runtime.Object, metric *metricsv1bet
 		})
 	}
 	registry, err := NewRegistry(
-		[]ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")},
+		[]ClusterConfig{config},
 		&sequenceFactory{
 			clients: []kubernetes.Interface{kubeClient},
 			metrics: []metricsclient.Interface{metricsClient},

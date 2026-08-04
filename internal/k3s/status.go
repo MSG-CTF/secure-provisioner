@@ -171,7 +171,11 @@ func (r *StatusReader) Get(ctx context.Context, binding runtimebinding.Binding) 
 	}
 
 	if len(status.Containers) > 0 {
-		status.EndpointReady, err = hasReadyIngressEndpoints(ctx, cluster.Client, binding.Namespace)
+		if cluster.Config.ExposureMode == ExposureModeNodePort {
+			status.EndpointReady, err = hasReadyNodePortEndpoints(ctx, cluster.Client, binding.Namespace, binding.InstanceID)
+		} else {
+			status.EndpointReady, err = hasReadyIngressEndpoints(ctx, cluster.Client, binding.Namespace)
+		}
 		if err != nil {
 			return RuntimeStatus{}, newRuntimeError("TARGET_TEMPORARILY_UNAVAILABLE", true, err)
 		}
@@ -203,37 +207,62 @@ func hasReadyIngressEndpoints(ctx context.Context, client kubernetes.Interface, 
 		return false, nil
 	}
 	for serviceName := range serviceNames {
-		endpointSlices, listErr := client.DiscoveryV1().EndpointSlices(namespace).List(ctx, metav1.ListOptions{
-			LabelSelector: labels.Set{discoveryv1.LabelServiceName: serviceName}.String(),
-		})
+		serviceReady, listErr := hasReadyServiceEndpoints(ctx, client, namespace, serviceName)
 		if listErr != nil {
 			return false, listErr
-		}
-		serviceReady := false
-		for _, endpointSlice := range endpointSlices.Items {
-			for _, endpoint := range endpointSlice.Endpoints {
-				if endpoint.Conditions.Ready != nil && !*endpoint.Conditions.Ready {
-					continue
-				}
-				for _, address := range endpoint.Addresses {
-					if strings.TrimSpace(address) != "" {
-						serviceReady = true
-						break
-					}
-				}
-				if serviceReady {
-					break
-				}
-			}
-			if serviceReady {
-				break
-			}
 		}
 		if !serviceReady {
 			return false, nil
 		}
 	}
 	return true, nil
+}
+
+func hasReadyNodePortEndpoints(ctx context.Context, client kubernetes.Interface, namespace, instanceID string) (bool, error) {
+	services, err := client.CoreV1().Services(namespace).List(ctx, metav1.ListOptions{LabelSelector: labels.Set{
+		"app.kubernetes.io/managed-by": "secure-provisioner",
+		"msgctf.io/instance-id":        instanceID,
+	}.String()})
+	if err != nil {
+		return false, err
+	}
+	found := false
+	for _, service := range services.Items {
+		if service.Spec.Type != corev1.ServiceTypeNodePort {
+			continue
+		}
+		found = true
+		ready, endpointErr := hasReadyServiceEndpoints(ctx, client, namespace, service.Name)
+		if endpointErr != nil {
+			return false, endpointErr
+		}
+		if !ready {
+			return false, nil
+		}
+	}
+	return found, nil
+}
+
+func hasReadyServiceEndpoints(ctx context.Context, client kubernetes.Interface, namespace, serviceName string) (bool, error) {
+	endpointSlices, err := client.DiscoveryV1().EndpointSlices(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labels.Set{discoveryv1.LabelServiceName: serviceName}.String(),
+	})
+	if err != nil {
+		return false, err
+	}
+	for _, endpointSlice := range endpointSlices.Items {
+		for _, endpoint := range endpointSlice.Endpoints {
+			if endpoint.Conditions.Ready != nil && !*endpoint.Conditions.Ready {
+				continue
+			}
+			for _, address := range endpoint.Addresses {
+				if strings.TrimSpace(address) != "" {
+					return true, nil
+				}
+			}
+		}
+	}
+	return false, nil
 }
 
 func mapNodeRuntimeStatus(node corev1.Node, pods []corev1.Pod, usage *ResourceUsage) NodeRuntimeStatus {
