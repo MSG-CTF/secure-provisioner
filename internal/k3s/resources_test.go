@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -73,7 +74,7 @@ func TestBuildResourceSetCreatesOwnedKubernetesResources(t *testing.T) {
 		}
 	}
 
-	const wantSpecHash = "2d0bc30d1f4d428f92e20d14430b8a0370ab5dedad7df62dfbdb99c2b9ab4161"
+	const wantSpecHash = "0a0f922bc61461aeb235a8777d9170fb3cfb09c3cb8bf29fa169fa315f9c4089"
 	if resources.ExpectedSpecHash != wantSpecHash {
 		t.Fatalf("ExpectedSpecHash = %q, want stable SHA-256", resources.ExpectedSpecHash)
 	}
@@ -313,7 +314,7 @@ func validCluster(targetID string) Cluster {
 }
 
 func validCreateCommand(targetID string) provisioner.CreateWorkloadCommand {
-	return provisioner.CreateWorkloadCommand{
+	command := provisioner.CreateWorkloadCommand{
 		RequestID:   "req-01",
 		InstanceID:  "018f3f1e-21b8-7a91-a30b-63b3400fd001",
 		TeamID:      42,
@@ -331,10 +332,12 @@ func validCreateCommand(targetID string) provisioner.CreateWorkloadCommand {
 			EphemeralStorageMiB: 1024,
 		},
 	}
+	command.Policy = resolvedPolicyForCommand(command, "SMALL_SINGLE")
+	return command
 }
 
 func validMultiCreateCommand(targetID string) provisioner.CreateWorkloadCommand {
-	return provisioner.CreateWorkloadCommand{
+	command := provisioner.CreateWorkloadCommand{
 		RequestID:   "req-multi",
 		InstanceID:  "018f3f1e-21b8-7a91-a30b-63b3400fd001",
 		TeamID:      42,
@@ -348,6 +351,40 @@ func validMultiCreateCommand(targetID string) provisioner.CreateWorkloadCommand 
 			CPUMillicores:       501,
 			MemoryMiB:           513,
 			EphemeralStorageMiB: 1025,
+		},
+	}
+	command.Policy = resolvedPolicyForCommand(command, "SMALL_MULTI")
+	return command
+}
+
+func resolvedPolicyForCommand(command provisioner.CreateWorkloadCommand, resourceProfile string) isolation.ResolvedPolicy {
+	containers := make([]isolation.ContainerRequirement, len(command.Containers))
+	for index, container := range command.Containers {
+		containers[index] = isolation.ContainerRequirement{
+			Name:      container.Name,
+			Ports:     append([]int(nil), container.Ports...),
+			RunAsUser: int64(10001 + index),
+		}
+	}
+	return isolation.ResolvedPolicy{
+		ChallengeID:  "challenge-1",
+		IsolationRef: isolation.ProfileRef{Name: "STANDARD", Version: "v1"},
+		ResourceRef:  isolation.ProfileRef{Name: resourceProfile, Version: "v1"},
+		Baseline: isolation.Baseline{
+			AutomountServiceAccountToken: false,
+			RunAsNonRoot:                 true,
+			ReadOnlyRootFilesystem:       true,
+			AllowPrivilegeEscalation:     false,
+			Privileged:                   false,
+			DropAllCapabilities:          true,
+			SeccompRuntimeDefault:        true,
+		},
+		Containers:   containers,
+		OutboundMode: isolation.OutboundNone,
+		ResourceLimits: isolation.ResourceLimits{
+			CPUMillicores:       command.ResourceLimits.CPUMillicores,
+			MemoryMiB:           command.ResourceLimits.MemoryMiB,
+			EphemeralStorageMiB: command.ResourceLimits.EphemeralStorageMiB,
 		},
 	}
 }

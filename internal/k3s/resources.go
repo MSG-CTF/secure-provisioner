@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -29,6 +30,7 @@ const (
 
 type ResourceSet struct {
 	Namespace          *corev1.Namespace
+	ServiceAccount     *corev1.ServiceAccount
 	Deployments        []*appsv1.Deployment
 	Services           []*corev1.Service
 	Ingress            *networkingv1.Ingress
@@ -60,6 +62,10 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 	if !validWorkloadCommand(cluster, command, containers) {
 		return ResourceSet{}, newRuntimeError("INVALID_CREATE_COMMAND", false, nil)
 	}
+	policyContainers, validPolicy := validateResolvedPolicy(command, containers)
+	if !validPolicy {
+		return ResourceSet{}, newRuntimeError("INVALID_CREATE_COMMAND", false, nil)
+	}
 
 	namespace, err := NamespaceForInstance(command.InstanceID)
 	if err != nil {
@@ -72,6 +78,7 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 		Namespace: &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{Name: namespace, Labels: copyLabels(labels)},
 		},
+		ServiceAccount:     buildRuntimeServiceAccount(namespace, labels),
 		Deployments:        make([]*appsv1.Deployment, 0, len(containers)),
 		Services:           make([]*corev1.Service, 0, len(containers)),
 		ExpectedSpecHashes: make(map[string]string, len(containers)),
@@ -92,8 +99,9 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 	}
 
 	for index, container := range containers {
-		limits := distributedResourceLimits(command.ResourceLimits, len(containers), index)
-		specHash, hashErr := createContainerSpecHash(command, container, limits)
+		requirement := policyContainers[container.Name]
+		limits := distributedResourceLimits(resolvedResourceLimits(command.Policy.ResourceLimits), len(containers), index)
+		specHash, hashErr := createContainerSpecHash(command, container, requirement, limits)
 		if hashErr != nil {
 			return ResourceSet{}, newRuntimeError("INVALID_CREATE_COMMAND", false, nil)
 		}
@@ -101,9 +109,9 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 		containerLabels[containerNameLabel] = container.Name
 		podLabels := copyLabels(containerLabels)
 		quantities := resourceList(limits)
-		containerPorts := make([]corev1.ContainerPort, 0, len(container.Ports))
-		servicePorts := make([]corev1.ServicePort, 0, len(container.Ports))
-		for _, port := range container.Ports {
+		containerPorts := make([]corev1.ContainerPort, 0, len(requirement.Ports))
+		servicePorts := make([]corev1.ServicePort, 0, len(requirement.Ports))
+		for _, port := range requirement.Ports {
 			containerPorts = append(containerPorts, corev1.ContainerPort{ContainerPort: int32(port)})
 			servicePorts = append(servicePorts, corev1.ServicePort{
 				Name:       fmt.Sprintf("port-%d", port),
@@ -112,6 +120,17 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 			})
 		}
 
+		podContainer := corev1.Container{
+			Name:  container.Name,
+			Image: container.Image,
+			Ports: containerPorts,
+			Resources: corev1.ResourceRequirements{
+				Requests: quantities,
+				Limits:   quantities.DeepCopy(),
+			},
+		}
+		podSpec := corev1.PodSpec{Containers: []corev1.Container{podContainer}}
+		applyPodSecurityBaseline(&podSpec, &podSpec.Containers[0], requirement)
 		deployment := &appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:        container.Name,
@@ -120,22 +139,16 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 				Annotations: map[string]string{specHashAnnotation: specHash},
 			},
 			Spec: appsv1.DeploymentSpec{
-				Replicas: &replicas,
-				Selector: &metav1.LabelSelector{MatchLabels: copyLabels(podLabels)},
+				Replicas:             &replicas,
+				Strategy:             appsv1.DeploymentStrategy{Type: appsv1.RecreateDeploymentStrategyType},
+				RevisionHistoryLimit: int32Pointer(1),
+				Selector:             &metav1.LabelSelector{MatchLabels: copyLabels(podLabels)},
 				Template: corev1.PodTemplateSpec{
 					ObjectMeta: metav1.ObjectMeta{
 						Labels:      podLabels,
 						Annotations: map[string]string{specHashAnnotation: specHash},
 					},
-					Spec: corev1.PodSpec{Containers: []corev1.Container{{
-						Name:  container.Name,
-						Image: container.Image,
-						Ports: containerPorts,
-						Resources: corev1.ResourceRequirements{
-							Requests: quantities,
-							Limits:   quantities.DeepCopy(),
-						},
-					}}},
+					Spec: podSpec,
 				},
 			},
 		}
@@ -156,7 +169,7 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 		resources.ExpectedSpecHashes[container.Name] = specHash
 
 		if container.Expose {
-			for _, port := range container.Ports {
+			for _, port := range requirement.Ports {
 				path := instancePathSegment + command.InstanceID
 				if len(resources.Endpoints) > 0 {
 					path += "/" + container.Name + "/" + strconv.Itoa(port)
@@ -212,21 +225,26 @@ func distributedValue(total, count, index int) int {
 func createContainerSpecHash(
 	command provisioner.CreateWorkloadCommand,
 	container provisioner.WorkloadContainer,
+	requirement isolation.ContainerRequirement,
 	limits provisioner.ResourceLimits,
 ) (string, error) {
 	spec := struct {
-		InstanceID     string                        `json:"instance_id"`
-		TeamID         int64                         `json:"team_id"`
-		RuntimeType    provisioner.RuntimeType       `json:"runtime_type"`
-		TargetID       string                        `json:"target_id"`
-		Container      provisioner.WorkloadContainer `json:"container"`
-		ResourceLimits provisioner.ResourceLimits    `json:"resource_limits"`
+		InstanceID     string                         `json:"instance_id"`
+		TeamID         int64                          `json:"team_id"`
+		RuntimeType    provisioner.RuntimeType        `json:"runtime_type"`
+		TargetID       string                         `json:"target_id"`
+		Container      provisioner.WorkloadContainer  `json:"container"`
+		Requirement    isolation.ContainerRequirement `json:"requirement"`
+		Baseline       isolation.Baseline             `json:"baseline"`
+		ResourceLimits provisioner.ResourceLimits     `json:"resource_limits"`
 	}{
 		InstanceID:     command.InstanceID,
 		TeamID:         command.TeamID,
 		RuntimeType:    command.RuntimeType,
 		TargetID:       command.TargetID,
 		Container:      container,
+		Requirement:    requirement,
+		Baseline:       command.Policy.Baseline,
 		ResourceLimits: limits,
 	}
 	encoded, err := json.Marshal(spec)
@@ -235,6 +253,14 @@ func createContainerSpecHash(
 	}
 	digest := sha256.Sum256(encoded)
 	return hex.EncodeToString(digest[:]), nil
+}
+
+func resolvedResourceLimits(limits isolation.ResourceLimits) provisioner.ResourceLimits {
+	return provisioner.ResourceLimits{
+		CPUMillicores:       limits.CPUMillicores,
+		MemoryMiB:           limits.MemoryMiB,
+		EphemeralStorageMiB: limits.EphemeralStorageMiB,
+	}
 }
 
 func validWorkloadCommand(
