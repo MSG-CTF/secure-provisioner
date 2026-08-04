@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
 	"github.com/MSG-CTF/secure-provisioner/internal/k3s"
 	"github.com/MSG-CTF/secure-provisioner/internal/operations"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
@@ -37,6 +38,7 @@ type Service struct {
 	delete      DeleteAdapter
 	bindings    runtimebinding.Store
 	operations  operations.Store
+	resolver    isolation.Resolver
 	worker      *operations.Worker
 	maxAttempts int
 	now         func() time.Time
@@ -49,9 +51,10 @@ func NewService(
 	deleteAdapter DeleteAdapter,
 	bindings runtimebinding.Store,
 	operationStore operations.Store,
+	resolver isolation.Resolver,
 	config Config,
 ) (*Service, error) {
-	if create == nil || status == nil || deleteAdapter == nil || bindings == nil || operationStore == nil || config.MaxAttempts <= 0 {
+	if create == nil || status == nil || deleteAdapter == nil || bindings == nil || operationStore == nil || resolver == nil || config.MaxAttempts <= 0 {
 		return nil, errors.New("runtime service dependencies are required")
 	}
 	recordingCreate := &bindingCreateAdapter{
@@ -75,6 +78,7 @@ func NewService(
 		delete:      deleteAdapter,
 		bindings:    bindings,
 		operations:  operationStore,
+		resolver:    resolver,
 		worker:      worker,
 		maxAttempts: config.MaxAttempts,
 		now:         time.Now,
@@ -87,6 +91,16 @@ func NewService(
 func (s *Service) EnqueueCreate(command provisioner.CreateWorkloadCommand) (operations.Operation, bool, error) {
 	s.enqueueMu.Lock()
 	defer s.enqueueMu.Unlock()
+	policy, err := s.resolver.Resolve(command.PolicyRequest)
+	if err != nil {
+		return operations.Operation{}, false, err
+	}
+	command.Policy = policy
+	command.ResourceLimits = provisioner.ResourceLimits{
+		CPUMillicores:       policy.ResourceLimits.CPUMillicores,
+		MemoryMiB:           policy.ResourceLimits.MemoryMiB,
+		EphemeralStorageMiB: policy.ResourceLimits.EphemeralStorageMiB,
+	}
 	return s.operations.EnqueueCreate(command, s.maxAttempts)
 }
 

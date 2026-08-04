@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/MSG-CTF/secure-provisioner/internal/httpapi"
+	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
 	"github.com/MSG-CTF/secure-provisioner/internal/k3s"
 	"github.com/MSG-CTF/secure-provisioner/internal/operations"
 	"github.com/MSG-CTF/secure-provisioner/internal/runtimebinding"
@@ -170,6 +171,7 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 		deleteAdapter,
 		runtimebinding.NewMemoryStore(),
 		operations.NewMemoryStore(nil),
+		isolation.NewStaticResolver(),
 		runtimeops.Config{
 			MaxAttempts: config.MaxAttempts,
 			Worker: operations.WorkerConfig{

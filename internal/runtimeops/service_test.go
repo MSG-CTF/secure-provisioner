@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
 	"github.com/MSG-CTF/secure-provisioner/internal/k3s"
 	"github.com/MSG-CTF/secure-provisioner/internal/operations"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
@@ -35,6 +36,39 @@ func TestServiceEnqueuesCreateIdempotently(t *testing.T) {
 	}
 	if create.calls != 0 {
 		t.Fatalf("create calls before worker = %d", create.calls)
+	}
+}
+
+func TestEnqueueCreateResolvesPolicyBeforePersistingOperation(t *testing.T) {
+	resolver := &recordingResolver{resolved: validResolvedPolicy()}
+	service := newTestServiceWithResolver(t, resolver, operations.NewMemoryStore(func() (string, error) { return "operation-policy", nil }))
+
+	command := createCommand()
+	command.ResourceLimits.MemoryMiB = 999
+	operation, created, err := service.EnqueueCreate(command)
+	if err != nil || !created {
+		t.Fatalf("EnqueueCreate() = (%#v, %t, %v)", operation, created, err)
+	}
+	if resolver.calls != 1 || resolver.request.ChallengeID != "web-chall1" {
+		t.Fatalf("resolver calls = %d; request = %#v", resolver.calls, resolver.request)
+	}
+	if operation.CreateCommand == nil || operation.CreateCommand.Policy.IsolationRef.Name != "STANDARD" ||
+		!operation.CreateCommand.Policy.Baseline.RunAsNonRoot || operation.CreateCommand.ResourceLimits.MemoryMiB != 128 {
+		t.Fatalf("operation = %#v", operation)
+	}
+}
+
+func TestEnqueueCreateRejectsPolicyBeforePersistingOperation(t *testing.T) {
+	store := operations.NewMemoryStore(func() (string, error) { return "operation-policy", nil })
+	resolver := &recordingResolver{err: isolation.ErrPolicyRejected}
+	service := newTestServiceWithResolver(t, resolver, store)
+
+	_, _, err := service.EnqueueCreate(createCommand())
+	if !errors.Is(err, isolation.ErrPolicyRejected) {
+		t.Fatalf("EnqueueCreate() error = %v, want ErrPolicyRejected", err)
+	}
+	if _, err := store.GetByRequestID(createCommand().RequestID); !errors.Is(err, operations.ErrOperationNotFound) {
+		t.Fatalf("operation store error = %v, want ErrOperationNotFound", err)
 	}
 }
 
@@ -302,6 +336,7 @@ func newTestServiceWithOperationStore(
 		deleteAdapter,
 		bindings,
 		operationStore,
+		isolation.NewStaticResolver(),
 		Config{
 			MaxAttempts: 2,
 			Worker: operations.WorkerConfig{
@@ -315,6 +350,42 @@ func newTestServiceWithOperationStore(
 	}
 	service.now = func() time.Time { return time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC) }
 	return service
+}
+
+func newTestServiceWithResolver(t *testing.T, resolver isolation.Resolver, operationStore operations.Store) *Service {
+	t.Helper()
+	service, err := NewService(
+		&recordingCreate{},
+		&recordingStatus{},
+		&recordingDelete{},
+		runtimebinding.NewMemoryStore(),
+		operationStore,
+		resolver,
+		Config{
+			MaxAttempts: 2,
+			Worker: operations.WorkerConfig{
+				Concurrency: 1,
+				Backoff:     func(int) time.Duration { return 0 },
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service
+}
+
+type recordingResolver struct {
+	calls    int
+	request  isolation.Request
+	resolved isolation.ResolvedPolicy
+	err      error
+}
+
+func (r *recordingResolver) Resolve(request isolation.Request) (isolation.ResolvedPolicy, error) {
+	r.calls++
+	r.request = request
+	return r.resolved, r.err
 }
 
 type recordingCreate struct {
@@ -375,11 +446,12 @@ func (s *failingDeleteOperationStore) EnqueueDelete(provisioner.DeleteWorkloadCo
 
 func createCommand() provisioner.CreateWorkloadCommand {
 	return provisioner.CreateWorkloadCommand{
-		RequestID:   "create-request-01",
-		InstanceID:  "018f3f1e-21b8-7a91-a30b-63b3400fd001",
-		TeamID:      18,
-		RuntimeType: provisioner.RuntimeTypeKubernetes,
-		TargetID:    "aws-dev",
+		RequestID:    "create-request-01",
+		InstanceID:   "018f3f1e-21b8-7a91-a30b-63b3400fd001",
+		TeamID:       18,
+		ChallengeRef: provisioner.ChallengeRef{ChallengeID: "web-chall1", Version: "2026.08.1"},
+		RuntimeType:  provisioner.RuntimeTypeKubernetes,
+		TargetID:     "aws-dev",
 		Containers: []provisioner.WorkloadContainer{{
 			Name:   "challenge",
 			Image:  "registry.example.invalid/challenge@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -387,11 +459,29 @@ func createCommand() provisioner.CreateWorkloadCommand {
 			Expose: true,
 		}},
 		ResourceLimits: provisioner.ResourceLimits{
-			CPUMillicores:       500,
-			MemoryMiB:           512,
-			EphemeralStorageMiB: 1024,
+			CPUMillicores:       100,
+			MemoryMiB:           128,
+			EphemeralStorageMiB: 128,
+		},
+		PolicyRequest: isolation.Request{
+			ChallengeID:  "web-chall1",
+			IsolationRef: isolation.ProfileRef{Name: "STANDARD", Version: "v1"},
+			ResourceRef:  isolation.ProfileRef{Name: "SMALL_SINGLE", Version: "v1"},
+			Containers: []isolation.ContainerRequirement{{
+				Name: "challenge", Ports: []int{8080}, RunAsUser: 10001,
+			}},
+			OutboundMode:   isolation.OutboundNone,
+			ResourceLimits: isolation.ResourceLimits{CPUMillicores: 100, MemoryMiB: 128, EphemeralStorageMiB: 128},
 		},
 	}
+}
+
+func validResolvedPolicy() isolation.ResolvedPolicy {
+	policy, err := isolation.NewStaticResolver().Resolve(createCommand().PolicyRequest)
+	if err != nil {
+		panic(err)
+	}
+	return policy
 }
 
 func savedBinding(t *testing.T, store runtimebinding.Store) runtimebinding.Binding {

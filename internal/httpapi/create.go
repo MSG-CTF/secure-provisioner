@@ -2,8 +2,10 @@ package httpapi
 
 import (
 	"fmt"
+	"path"
 	"strings"
 
+	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 	"k8s.io/apimachinery/pkg/util/validation"
 )
@@ -18,17 +20,43 @@ type RuntimeTarget struct {
 }
 
 type RuntimeWorkload struct {
-	Image          string             `json:"image,omitempty"`
-	ContainerPort  int                `json:"container_port,omitempty"`
-	Containers     []RuntimeContainer `json:"containers,omitempty"`
-	ResourceLimits ResourceLimits     `json:"resource_limits"`
+	Image               string               `json:"image,omitempty"`
+	ContainerPort       int                  `json:"container_port,omitempty"`
+	Containers          []RuntimeContainer   `json:"containers,omitempty"`
+	InternalConnections []InternalConnection `json:"internal_connections,omitempty"`
+	OutboundMode        string               `json:"outbound_mode"`
+	ResourceLimits      ResourceLimits       `json:"resource_limits"`
 }
 
 type RuntimeContainer struct {
-	Name   string `json:"name"`
-	Image  string `json:"image"`
-	Ports  []int  `json:"ports"`
-	Expose bool   `json:"expose"`
+	Name          string         `json:"name"`
+	Image         string         `json:"image"`
+	Ports         []int          `json:"ports"`
+	Expose        bool           `json:"expose"`
+	RunAsUser     int64          `json:"run_as_user"`
+	WritablePaths []WritablePath `json:"writable_paths,omitempty"`
+}
+
+type ChallengeRef struct {
+	ChallengeID string `json:"challenge_id"`
+	Version     string `json:"version"`
+}
+
+type ProfileRef struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+type WritablePath struct {
+	Path    string `json:"path"`
+	SizeMiB int    `json:"size_mib"`
+}
+
+type InternalConnection struct {
+	SourceContainer      string `json:"source_container"`
+	DestinationContainer string `json:"destination_container"`
+	Protocol             string `json:"protocol"`
+	Port                 int    `json:"port"`
 }
 
 type ResourceLimits struct {
@@ -38,11 +66,14 @@ type ResourceLimits struct {
 }
 
 type CreateWorkloadRequest struct {
-	RequestID  string          `json:"request_id"`
-	InstanceID string          `json:"instance_id"`
-	TeamID     int64           `json:"team_id"`
-	Target     RuntimeTarget   `json:"target"`
-	Workload   RuntimeWorkload `json:"workload"`
+	RequestID          string          `json:"request_id"`
+	InstanceID         string          `json:"instance_id"`
+	TeamID             int64           `json:"team_id"`
+	ChallengeRef       ChallengeRef    `json:"challenge_ref"`
+	IsolationRef       ProfileRef      `json:"isolation_ref"`
+	ResourceProfileRef ProfileRef      `json:"resource_profile_ref"`
+	Target             RuntimeTarget   `json:"target"`
+	Workload           RuntimeWorkload `json:"workload"`
 }
 
 type CreateWorkloadResponse struct {
@@ -85,15 +116,22 @@ func (request CreateWorkloadRequest) Validate() error {
 		request.Workload.ResourceLimits.EphemeralStorageMiB < len(containers) {
 		return fmt.Errorf("resource limits must provide at least one unit per container")
 	}
+	if err := request.validateIsolation(containers); err != nil {
+		return err
+	}
 	return nil
 }
 
 func (request CreateWorkloadRequest) ToCommand() provisioner.CreateWorkloadCommand {
 	containers, _ := request.normalizedContainers()
 	return provisioner.CreateWorkloadCommand{
-		RequestID:   request.RequestID,
-		InstanceID:  request.InstanceID,
-		TeamID:      request.TeamID,
+		RequestID:  request.RequestID,
+		InstanceID: request.InstanceID,
+		TeamID:     request.TeamID,
+		ChallengeRef: provisioner.ChallengeRef{
+			ChallengeID: request.ChallengeRef.ChallengeID,
+			Version:     request.ChallengeRef.Version,
+		},
 		RuntimeType: provisioner.RuntimeType(request.Target.RuntimeType),
 		TargetID:    request.Target.TargetID,
 		Containers:  containers,
@@ -102,6 +140,8 @@ func (request CreateWorkloadRequest) ToCommand() provisioner.CreateWorkloadComma
 			MemoryMiB:           request.Workload.ResourceLimits.MemoryMiB,
 			EphemeralStorageMiB: request.Workload.ResourceLimits.EphemeralStorageMiB,
 		},
+		PolicyRequest: request.toPolicyRequest(containers),
+		Policy:        unresolvedPolicy(request.toPolicyRequest(containers)),
 	}
 }
 
@@ -164,6 +204,132 @@ func (request CreateWorkloadRequest) normalizedContainers() ([]provisioner.Workl
 		return nil, fmt.Errorf("at least one container must be exposed")
 	}
 	return containers, nil
+}
+
+func (request CreateWorkloadRequest) validateIsolation(containers []provisioner.WorkloadContainer) error {
+	if strings.TrimSpace(request.ChallengeRef.ChallengeID) == "" || strings.TrimSpace(request.ChallengeRef.Version) == "" {
+		return fmt.Errorf("challenge_ref challenge_id and version are required")
+	}
+	if !validProfileRef(request.IsolationRef) {
+		return fmt.Errorf("isolation_ref name and version are required")
+	}
+	if !validProfileRef(request.ResourceProfileRef) {
+		return fmt.Errorf("resource_profile_ref name and version are required")
+	}
+	if request.Workload.OutboundMode != string(isolation.OutboundNone) &&
+		request.Workload.OutboundMode != string(isolation.OutboundPublicInternet) {
+		return fmt.Errorf("outbound_mode must be NONE or PUBLIC_INTERNET")
+	}
+
+	portsByContainer := make(map[string]map[int]struct{}, len(containers))
+	for index, container := range containers {
+		runAsUser := int64(10001)
+		var writablePaths []WritablePath
+		if len(request.Workload.Containers) > 0 {
+			runAsUser = request.Workload.Containers[index].RunAsUser
+			writablePaths = request.Workload.Containers[index].WritablePaths
+		}
+		if runAsUser <= 0 {
+			return fmt.Errorf("run_as_user must be a non-root UID")
+		}
+		seenPaths := make([]string, 0, len(writablePaths))
+		for _, writable := range writablePaths {
+			if writable.SizeMiB <= 0 || writable.Path == "" || !strings.HasPrefix(writable.Path, "/") ||
+				path.Clean(writable.Path) != writable.Path || writable.Path == "/" {
+				return fmt.Errorf("writable path must be absolute and size_mib must be positive")
+			}
+			for _, existing := range seenPaths {
+				if nestedHTTPPath(existing, writable.Path) {
+					return fmt.Errorf("writable paths must not overlap")
+				}
+			}
+			seenPaths = append(seenPaths, writable.Path)
+		}
+		ports := make(map[int]struct{}, len(container.Ports))
+		for _, port := range container.Ports {
+			ports[port] = struct{}{}
+		}
+		portsByContainer[container.Name] = ports
+	}
+	for _, connection := range request.Workload.InternalConnections {
+		if connection.Protocol != string(isolation.ProtocolTCP) {
+			return fmt.Errorf("internal connection protocol must be TCP")
+		}
+		if _, exists := portsByContainer[connection.SourceContainer]; !exists {
+			return fmt.Errorf("internal connection source container does not exist")
+		}
+		destinationPorts, exists := portsByContainer[connection.DestinationContainer]
+		if !exists {
+			return fmt.Errorf("internal connection destination container does not exist")
+		}
+		if _, exists := destinationPorts[connection.Port]; !exists {
+			return fmt.Errorf("internal connection destination port does not exist")
+		}
+	}
+	return nil
+}
+
+func (request CreateWorkloadRequest) toPolicyRequest(containers []provisioner.WorkloadContainer) isolation.Request {
+	requirements := make([]isolation.ContainerRequirement, len(containers))
+	for index, container := range containers {
+		runAsUser := int64(10001)
+		var writablePaths []WritablePath
+		if len(request.Workload.Containers) > 0 {
+			runAsUser = request.Workload.Containers[index].RunAsUser
+			writablePaths = request.Workload.Containers[index].WritablePaths
+		}
+		requirements[index] = isolation.ContainerRequirement{
+			Name:          container.Name,
+			Ports:         append([]int(nil), container.Ports...),
+			RunAsUser:     runAsUser,
+			WritablePaths: make([]isolation.WritablePath, len(writablePaths)),
+		}
+		for pathIndex, writable := range writablePaths {
+			requirements[index].WritablePaths[pathIndex] = isolation.WritablePath{Path: writable.Path, SizeMiB: writable.SizeMiB}
+		}
+	}
+	connections := make([]isolation.InternalConnection, len(request.Workload.InternalConnections))
+	for index, connection := range request.Workload.InternalConnections {
+		connections[index] = isolation.InternalConnection{
+			SourceContainer:      connection.SourceContainer,
+			DestinationContainer: connection.DestinationContainer,
+			Protocol:             isolation.Protocol(connection.Protocol),
+			Port:                 connection.Port,
+		}
+	}
+	return isolation.Request{
+		ChallengeID:         request.ChallengeRef.ChallengeID,
+		IsolationRef:        isolation.ProfileRef{Name: request.IsolationRef.Name, Version: request.IsolationRef.Version},
+		ResourceRef:         isolation.ProfileRef{Name: request.ResourceProfileRef.Name, Version: request.ResourceProfileRef.Version},
+		Containers:          requirements,
+		InternalConnections: connections,
+		OutboundMode:        isolation.OutboundMode(request.Workload.OutboundMode),
+		ResourceLimits: isolation.ResourceLimits{
+			CPUMillicores:       request.Workload.ResourceLimits.CPUMillicores,
+			MemoryMiB:           request.Workload.ResourceLimits.MemoryMiB,
+			EphemeralStorageMiB: request.Workload.ResourceLimits.EphemeralStorageMiB,
+		},
+	}
+}
+
+func unresolvedPolicy(request isolation.Request) isolation.ResolvedPolicy {
+	return isolation.ResolvedPolicy{
+		ChallengeID:         request.ChallengeID,
+		IsolationRef:        request.IsolationRef,
+		ResourceRef:         request.ResourceRef,
+		Containers:          request.Containers,
+		InternalConnections: request.InternalConnections,
+		OutboundMode:        request.OutboundMode,
+		ResourceLimits:      request.ResourceLimits,
+	}
+}
+
+func validProfileRef(ref ProfileRef) bool {
+	return strings.TrimSpace(ref.Name) != "" && strings.TrimSpace(ref.Version) != ""
+}
+
+func nestedHTTPPath(first, second string) bool {
+	return first == second || strings.HasPrefix(first, second+"/") || strings.HasPrefix(second, first+"/")
 }
 
 func validPort(port int) bool {

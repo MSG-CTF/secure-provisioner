@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
 	"github.com/MSG-CTF/secure-provisioner/internal/operations"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 )
@@ -182,6 +183,20 @@ func TestCreateInstanceMapsQueueFailureWithoutLeakingStoreDetails(t *testing.T) 
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusBadGateway, response.Body.String())
 	}
 	assertPublicErrorMessage(t, response, "CREATE_QUEUE_FAILED", "private operation store detail")
+}
+
+func TestCreateRejectsIsolationPolicy(t *testing.T) {
+	runtime := &recordingRuntimeUseCase{createErr: isolation.ErrPolicyRejected}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(validCreateRequestJSON()))
+	request.Header.Set("Content-Type", "application/json")
+
+	NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusUnprocessableEntity, response.Body.String())
+	}
+	assertErrorCode(t, response, "ISOLATION_POLICY_REJECTED")
 }
 
 func TestCreateInstanceRequiresJSONContentType(t *testing.T) {

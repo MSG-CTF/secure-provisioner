@@ -7,6 +7,7 @@ import (
 	"mime"
 	"net/http"
 
+	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
 	"github.com/MSG-CTF/secure-provisioner/internal/operations"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 )
@@ -56,6 +57,10 @@ func (api *API) handleCreateInstance(writer http.ResponseWriter, request *http.R
 	if api.runtime != nil {
 		operation, created, err := api.runtime.EnqueueCreate(createRequest.ToCommand())
 		if err != nil {
+			if errors.Is(err, isolation.ErrPolicyRejected) {
+				writeAPIError(writer, http.StatusUnprocessableEntity, "ISOLATION_POLICY_REJECTED", "isolation policy was rejected")
+				return
+			}
 			if errors.Is(err, operations.ErrIdempotencyConflict) {
 				writeAPIError(writer, http.StatusConflict, "REQUEST_ID_CONFLICT", "request_id is already used by another operation")
 				return
