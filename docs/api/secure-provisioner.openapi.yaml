@@ -220,11 +220,11 @@ paths:
                     max_attempts: 3
                     result:
                       runtime_workload_id: aws-k3s-001/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge
-                      service_url: https://gateway.example.com/instances/018f3f1e-21b8-7a91-a30b-63b3400fd001
+                      service_url: http://203.0.113.10:31042
                       endpoints:
                         - container_name: web
                           port: 8080
-                          service_url: https://challenge.example.com/instances/018f3f1e-21b8-7a91-a30b-63b3400fd001
+                          service_url: http://203.0.113.10:31042
                 DeleteSucceeded:
                   value:
                     operation_id: op-delete-123
@@ -544,7 +544,7 @@ components:
             maximum: 65535
         expose:
           type: boolean
-          description: 참가자 접속 경로를 Ingress에 공개할지 여부
+          description: 참가자 외부 접속점(NodePort 또는 Ingress)에 공개할지 여부
     CreateInstanceRequest:
       type: object
       additionalProperties: false
