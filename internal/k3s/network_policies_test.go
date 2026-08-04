@@ -326,12 +326,13 @@ func buildNetworkPolicyResources(t *testing.T, command provisioner.CreateWorkloa
 func networkPolicyCluster(targetID string) Cluster {
 	cluster := validCluster(targetID)
 	cluster.Config.SecurityCapabilities = SecurityCapabilities{
-		NetworkPolicyEnforced: true,
-		NetworkPolicyProvider: "kube-router",
-		DNSNamespace:          "kube-system",
-		DNSPodSelector:        map[string]string{"k8s-app": "kube-dns"},
-		IngressNamespace:      "ingress-system",
-		IngressPodSelector:    map[string]string{"app.kubernetes.io/name": "traefik"},
+		NetworkPolicyEnforced:          true,
+		SupplementalGroupsPolicyStrict: true,
+		NetworkPolicyProvider:          "kube-router",
+		DNSNamespace:                   "kube-system",
+		DNSPodSelector:                 map[string]string{"k8s-app": "kube-dns"},
+		IngressNamespace:               "ingress-system",
+		IngressPodSelector:             map[string]string{"app.kubernetes.io/name": "traefik"},
 	}
 	return cluster
 }

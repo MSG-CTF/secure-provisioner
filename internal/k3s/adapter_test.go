@@ -370,6 +370,12 @@ func TestAdapterRejectsDeploymentSpecTamperingOnFreshReadback(t *testing.T) {
 		{name: "weakened security", tamper: func(deployment *appsv1.Deployment) {
 			deployment.Spec.Template.Spec.Containers[0].SecurityContext.Privileged = ptr.To(true)
 		}},
+		{name: "missing strict supplemental groups policy", tamper: func(deployment *appsv1.Deployment) {
+			deployment.Spec.Template.Spec.SecurityContext.SupplementalGroupsPolicy = nil
+		}},
+		{name: "changed strict supplemental groups policy", tamper: func(deployment *appsv1.Deployment) {
+			deployment.Spec.Template.Spec.SecurityContext.SupplementalGroupsPolicy = ptr.To(corev1.SupplementalGroupsPolicyMerge)
+		}},
 		{name: "sidecar", tamper: func(deployment *appsv1.Deployment) {
 			deployment.Spec.Template.Spec.Containers = append(deployment.Spec.Template.Spec.Containers, corev1.Container{Name: "injected-sidecar", Image: "busybox:latest"})
 		}},
@@ -652,22 +658,36 @@ func TestAdapterRoutesEachTargetToItsOwnClient(t *testing.T) {
 }
 
 func TestAdapterRejectsTargetWithoutRequiredIsolationCapability(t *testing.T) {
-	command := validCreateCommand("aws-dev")
-	client := readyClient(t, command)
-	config := validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")
-	config.SecurityCapabilities.NetworkPolicyEnforced = false
-	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{config}, client))
+	for _, test := range []struct {
+		name   string
+		mutate func(*SecurityCapabilities)
+	}{
+		{name: "network policy enforcement", mutate: func(capabilities *SecurityCapabilities) {
+			capabilities.NetworkPolicyEnforced = false
+		}},
+		{name: "strict supplemental groups policy", mutate: func(capabilities *SecurityCapabilities) {
+			capabilities.SupplementalGroupsPolicyStrict = false
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			command := validCreateCommand("aws-dev")
+			client := readyClient(t, command)
+			config := validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")
+			test.mutate(&config.SecurityCapabilities)
+			adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{config}, client))
 
-	_, err := adapter.CreateWorkload(context.Background(), command)
-	var runtimeErr *RuntimeError
-	if !errors.As(err, &runtimeErr) || runtimeErr.Code() != "TARGET_CAPABILITY_MISMATCH" {
-		t.Fatalf("error = %v, want TARGET_CAPABILITY_MISMATCH", err)
-	}
-	if runtimeErr.Retryable() {
-		t.Fatal("TARGET_CAPABILITY_MISMATCH must not be retryable")
-	}
-	if got := len(client.Actions()); got != 0 {
-		t.Fatalf("K3s client actions = %d, want 0", got)
+			_, err := adapter.CreateWorkload(context.Background(), command)
+			var runtimeErr *RuntimeError
+			if !errors.As(err, &runtimeErr) || runtimeErr.Code() != "TARGET_CAPABILITY_MISMATCH" {
+				t.Fatalf("error = %v, want TARGET_CAPABILITY_MISMATCH", err)
+			}
+			if runtimeErr.Retryable() {
+				t.Fatal("TARGET_CAPABILITY_MISMATCH must not be retryable")
+			}
+			if got := len(client.Actions()); got != 0 {
+				t.Fatalf("K3s client actions = %d, want 0", got)
+			}
+		})
 	}
 }
 

@@ -214,16 +214,18 @@ func countQuantity(value int) resource.Quantity {
 func applyPodSecurityBaseline(pod *corev1.PodSpec, container *corev1.Container, requirement isolation.ContainerRequirement) {
 	runAsUser := requirement.RunAsUser
 	runAsGroup := requirement.RunAsUser
+	supplementalGroupsPolicy := corev1.SupplementalGroupsPolicyStrict
 	pod.ServiceAccountName = runtimeServiceAccountName
 	pod.AutomountServiceAccountToken = boolPointer(false)
 	pod.HostNetwork = false
 	pod.HostPID = false
 	pod.HostIPC = false
 	pod.SecurityContext = &corev1.PodSecurityContext{
-		RunAsNonRoot:   boolPointer(true),
-		RunAsUser:      &runAsUser,
-		RunAsGroup:     &runAsGroup,
-		SeccompProfile: runtimeDefaultSeccompProfile(),
+		RunAsNonRoot:             boolPointer(true),
+		RunAsUser:                &runAsUser,
+		RunAsGroup:               &runAsGroup,
+		SupplementalGroupsPolicy: &supplementalGroupsPolicy,
+		SeccompProfile:           runtimeDefaultSeccompProfile(),
 	}
 	container.SecurityContext = &corev1.SecurityContext{
 		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},

@@ -62,6 +62,7 @@ Registry 예시:
       "ingress_class": "traefik",
       "security_capabilities": {
         "network_policy_enforced": true,
+        "supplemental_groups_policy_strict": true,
         "network_policy_provider": "kube-router",
         "dns_namespace": "kube-system",
         "dns_pod_selector": {"k8s-app": "kube-dns"},
@@ -80,6 +81,7 @@ Registry 예시:
       "ingress_class": "traefik",
       "security_capabilities": {
         "network_policy_enforced": true,
+        "supplemental_groups_policy_strict": true,
         "network_policy_provider": "kube-router",
         "dns_namespace": "kube-system",
         "dns_pod_selector": {"k8s-app": "kube-dns"},
@@ -94,6 +96,12 @@ Registry 예시:
 
 각 `target_id`는 독립 Kubernetes·Metrics 클라이언트와 연결됩니다. 상태
 조회 대상은 노드가 정확히 하나인 K3s여야 합니다.
+
+활성화된 target은 `network_policy_enforced`와
+`supplemental_groups_policy_strict`를 모두 명시해야 합니다. 필드가 없거나
+`null`이면 Registry 설정이 유효하지 않습니다. 명시적인 `false`는 진단을 위해
+로드되지만 workload 생성은 Kubernetes 작업 전에 재시도하지 않는
+`TARGET_CAPABILITY_MISMATCH`로 거절됩니다.
 
 PowerShell 실행 예시:
 
@@ -160,6 +168,12 @@ npx --yes @redocly/cli lint docs/api/secure-provisioner.openapi.yaml
 
 MVP profile ref는 `name`/`version`뿐이며 immutable digest나 Catalog assignment
 authority가 아닙니다. Registry의 `security_capabilities`도 target capability의
-선언값이지 실제 enforcement attestation이 아닙니다. 실제 K3s NetworkPolicy 격리
-효과는 `#11`, resident-node/metadata host boundary는 `#32`에서 검증되기 전까지
-production 완료로 간주하지 않습니다.
+선언값이지 실제 enforcement attestation이 아닙니다. Provisioner는 Pod에
+`supplementalGroupsPolicy: Strict`를 지정하고 `supplementalGroups`와 `fsGroup`은
+지정하지 않지만, 실제 Node의 `status.features.supplementalGroupsPolicy`와 CRI 지원을
+자동으로 증명하지 않습니다. 이 Node/CRI attestation은 Task 12 / issue `#11`의
+후속 범위입니다. Kubernetes v1.33 이상은 해당 기능을 지원하지 않는 Node에
+스케줄된 Strict Pod를 거절하므로 이 경우 workload는 fail-closed로 실패합니다.
+이는 특정 K3s 버전의 지원을 보장한다는 의미가 아닙니다. 실제 NetworkPolicy 격리
+효과와 resident-node/metadata host boundary는 각각 `#11`, `#32`의 검증이 끝날
+때까지 production 완료로 간주하지 않습니다.

@@ -29,12 +29,13 @@ type registryClusterConfig struct {
 }
 
 type registrySecurityCapabilities struct {
-	NetworkPolicyEnforced *bool             `json:"network_policy_enforced"`
-	NetworkPolicyProvider string            `json:"network_policy_provider"`
-	DNSNamespace          string            `json:"dns_namespace"`
-	DNSPodSelector        map[string]string `json:"dns_pod_selector"`
-	IngressNamespace      string            `json:"ingress_namespace"`
-	IngressPodSelector    map[string]string `json:"ingress_pod_selector"`
+	NetworkPolicyEnforced          *bool             `json:"network_policy_enforced"`
+	SupplementalGroupsPolicyStrict *bool             `json:"supplemental_groups_policy_strict"`
+	NetworkPolicyProvider          string            `json:"network_policy_provider"`
+	DNSNamespace                   string            `json:"dns_namespace"`
+	DNSPodSelector                 map[string]string `json:"dns_pod_selector"`
+	IngressNamespace               string            `json:"ingress_namespace"`
+	IngressPodSelector             map[string]string `json:"ingress_pod_selector"`
 }
 
 func LoadRegistry(path string, factory ClientFactory) (*Registry, error) {
@@ -153,7 +154,9 @@ func (c registryClusterConfig) clusterConfig() (ClusterConfig, bool) {
 	if c.Enabled == nil {
 		return ClusterConfig{}, false
 	}
-	if *c.Enabled && (c.SecurityCapabilities == nil || c.SecurityCapabilities.NetworkPolicyEnforced == nil) {
+	if *c.Enabled && (c.SecurityCapabilities == nil ||
+		c.SecurityCapabilities.NetworkPolicyEnforced == nil ||
+		c.SecurityCapabilities.SupplementalGroupsPolicyStrict == nil) {
 		return ClusterConfig{}, false
 	}
 	capabilities := SecurityCapabilities{}
@@ -183,6 +186,9 @@ func (c registrySecurityCapabilities) clusterCapabilities() SecurityCapabilities
 	}
 	if c.NetworkPolicyEnforced != nil {
 		capabilities.NetworkPolicyEnforced = *c.NetworkPolicyEnforced
+	}
+	if c.SupplementalGroupsPolicyStrict != nil {
+		capabilities.SupplementalGroupsPolicyStrict = *c.SupplementalGroupsPolicyStrict
 	}
 	return capabilities
 }

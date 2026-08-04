@@ -35,12 +35,13 @@ func TestK3sIntegrationCreateReadyAndCleanup(t *testing.T) {
 		PublicGateway:  gateway,
 		Enabled:        true,
 		SecurityCapabilities: SecurityCapabilities{
-			NetworkPolicyEnforced: true,
-			NetworkPolicyProvider: "kube-router",
-			DNSNamespace:          "kube-system",
-			DNSPodSelector:        map[string]string{"k8s-app": "kube-dns"},
-			IngressNamespace:      "kube-system",
-			IngressPodSelector:    map[string]string{"app.kubernetes.io/name": "traefik"},
+			NetworkPolicyEnforced:          true,
+			SupplementalGroupsPolicyStrict: true,
+			NetworkPolicyProvider:          "kube-router",
+			DNSNamespace:                   "kube-system",
+			DNSPodSelector:                 map[string]string{"k8s-app": "kube-dns"},
+			IngressNamespace:               "kube-system",
+			IngressPodSelector:             map[string]string{"app.kubernetes.io/name": "traefik"},
 		},
 	}}, KubeconfigClientFactory{})
 	if err != nil {
@@ -138,12 +139,13 @@ func TestK3sIntegrationCreateMultiContainerReadyAndDelete(t *testing.T) {
 		PublicGateway:  gateway,
 		Enabled:        true,
 		SecurityCapabilities: SecurityCapabilities{
-			NetworkPolicyEnforced: true,
-			NetworkPolicyProvider: "kube-router",
-			DNSNamespace:          "kube-system",
-			DNSPodSelector:        map[string]string{"k8s-app": "kube-dns"},
-			IngressNamespace:      "kube-system",
-			IngressPodSelector:    map[string]string{"app.kubernetes.io/name": "traefik"},
+			NetworkPolicyEnforced:          true,
+			SupplementalGroupsPolicyStrict: true,
+			NetworkPolicyProvider:          "kube-router",
+			DNSNamespace:                   "kube-system",
+			DNSPodSelector:                 map[string]string{"k8s-app": "kube-dns"},
+			IngressNamespace:               "kube-system",
+			IngressPodSelector:             map[string]string{"app.kubernetes.io/name": "traefik"},
 		},
 	}}, KubeconfigClientFactory{})
 	if err != nil {

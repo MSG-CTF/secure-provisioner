@@ -90,7 +90,7 @@ func TestLoadConfigParsesRuntimeSettingsAndRejectsInvalidValues(t *testing.T) {
 
 func TestNewApplicationQueuesCreateThroughRuntimeService(t *testing.T) {
 	registryPath := filepath.Join(t.TempDir(), "clusters.json")
-	registryJSON := `{"clusters":[{"target_id":"aws-dev","provider":"AWS","region":"ap-northeast-2","architecture":"amd64","kubeconfig_path":"unused","public_gateway":"https://gateway.example.test","ingress_class":"traefik","enabled":true,"security_capabilities":{"network_policy_enforced":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}}]}`
+	registryJSON := `{"clusters":[{"target_id":"aws-dev","provider":"AWS","region":"ap-northeast-2","architecture":"amd64","kubeconfig_path":"unused","public_gateway":"https://gateway.example.test","ingress_class":"traefik","enabled":true,"security_capabilities":{"network_policy_enforced":true,"supplemental_groups_policy_strict":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}}]}`
 	if err := os.WriteFile(registryPath, []byte(registryJSON), 0o600); err != nil {
 		t.Fatal(err)
 	}

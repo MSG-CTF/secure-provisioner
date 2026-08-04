@@ -56,12 +56,13 @@ func validClusterConfig(targetID string, provider Provider, kubeconfigPath strin
 
 func supportedSecurityCapabilities() SecurityCapabilities {
 	return SecurityCapabilities{
-		NetworkPolicyEnforced: true,
-		NetworkPolicyProvider: "kube-router",
-		DNSNamespace:          "kube-system",
-		DNSPodSelector:        map[string]string{"k8s-app": "kube-dns"},
-		IngressNamespace:      "kube-system",
-		IngressPodSelector:    map[string]string{"app.kubernetes.io/name": "traefik"},
+		NetworkPolicyEnforced:          true,
+		SupplementalGroupsPolicyStrict: true,
+		NetworkPolicyProvider:          "kube-router",
+		DNSNamespace:                   "kube-system",
+		DNSPodSelector:                 map[string]string{"k8s-app": "kube-dns"},
+		IngressNamespace:               "kube-system",
+		IngressPodSelector:             map[string]string{"app.kubernetes.io/name": "traefik"},
 	}
 }
 

@@ -576,7 +576,12 @@ Scheduler가 처리한 비동기 Operation의 최종 실패는 서로 다른 계
 MVP profile ref는 `name`과 `version`만 사용한다. immutable digest 또는 Catalog
 assignment authority가 아직 아니므로 이 ref만으로 production-grade policy
 attestation을 주장하지 않는다. Target Registry의 `security_capabilities`도
-NetworkPolicy provider와 DNS/Ingress selector를 운영자가 선언한 값이며 런타임
-검증 증명이 아니다. 실제 K3s NetworkPolicy 격리 효과는 `#11`, resident-node 및
-metadata host boundary attestation은 `#32`에서 완료해야 production 경계를
-충족한다.
+NetworkPolicy provider, DNS/Ingress selector와 Strict supplemental-groups 지원을
+운영자가 선언한 값이며 런타임 검증 증명이 아니다. Provisioner는 Pod에
+`supplementalGroupsPolicy: Strict`를 지정하고 `supplementalGroups`와 `fsGroup`은
+지정하지 않는다. 실제 Node의 `status.features.supplementalGroupsPolicy`와 CRI 지원
+attestation은 Task 12 / issue `#11`에서 완료해야 한다. Kubernetes v1.33 이상은
+지원하지 않는 Node의 Strict Pod를 거절하므로 workload는 fail-closed로 실패하며,
+이 동작만으로 특정 K3s 버전의 지원을 보장하지 않는다. 실제 NetworkPolicy 격리
+효과는 `#11`, resident-node 및 metadata host boundary attestation은 `#32`에서
+완료해야 production 경계를 충족한다.

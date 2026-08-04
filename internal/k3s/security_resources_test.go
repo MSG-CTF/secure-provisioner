@@ -108,6 +108,27 @@ func TestBuildResourceSetDerivesRunAsGroupFromEachMappedNonRootUID(t *testing.T)
 	}
 }
 
+func TestBuildResourceSetUsesStrictSupplementalGroupsPolicyWithoutAdditionalGroups(t *testing.T) {
+	resources, err := BuildResourceSet(validCluster("aws-dev"), validMultiCreateCommand("aws-dev"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, deployment := range resources.Deployments {
+		security := deployment.Spec.Template.Spec.SecurityContext
+		if security == nil || security.SupplementalGroupsPolicy == nil ||
+			*security.SupplementalGroupsPolicy != corev1.SupplementalGroupsPolicyStrict {
+			t.Fatalf("%s supplemental groups policy = %#v, want Strict", deployment.Name, security)
+		}
+		if security.SupplementalGroups != nil {
+			t.Fatalf("%s supplemental groups = %#v, want nil", deployment.Name, security.SupplementalGroups)
+		}
+		if security.FSGroup != nil {
+			t.Fatalf("%s fsGroup = %v, want nil", deployment.Name, *security.FSGroup)
+		}
+	}
+}
+
 func TestBuildResourceSetSpecHashTracksIdentityUsedForDerivedGroup(t *testing.T) {
 	command := validMultiCreateCommand("aws-dev")
 	initial, err := BuildResourceSet(validCluster("aws-dev"), command)
@@ -151,6 +172,27 @@ func TestDeploymentSpecVerificationIncludesDerivedRunAsGroup(t *testing.T) {
 	withoutContainerGroup.Spec.Template.Spec.Containers[0].SecurityContext.RunAsGroup = nil
 	if sameDeploymentSpec(withoutContainerGroup, desired) {
 		t.Fatal("deployment verification accepted a missing container runAsGroup")
+	}
+}
+
+func TestDeploymentSpecVerificationIncludesStrictSupplementalGroupsPolicy(t *testing.T) {
+	resources, err := BuildResourceSet(validCluster("aws-dev"), validCreateCommand("aws-dev"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	desired := resources.Deployment
+
+	missingPolicy := desired.DeepCopy()
+	missingPolicy.Spec.Template.Spec.SecurityContext.SupplementalGroupsPolicy = nil
+	if sameDeploymentSpec(missingPolicy, desired) {
+		t.Fatal("deployment verification accepted a missing supplemental groups policy")
+	}
+
+	changedPolicy := desired.DeepCopy()
+	changedPolicy.Spec.Template.Spec.SecurityContext.SupplementalGroupsPolicy = new(corev1.SupplementalGroupsPolicy)
+	*changedPolicy.Spec.Template.Spec.SecurityContext.SupplementalGroupsPolicy = corev1.SupplementalGroupsPolicyMerge
+	if sameDeploymentSpec(changedPolicy, desired) {
+		t.Fatal("deployment verification accepted supplemental groups policy Merge")
 	}
 }
 
