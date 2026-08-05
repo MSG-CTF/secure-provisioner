@@ -214,12 +214,9 @@ func applyResourceSet(ctx context.Context, client kubernetes.Interface, resource
 		applied.Deployments = append(applied.Deployments, appliedDeployment.DeepCopy())
 	}
 	for _, service := range resources.Services {
-		if err := upsertService(ctx, client, service); err != nil {
-			return appliedResourceSet{}, err
-		}
-		appliedService, err := client.CoreV1().Services(service.Namespace).Get(ctx, service.Name, metav1.GetOptions{})
+		appliedService, err := upsertService(ctx, client, service)
 		if err != nil {
-			return appliedResourceSet{}, applyError(err)
+			return appliedResourceSet{}, err
 		}
 		applied.Services = append(applied.Services, appliedService.DeepCopy())
 	}
@@ -801,7 +798,7 @@ func reconcileWorkloadMetadata(candidate, desired metav1.Object) {
 	candidate.SetAnnotations(annotations)
 }
 
-func upsertService(ctx context.Context, client kubernetes.Interface, desired *corev1.Service) error {
+func upsertService(ctx context.Context, client kubernetes.Interface, desired *corev1.Service) (*corev1.Service, error) {
 	services := client.CoreV1().Services(desired.Namespace)
 	var lastErr error
 	for attempt := 0; attempt < maxReconcileAttempts; attempt++ {
@@ -812,7 +809,7 @@ func upsertService(ctx context.Context, client kubernetes.Interface, desired *co
 			} else {
 				lastErr = createErr
 				if !kubernetesErrorRetryable(createErr) {
-					return applyError(createErr)
+					return nil, applyError(createErr)
 				}
 			}
 			existing, err = services.Get(ctx, desired.Name, metav1.GetOptions{})
@@ -821,13 +818,13 @@ func upsertService(ctx context.Context, client kubernetes.Interface, desired *co
 			if !apierrors.IsNotFound(err) {
 				lastErr = err
 				if !kubernetesErrorRetryable(err) {
-					return applyError(err)
+					return nil, applyError(err)
 				}
 			}
 			continue
 		}
 		if !approvedSemanticMetadata(existing, desired, true) {
-			return newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
+			return nil, newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
 		}
 		candidate := existing.DeepCopy()
 		reconcileWorkloadMetadata(candidate, desired)
@@ -838,26 +835,26 @@ func upsertService(ctx context.Context, client kubernetes.Interface, desired *co
 		} else {
 			lastErr = updateErr
 			if !apierrors.IsConflict(updateErr) {
-				return applyError(updateErr)
+				return nil, applyError(updateErr)
 			}
 		}
 	}
-	return applyError(lastErr)
+	return nil, applyError(lastErr)
 }
 
 type serviceGetter interface {
 	Get(context.Context, string, metav1.GetOptions) (*corev1.Service, error)
 }
 
-func verifyServiceReadback(ctx context.Context, services serviceGetter, desired *corev1.Service) error {
+func verifyServiceReadback(ctx context.Context, services serviceGetter, desired *corev1.Service) (*corev1.Service, error) {
 	actual, err := services.Get(ctx, desired.Name, metav1.GetOptions{})
 	if err != nil {
-		return applyError(err)
+		return nil, applyError(err)
 	}
 	if !approvedSemanticMetadata(actual, desired, false) || !sameServiceSpec(actual, desired) {
-		return applyError(errors.New("service read-back verification failed"))
+		return nil, applyError(errors.New("service read-back verification failed"))
 	}
-	return nil
+	return actual.DeepCopy(), nil
 }
 
 func sameServiceSpec(actual, desired *corev1.Service) bool {

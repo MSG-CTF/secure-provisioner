@@ -791,6 +791,45 @@ func TestAdapterNodePortEndpointFailureDoesNotDeleteReplacementNamespace(t *test
 	assertDeleteActionCount(t, client, "namespaces", 0)
 }
 
+func TestAdapterUsesVerifiedServiceReadbackForNodePortEndpoint(t *testing.T) {
+	command := validMultiCreateCommand("aws-dev")
+	cluster := validCluster("aws-dev")
+	cluster.Config.ExposureMode = ExposureModeNodePort
+	cluster.Config.PublicGateway = "http://203.0.113.10"
+	resources, err := BuildResourceSet(cluster, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := readyMultiContainerClient(t, command)
+	installNodePortAllocator(t, client, 31042)
+	webGets := 0
+	client.PrependReactor("get", "services", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		get := action.(k8stesting.GetAction)
+		if get.GetName() != "web" {
+			return false, nil, nil
+		}
+		webGets++
+		if webGets != 4 {
+			return false, nil, nil
+		}
+		tampered := resources.Services[0].DeepCopy()
+		tampered.Spec.Ports[0].NodePort = 32000
+		return true, tampered, nil
+	})
+	config := validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")
+	config.ExposureMode = ExposureModeNodePort
+	config.PublicGateway = "http://203.0.113.10"
+	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{config}, client))
+
+	result, err := adapter.CreateWorkload(context.Background(), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ServiceURL != "http://203.0.113.10:31042" {
+		t.Fatalf("ServiceURL = %q, want URL from the verified service read-back", result.ServiceURL)
+	}
+}
+
 func TestUpsertServicePreservesAllocatedNodePortOnReconcile(t *testing.T) {
 	command := validMultiCreateCommand("aws-dev")
 	cluster := validCluster("aws-dev")
@@ -804,7 +843,7 @@ func TestUpsertServicePreservesAllocatedNodePortOnReconcile(t *testing.T) {
 	existing.Spec.Ports[0].NodePort = 31042
 	client := fake.NewSimpleClientset(existing)
 
-	if err := upsertService(context.Background(), client, resources.Services[0]); err != nil {
+	if _, err := upsertService(context.Background(), client, resources.Services[0]); err != nil {
 		t.Fatal(err)
 	}
 	stored, err := client.CoreV1().Services(existing.Namespace).Get(context.Background(), existing.Name, metav1.GetOptions{})
@@ -1598,7 +1637,7 @@ func TestAdapterWorkloadUpdatesPreserveApprovedServerFields(t *testing.T) {
 			case "deployments":
 				_, updateErr = upsertDeployment(context.Background(), client, resources.Deployment)
 			case "services":
-				updateErr = upsertService(context.Background(), client, resources.Service)
+				_, updateErr = upsertService(context.Background(), client, resources.Service)
 			case "ingresses":
 				updateErr = upsertIngress(context.Background(), client, resources.Ingress)
 			}
@@ -1752,7 +1791,7 @@ func TestUpsertServiceStopsAfterThreePersistentUpdateConflicts(t *testing.T) {
 	client.PrependReactor("update", "services", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, apierrors.NewConflict(action.GetResource().GroupResource(), resourceName, errors.New("persistent conflict"))
 	})
-	err = upsertService(context.Background(), client, resources.Service)
+	_, err = upsertService(context.Background(), client, resources.Service)
 	if runtimeErrorCode(t, err) != "RESOURCE_APPLY_FAILED" {
 		t.Fatalf("code = %q, want RESOURCE_APPLY_FAILED", runtimeErrorCode(t, err))
 	}
@@ -1967,7 +2006,7 @@ func TestAdapterPreservesServiceClusterAllocationOnRetry(t *testing.T) {
 		updatedService <- action.(k8stesting.UpdateAction).GetObject().(*corev1.Service).DeepCopy()
 		return false, nil, nil
 	})
-	if err := upsertService(context.Background(), client, resources.Service); err != nil {
+	if _, err := upsertService(context.Background(), client, resources.Service); err != nil {
 		t.Fatal(err)
 	}
 	got := <-updatedService
