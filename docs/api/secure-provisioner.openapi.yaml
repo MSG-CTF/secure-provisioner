@@ -687,7 +687,7 @@ components:
           type:
             - boolean
             - "null"
-          description: 참가자 접속 경로를 Ingress에 공개할지 여부
+          description: 참가자 외부 접속점(NodePort 또는 Ingress)에 공개할지 여부
     ChallengeRef:
       type: object
       additionalProperties: false

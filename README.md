@@ -59,7 +59,6 @@ Registry 예시:
       "architecture": "amd64",
       "kubeconfig_path": "C:/secure/kubeconfigs/aws-k3s-001.yaml",
       "public_gateway": "http://203.0.113.10",
-      "ingress_class": "traefik",
       "exposure_mode": "NODE_PORT",
       "security_capabilities": {
         "network_policy_enforced": true,

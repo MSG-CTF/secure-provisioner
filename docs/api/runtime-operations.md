@@ -410,7 +410,7 @@ Metrics API를 사용할 수 없으면 `metrics_available`은 `false`이고
 Node·Container의 `usage`는 `null`이다. Core 상태와 배치 가능 공간은
 계속 반환한다.
 
-다중 컨테이너 런타임은 컨테이너마다 Deployment와 ClusterIP Service를 하나씩
+다중 컨테이너 런타임은 컨테이너마다 Deployment와 Service를 하나씩
 만든다. 조회 결과의 `containers`에는 같은 팀·인스턴스 Namespace에 속한 모든
 컨테이너가 반환된다. `endpoint_ready`는 현재 노출 모드에서 모든 공개 Service에
 Ready EndpointSlice가 있을 때만 `true`다. `NODE_PORT`에서는 NodePort Service를,
@@ -428,13 +428,17 @@ Ready EndpointSlice가 있을 때만 `true`다. `NODE_PORT`에서는 NodePort Se
   capability drop, `RuntimeDefault` seccomp와 host namespace 비활성화를 적용한다.
   승인된 writable path만 크기가 제한된 `emptyDir`로 마운트한다.
 - ResourceQuota와 LimitRange는 승인된 resource profile의 CPU·memory·ephemeral-storage
-  합계와 namespaced object 수를 제한한다.
+  합계와 namespaced object 수를 제한한다. `NODE_PORT`에서는 공개 컨테이너의 승인된
+  포트 수만큼 `services.nodeports` quota를 허용하고 그 이상은 차단한다.
 - `default-deny-all`을 먼저 두고 DNS egress, 공개 컨테이너로 향하는 ingress,
   명시적으로 승인된 컨테이너 간 TCP 연결만 NetworkPolicy allowlist로 연다. 현재
+  `INGRESS_PATH`의 공개 ingress source는 설정된 ingress controller로 제한한다.
+  `NODE_PORT`는 외부 source를 허용하되 공개 컨테이너의 승인된 포트만 연다. 현재
   `outbound_mode`는 `NONE`만 승인하므로 그 밖의 외부 egress는 열지 않는다.
 - Namespace와 모든 기존 리소스의 소유권을 먼저 검사한 뒤 ServiceAccount →
   ResourceQuota → LimitRange → NetworkPolicy 순으로 적용·read-back 검증한다. 이 보호
-  리소스가 모두 확인된 뒤에만 Deployment → Service → 노출 모드별 Ingress를 적용한다.
+  리소스가 모두 확인된 뒤에만 Deployment → Service를 적용하고, `INGRESS_PATH`에서만
+  Ingress를 적용한다.
 - 생성은 모든 Deployment, Pod, Service Endpoint가 준비돼야 성공한다.
 - 생성 중 일부 리소스가 실패하면 해당 Namespace 전체를 롤백한다.
 - 삭제는 저장된 `target_id`, Namespace, 팀·인스턴스 소유권을 확인한 뒤
