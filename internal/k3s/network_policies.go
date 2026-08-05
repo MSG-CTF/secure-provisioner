@@ -58,6 +58,7 @@ func buildNetworkPolicies(
 	sort.Strings(exposedNames)
 	for _, name := range exposedNames {
 		policies = append(policies, buildPublicIngressNetworkPolicy(
+			cluster.Config.ExposureMode,
 			cluster.Config.SecurityCapabilities,
 			namespace,
 			ownerLabels,
@@ -118,21 +119,26 @@ func buildDNSNetworkPolicy(
 }
 
 func buildPublicIngressNetworkPolicy(
+	exposureMode ExposureMode,
 	capabilities SecurityCapabilities,
 	namespace string,
 	ownerLabels map[string]string,
 	requirement isolation.ContainerRequirement,
 ) *networkingv1.NetworkPolicy {
+	from := []networkingv1.NetworkPolicyPeer{{
+		NamespaceSelector: namespaceSelector(capabilities.IngressNamespace),
+		PodSelector:       &metav1.LabelSelector{MatchLabels: copyLabels(capabilities.IngressPodSelector)},
+	}}
+	if exposureMode == ExposureModeNodePort {
+		from = nil
+	}
 	return &networkingv1.NetworkPolicy{
 		ObjectMeta: networkPolicyMetadata("allow-public-ingress-"+requirement.Name, namespace, ownerLabels),
 		Spec: networkingv1.NetworkPolicySpec{
 			PodSelector: containerSelector(ownerLabels, requirement.Name),
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
 			Ingress: []networkingv1.NetworkPolicyIngressRule{{
-				From: []networkingv1.NetworkPolicyPeer{{
-					NamespaceSelector: namespaceSelector(capabilities.IngressNamespace),
-					PodSelector:       &metav1.LabelSelector{MatchLabels: copyLabels(capabilities.IngressPodSelector)},
-				}},
+				From:  from,
 				Ports: tcpNetworkPolicyPorts(requirement.Ports),
 			}},
 		},

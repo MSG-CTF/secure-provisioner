@@ -761,6 +761,36 @@ func TestAdapterReturnsKubernetesAllocatedNodePortURL(t *testing.T) {
 	}
 }
 
+func TestAdapterNodePortEndpointFailureDoesNotDeleteReplacementNamespace(t *testing.T) {
+	command := validMultiCreateCommand("aws-dev")
+	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := readyMultiContainerClient(t, command)
+	getCount := 0
+	client.PrependReactor("get", "namespaces", func(k8stesting.Action) (bool, runtime.Object, error) {
+		getCount++
+		if getCount != 4 {
+			return false, nil, nil
+		}
+		replacement := resources.Namespace.DeepCopy()
+		replacement.UID = "replacement-namespace-uid"
+		replacement.ResourceVersion = "12"
+		return true, replacement, nil
+	})
+	config := validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")
+	config.ExposureMode = ExposureModeNodePort
+	config.PublicGateway = "http://203.0.113.10"
+	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{config}, client))
+
+	_, err = adapter.CreateWorkload(context.Background(), command)
+	if runtimeErrorCode(t, err) != "ROLLBACK_FAILED" {
+		t.Fatalf("code = %q, want ROLLBACK_FAILED for a replaced namespace", runtimeErrorCode(t, err))
+	}
+	assertDeleteActionCount(t, client, "namespaces", 0)
+}
+
 func TestUpsertServicePreservesAllocatedNodePortOnReconcile(t *testing.T) {
 	command := validMultiCreateCommand("aws-dev")
 	cluster := validCluster("aws-dev")
