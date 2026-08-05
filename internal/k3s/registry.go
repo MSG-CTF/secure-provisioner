@@ -111,9 +111,18 @@ func validateClusterConfig(config ClusterConfig, seenTargetIDs map[string]struct
 	if config.Enabled && !validSecurityCapabilities(config.SecurityCapabilities) {
 		return ClusterConfig{}, newRuntimeError("CONFIG_INVALID", false, nil)
 	}
+	if config.ExposureMode == "" {
+		config.ExposureMode = ExposureModeIngressPath
+	}
+	if config.ExposureMode != ExposureModeIngressPath && config.ExposureMode != ExposureModeNodePort {
+		return ClusterConfig{}, newRuntimeError("CONFIG_INVALID", false, nil)
+	}
 
 	gateway, err := url.ParseRequestURI(config.PublicGateway)
 	if err != nil || (gateway.Scheme != "http" && gateway.Scheme != "https") || gateway.Hostname() == "" || gateway.User != nil || gateway.RawQuery != "" || gateway.Fragment != "" {
+		return ClusterConfig{}, newRuntimeError("CONFIG_INVALID", false, nil)
+	}
+	if config.ExposureMode == ExposureModeNodePort && (strings.Trim(gateway.Path, "/") != "" || gateway.Port() != "") {
 		return ClusterConfig{}, newRuntimeError("CONFIG_INVALID", false, nil)
 	}
 	gateway.Path = strings.TrimRight(gateway.Path, "/")

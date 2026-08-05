@@ -737,6 +737,62 @@ func TestAdapterAppliesAllContainerResources(t *testing.T) {
 	}
 }
 
+func TestAdapterReturnsKubernetesAllocatedNodePortURL(t *testing.T) {
+	command := validMultiCreateCommand("aws-dev")
+	client := readyMultiContainerClient(t, command)
+	installNodePortAllocator(t, client, 31042)
+	config := validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")
+	config.ExposureMode = ExposureModeNodePort
+	config.PublicGateway = "http://203.0.113.10"
+	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{config}, client))
+
+	result, err := adapter.CreateWorkload(context.Background(), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ServiceURL != "http://203.0.113.10:31042" {
+		t.Fatalf("ServiceURL = %q", result.ServiceURL)
+	}
+	if len(result.Endpoints) != 1 || result.Endpoints[0].ContainerName != "web" || result.Endpoints[0].Port != 8080 || result.Endpoints[0].ServiceURL != result.ServiceURL {
+		t.Fatalf("Endpoints = %#v", result.Endpoints)
+	}
+	if got := actionCount(client, "create", "ingresses"); got != 0 {
+		t.Fatalf("ingress create actions = %d, want 0", got)
+	}
+}
+
+func TestUpsertServicePreservesAllocatedNodePortOnReconcile(t *testing.T) {
+	command := validMultiCreateCommand("aws-dev")
+	cluster := validCluster("aws-dev")
+	cluster.Config.ExposureMode = ExposureModeNodePort
+	cluster.Config.PublicGateway = "http://203.0.113.10"
+	resources, err := BuildResourceSet(cluster, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	existing := resources.Services[0].DeepCopy()
+	existing.Spec.Ports[0].NodePort = 31042
+	client := fake.NewSimpleClientset(existing)
+
+	if err := upsertService(context.Background(), client, resources.Services[0]); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := client.CoreV1().Services(existing.Namespace).Get(context.Background(), existing.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stored.Spec.Ports[0].NodePort; got != 31042 {
+		t.Fatalf("NodePort = %d, want 31042", got)
+	}
+	endpoints, err := BuildNodePortEndpoints(cluster.Config.PublicGateway, []*corev1.Service{stored})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(endpoints) != 1 || endpoints[0].ServiceURL != "http://203.0.113.10:31042" {
+		t.Fatalf("endpoints = %#v", endpoints)
+	}
+}
+
 func TestAdapterRollsBackMultiContainerApplyFailure(t *testing.T) {
 	command := validMultiCreateCommand("aws-dev")
 	client := readyMultiContainerClient(t, command)
@@ -2641,6 +2697,22 @@ func installDeploymentController(client *fake.Clientset, ready bool) {
 			return true, nil, err
 		}
 		return true, deployment.DeepCopy(), nil
+	})
+}
+
+func installNodePortAllocator(t *testing.T, client *fake.Clientset, nodePort int32) {
+	t.Helper()
+	client.PrependReactor("create", "services", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		service := action.(k8stesting.CreateAction).GetObject().(*corev1.Service).DeepCopy()
+		if service.Spec.Type == corev1.ServiceTypeNodePort {
+			for index := range service.Spec.Ports {
+				service.Spec.Ports[index].NodePort = nodePort + int32(index)
+			}
+		}
+		if err := client.Tracker().Create(corev1.SchemeGroupVersion.WithResource("services"), service, service.Namespace); err != nil {
+			return true, nil, err
+		}
+		return true, service.DeepCopy(), nil
 	})
 }
 

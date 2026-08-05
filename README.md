@@ -58,8 +58,9 @@ Registry 예시:
       "region": "ap-northeast-2",
       "architecture": "amd64",
       "kubeconfig_path": "C:/secure/kubeconfigs/aws-k3s-001.yaml",
-      "public_gateway": "https://gateway.example.com",
+      "public_gateway": "http://203.0.113.10",
       "ingress_class": "traefik",
+      "exposure_mode": "NODE_PORT",
       "security_capabilities": {
         "network_policy_enforced": true,
         "supplemental_groups_policy_strict": true,
@@ -78,6 +79,7 @@ Registry 예시:
       "architecture": "amd64",
       "kubeconfig_path": "C:/secure/kubeconfigs/gcp-k3s-001.yaml",
       "public_gateway": "https://gateway-gcp.example.com",
+      "exposure_mode": "INGRESS_PATH",
       "ingress_class": "traefik",
       "security_capabilities": {
         "network_policy_enforced": true,
@@ -96,6 +98,9 @@ Registry 예시:
 
 각 `target_id`는 독립 Kubernetes·Metrics 클라이언트와 연결됩니다. 상태
 조회 대상은 노드가 정확히 하나인 K3s여야 합니다.
+`NODE_PORT`는 공개 Service의 Kubernetes 할당 포트를 공인 IP와 조합하고,
+`INGRESS_PATH`는 기존 Ingress 경로를 사용합니다. `exposure_mode`를 생략하면
+`INGRESS_PATH`로 동작합니다.
 
 활성화된 target은 `network_policy_enforced`와
 `supplemental_groups_policy_strict`를 모두 명시해야 합니다. 필드가 없거나

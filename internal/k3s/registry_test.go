@@ -283,6 +283,28 @@ func TestNewRegistryRejectsUnsafeGateway(t *testing.T) {
 	}
 }
 
+func TestNewRegistryRejectsInvalidNodePortExposureConfig(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		mode    ExposureMode
+		gateway string
+	}{
+		{name: "unknown mode", mode: ExposureMode("OTHER"), gateway: "http://203.0.113.10"},
+		{name: "gateway path", mode: ExposureModeNodePort, gateway: "http://203.0.113.10/challenges"},
+		{name: "gateway port", mode: ExposureModeNodePort, gateway: "http://203.0.113.10:8080"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config := validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")
+			config.ExposureMode = test.mode
+			config.PublicGateway = test.gateway
+			_, err := NewRegistry([]ClusterConfig{config}, &sequenceFactory{})
+			if runtimeErrorCode(t, err) != "CONFIG_INVALID" {
+				t.Fatalf("code = %q, want CONFIG_INVALID", runtimeErrorCode(t, err))
+			}
+		})
+	}
+}
+
 func TestNewRegistryHidesClientFactoryDetails(t *testing.T) {
 	factoryFailure := errors.New("factory credential failure")
 	_, err := NewRegistry([]ClusterConfig{

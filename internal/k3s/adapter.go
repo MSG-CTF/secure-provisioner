@@ -35,6 +35,11 @@ type Adapter struct {
 	workloadLocks *workloadLockSet
 }
 
+type appliedResourceSet struct {
+	Deployments []*appsv1.Deployment
+	Services    []*corev1.Service
+}
+
 const (
 	maxReconcileAttempts   = 3
 	defaultRollbackTimeout = 30 * time.Second
@@ -91,7 +96,7 @@ func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.Create
 		}
 		return provisioner.CreateWorkloadResult{}, a.failAfterNamespace(cluster.Client, createdNamespace, "RESOURCE_APPLY_FAILED", err)
 	}
-	appliedDeployments, err := applyResourceSet(ctx, cluster.Client, resources)
+	applied, err := applyResourceSet(ctx, cluster.Client, resources)
 	if err != nil {
 		if parentErr := ctx.Err(); parentErr != nil {
 			return provisioner.CreateWorkloadResult{}, a.failAfterNamespace(cluster.Client, createdNamespace, "OPERATION_CANCELLED", parentErr)
@@ -104,7 +109,7 @@ func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.Create
 	if err := waitUntilReady(
 		readyCtx,
 		cluster.Client,
-		appliedDeployments,
+		applied.Deployments,
 		resources.ExpectedSpecHashes,
 		a.config.PollInterval,
 	); err != nil {
@@ -124,11 +129,20 @@ func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.Create
 		}
 		return provisioner.CreateWorkloadResult{}, a.failAfterNamespace(cluster.Client, createdNamespace, "RESOURCE_APPLY_FAILED", err)
 	}
+	endpoints := append([]provisioner.WorkloadEndpoint(nil), resources.Endpoints...)
+	serviceURL := resources.ServiceURL
+	if cluster.Config.ExposureMode == ExposureModeNodePort {
+		endpoints, err = BuildNodePortEndpoints(cluster.Config.PublicGateway, applied.Services)
+		if err != nil {
+			return provisioner.CreateWorkloadResult{}, a.failWithRollback(cluster.Client, resources.Namespace, "RESOURCE_APPLY_FAILED", err)
+		}
+		serviceURL = endpoints[0].ServiceURL
+	}
 	return provisioner.CreateWorkloadResult{
 		RuntimeWorkloadID: resources.RuntimeWorkloadID,
 		NamespaceUID:      string(observedNamespace.UID),
-		ServiceURL:        resources.ServiceURL,
-		Endpoints:         append([]provisioner.WorkloadEndpoint(nil), resources.Endpoints...),
+		ServiceURL:        serviceURL,
+		Endpoints:         endpoints,
 	}, nil
 }
 
@@ -184,27 +198,37 @@ func verifyCreatedNamespace(
 	return observed.DeepCopy(), nil
 }
 
-func applyResourceSet(ctx context.Context, client kubernetes.Interface, resources ResourceSet) ([]*appsv1.Deployment, error) {
+func applyResourceSet(ctx context.Context, client kubernetes.Interface, resources ResourceSet) (appliedResourceSet, error) {
 	if err := applyProtectionResourceSet(ctx, client, resources); err != nil {
-		return nil, err
+		return appliedResourceSet{}, err
 	}
-	appliedDeployments := make([]*appsv1.Deployment, 0, len(resources.Deployments))
+	applied := appliedResourceSet{
+		Deployments: make([]*appsv1.Deployment, 0, len(resources.Deployments)),
+		Services:    make([]*corev1.Service, 0, len(resources.Services)),
+	}
 	for _, deployment := range resources.Deployments {
 		appliedDeployment, err := upsertDeployment(ctx, client, deployment)
 		if err != nil {
-			return nil, err
+			return appliedResourceSet{}, err
 		}
-		appliedDeployments = append(appliedDeployments, appliedDeployment.DeepCopy())
+		applied.Deployments = append(applied.Deployments, appliedDeployment.DeepCopy())
 	}
 	for _, service := range resources.Services {
 		if err := upsertService(ctx, client, service); err != nil {
-			return nil, err
+			return appliedResourceSet{}, err
+		}
+		appliedService, err := client.CoreV1().Services(service.Namespace).Get(ctx, service.Name, metav1.GetOptions{})
+		if err != nil {
+			return appliedResourceSet{}, applyError(err)
+		}
+		applied.Services = append(applied.Services, appliedService.DeepCopy())
+	}
+	if resources.Ingress != nil {
+		if err := upsertIngress(ctx, client, resources.Ingress); err != nil {
+			return appliedResourceSet{}, err
 		}
 	}
-	if err := upsertIngress(ctx, client, resources.Ingress); err != nil {
-		return nil, err
-	}
-	return appliedDeployments, nil
+	return applied, nil
 }
 
 func preflightResourceSet(ctx context.Context, client kubernetes.Interface, resources ResourceSet) error {
@@ -250,7 +274,9 @@ func preflightResourceSet(ctx context.Context, client kubernetes.Interface, reso
 			return err
 		}
 	}
-
+	if resources.Ingress == nil {
+		return nil
+	}
 	return preflightOwnedResource(func() (metav1.Object, error) {
 		return client.NetworkingV1().Ingresses(resources.Ingress.Namespace).Get(ctx, resources.Ingress.Name, metav1.GetOptions{})
 	}, resources.Ingress)
@@ -863,6 +889,19 @@ func preserveServiceAllocation(desired, existing *corev1.Service) {
 	desired.Spec.ClusterIPs = append([]string(nil), existing.Spec.ClusterIPs...)
 	desired.Spec.IPFamilies = append([]corev1.IPFamily(nil), existing.Spec.IPFamilies...)
 	desired.Spec.IPFamilyPolicy = existing.Spec.IPFamilyPolicy
+	desired.Spec.HealthCheckNodePort = existing.Spec.HealthCheckNodePort
+	for desiredIndex := range desired.Spec.Ports {
+		if desired.Spec.Ports[desiredIndex].NodePort != 0 {
+			continue
+		}
+		for _, existingPort := range existing.Spec.Ports {
+			if desired.Spec.Ports[desiredIndex].Name == existingPort.Name ||
+				(desired.Spec.Ports[desiredIndex].Name == "" && desired.Spec.Ports[desiredIndex].Port == existingPort.Port && desired.Spec.Ports[desiredIndex].Protocol == existingPort.Protocol) {
+				desired.Spec.Ports[desiredIndex].NodePort = existingPort.NodePort
+				break
+			}
+		}
+	}
 }
 
 func upsertIngress(ctx context.Context, client kubernetes.Interface, desired *networkingv1.Ingress) error {

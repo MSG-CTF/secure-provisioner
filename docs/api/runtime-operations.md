@@ -104,7 +104,7 @@ Content-Type: application/json
 
 `containers`는 1개 이상이며 이름은 요청 안에서 고유한 Kubernetes DNS label이어야
 한다. 각 컨테이너는 내부 포트를 여러 개 가질 수 있다. `expose: true`인
-컨테이너의 포트만 Ingress 접속점으로 공개되며, 적어도 하나는 공개돼야 한다.
+컨테이너의 포트만 외부 접속점으로 공개되며, 적어도 하나는 공개돼야 한다.
 
 `challenge_ref`, `isolation_ref`, `resource_profile_ref`, `outbound_mode`와 각
 명시적 컨테이너의 `run_as_user`는 마이그레이션 중인 정책 필드다. 이 중 하나라도
@@ -265,21 +265,27 @@ Retry-After: 2
   "max_attempts": 3,
   "result": {
     "runtime_workload_id": "aws-k3s-001/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge",
-    "service_url": "https://gateway.example.com/instances/018f3f1e-21b8-7a91-a30b-63b3400fd001",
+    "service_url": "http://203.0.113.10:31042",
     "endpoints": [
       {
         "container_name": "web",
         "port": 8080,
-        "service_url": "https://gateway.example.com/instances/018f3f1e-21b8-7a91-a30b-63b3400fd001"
+        "service_url": "http://203.0.113.10:31042"
       }
     ]
   }
 }
 ```
 
-`service_url`은 하위 호환을 위한 첫 번째 공개 접속점이다. 신규 연동에서는
-`endpoints`를 사용한다. 여러 포트가 공개되면 첫 번째 접속점 이후의 경로는
-`/instances/{instance_id}/{container_name}/{port}` 형식이다.
+`service_url`은 하위 호환을 위한 첫 번째 공개 접속점이며 첫 번째
+`endpoints[]` 항목과 같다. 신규 연동에서는 `endpoints`를 사용한다.
+
+로컬 AWS 검증에 사용하는 `NODE_PORT` 노출 모드는 Kubernetes가 각 공개 포트의
+NodePort를 자동 할당하며 주소는 `http://<target 공인 IP>:<NodePort>` 형식이다.
+내부 컨테이너(`expose: false`)는 ClusterIP로만 생성된다. 기존
+`INGRESS_PATH` 노출 모드도 지원하며, 이때 주소는
+`<public_gateway>/instances/{instance_id}` 형식이다. `exposure_mode`를 생략한
+기존 Registry 설정은 `INGRESS_PATH`로 해석된다.
 
 ### 삭제 성공
 
@@ -406,14 +412,17 @@ Node·Container의 `usage`는 `null`이다. Core 상태와 배치 가능 공간�
 
 다중 컨테이너 런타임은 컨테이너마다 Deployment와 ClusterIP Service를 하나씩
 만든다. 조회 결과의 `containers`에는 같은 팀·인스턴스 Namespace에 속한 모든
-컨테이너가 반환된다. `endpoint_ready`는 Ingress가 참조하는 모든 공개 Service에
-Ready EndpointSlice가 있을 때만 `true`다.
+컨테이너가 반환된다. `endpoint_ready`는 현재 노출 모드에서 모든 공개 Service에
+Ready EndpointSlice가 있을 때만 `true`다. `NODE_PORT`에서는 NodePort Service를,
+`INGRESS_PATH`에서는 Ingress가 참조하는 Service를 확인한다.
 
 ## 생성·삭제의 K3s 단위
 
 - 팀의 문제 런타임 인스턴스 1개마다 전용 Namespace 1개를 만든다.
 - 해당 Namespace 안에 전용 `challenge-runtime` ServiceAccount, ResourceQuota,
-  LimitRange, NetworkPolicy와 컨테이너별 Deployment·Service, 공개용 Ingress 1개를 둔다.
+  LimitRange, NetworkPolicy와 컨테이너별 Deployment·Service를 둔다.
+- `NODE_PORT`에서는 공개 컨테이너의 Service만 NodePort로 만들고 Ingress는 만들지
+  않는다. `INGRESS_PATH`에서는 Service는 ClusterIP이며 공개용 Ingress 1개를 둔다.
 - ServiceAccount와 Pod 양쪽에서 token 자동 마운트를 끄고, Pod·컨테이너에는 non-root
   UID, read-only root filesystem, privilege escalation·privileged 금지, 모든 Linux
   capability drop, `RuntimeDefault` seccomp와 host namespace 비활성화를 적용한다.
@@ -425,7 +434,7 @@ Ready EndpointSlice가 있을 때만 `true`다.
   `outbound_mode`는 `NONE`만 승인하므로 그 밖의 외부 egress는 열지 않는다.
 - Namespace와 모든 기존 리소스의 소유권을 먼저 검사한 뒤 ServiceAccount →
   ResourceQuota → LimitRange → NetworkPolicy 순으로 적용·read-back 검증한다. 이 보호
-  리소스가 모두 확인된 뒤에만 Deployment → Service → Ingress를 적용한다.
+  리소스가 모두 확인된 뒤에만 Deployment → Service → 노출 모드별 Ingress를 적용한다.
 - 생성은 모든 Deployment, Pod, Service Endpoint가 준비돼야 성공한다.
 - 생성 중 일부 리소스가 실패하면 해당 Namespace 전체를 롤백한다.
 - 삭제는 저장된 `target_id`, Namespace, 팀·인스턴스 소유권을 확인한 뒤

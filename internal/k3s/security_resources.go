@@ -153,6 +153,7 @@ func buildRuntimeResourceQuota(
 	labels map[string]string,
 	policy isolation.ResolvedPolicy,
 	containerCount int,
+	nodePortCount int,
 ) *corev1.ResourceQuota {
 	totals := resourceList(resolvedResourceLimits(policy.ResourceLimits))
 	return &corev1.ResourceQuota{
@@ -171,7 +172,7 @@ func buildRuntimeResourceQuota(
 			corev1.ResourcePods:                                 countQuantity(containerCount),
 			corev1.ResourceServices:                             countQuantity(containerCount),
 			corev1.ResourceServicesLoadBalancers:                countQuantity(0),
-			corev1.ResourceServicesNodePorts:                    countQuantity(0),
+			corev1.ResourceServicesNodePorts:                    countQuantity(nodePortCount),
 			corev1.ResourceName("count/deployments.apps"):       countQuantity(containerCount),
 			corev1.ResourceName("count/replicasets.apps"):       countQuantity(2 * containerCount),
 			corev1.ResourceName("count/secrets"):                countQuantity(0),
