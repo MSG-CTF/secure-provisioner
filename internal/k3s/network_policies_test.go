@@ -89,6 +89,32 @@ func TestBuildNetworkPoliciesAllowsPlatformIngressOnlyToExposedDeclaredPorts(t *
 	}
 }
 
+func TestBuildNetworkPoliciesAllowsExternalNodePortIngressOnlyToExposedDeclaredPorts(t *testing.T) {
+	command := validMultiCreateCommand("aws-dev")
+	command.Containers[0].Ports = []int{8443, 8080}
+	command.Policy = resolvedPolicyForCommand(command, "SMALL_MULTI")
+	cluster := networkPolicyCluster(command.TargetID)
+	cluster.Config.ExposureMode = ExposureModeNodePort
+	cluster.Config.PublicGateway = "http://203.0.113.10"
+
+	resources, err := BuildResourceSet(cluster, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := requireNetworkPolicy(t, resources.NetworkPolicies, "allow-public-ingress-web")
+	rule := policy.Spec.Ingress[0]
+	if len(rule.From) != 0 {
+		t.Fatalf("NodePort public ingress peers = %#v, want all external sources", rule.From)
+	}
+	assertNetworkPolicyPorts(t, rule.Ports, []networkPolicyPortExpectation{
+		{Protocol: corev1.ProtocolTCP, Port: 8080},
+		{Protocol: corev1.ProtocolTCP, Port: 8443},
+	})
+	if findNetworkPolicy(resources.NetworkPolicies, "allow-public-ingress-internal") != nil {
+		t.Fatal("unexposed container received a NodePort ingress policy")
+	}
+}
+
 func TestBuildNetworkPoliciesAllowsInternalConnectionInBothAdditiveDirections(t *testing.T) {
 	command := validMultiCreateCommand("aws-dev")
 	command.Policy.InternalConnections = []isolation.InternalConnection{{
