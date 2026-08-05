@@ -198,14 +198,20 @@ The original single-container request needs no new fields and keeps its
 submitted numeric `resource_limits`; the current compatibility behavior that
 silently replaces them with `SMALL_SINGLE` values is removed.
 
-The stacked isolation PR and the `test_ctf` policy-MVP PR are changed together:
+The stacked isolation PR owns the contract change. The `test_ctf` policy-MVP
+PR receives only the smallest downstream adjustment needed to keep its
+generated examples compatible:
 
 1. Provisioner request DTO and OpenAPI remove the three reference fields.
 2. The resolver always supplies the fixed baseline and retains submitted
    resource totals.
-3. `test_ctf` source policy files retain profile metadata, but generated
-   `deploy/create-*.json` files omit it.
-4. Runtime documentation and checked-in examples use the simplified payload.
+3. `test_ctf` source policy files, schemas, and profile-resolution model remain
+   unchanged.
+4. Only the final Provisioner-request serializer omits the three
+   Scheduler-owned references; its focused snapshot tests and generated
+   `deploy/create-*.json` fixtures are updated with it.
+5. Provisioner runtime documentation and checked-in examples use the
+   simplified payload.
 
 No compatibility period is required for the three reference fields because
 they exist only on the unmerged feature branches. The production-compatible
@@ -223,8 +229,9 @@ legacy request remains supported.
 - Operation idempotency and runtime-binding tests using only the concrete
   policy.
 - OpenAPI lint and documentation example checks.
-- `test_ctf` generation tests proving profile metadata remains in the source
-  policy but not in the generated Provisioner request.
+- One focused `test_ctf` serialization test proving profile metadata remains
+  in the source policy but not in the generated Provisioner request; regenerate
+  only the affected `deploy/create-*.json` fixtures.
 - Existing K3s resource, network policy, NodePort, race, vet, and build suites.
 
 ## Out of scope
@@ -234,3 +241,5 @@ legacy request remains supported.
 - Enabling `PUBLIC_INTERNET`.
 - Adding target-specific maximum resource envelopes.
 - Changing team instance-count enforcement, which remains Scheduler-owned.
+- Refactoring `test_ctf` policy schemas, profile resolution, or challenge source
+  files beyond the final request-serialization compatibility adjustment.
