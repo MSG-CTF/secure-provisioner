@@ -134,7 +134,7 @@ func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.Create
 	if cluster.Config.ExposureMode == ExposureModeNodePort {
 		endpoints, err = BuildNodePortEndpoints(cluster.Config.PublicGateway, applied.Services)
 		if err != nil {
-			return provisioner.CreateWorkloadResult{}, a.failWithRollback(cluster.Client, resources.Namespace, "RESOURCE_APPLY_FAILED", err)
+			return provisioner.CreateWorkloadResult{}, a.failWithRollback(cluster.Client, observedNamespace, "RESOURCE_APPLY_FAILED", err)
 		}
 		serviceURL = endpoints[0].ServiceURL
 	}
