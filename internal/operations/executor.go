@@ -3,12 +3,18 @@ package operations
 import (
 	"context"
 	"errors"
+
+	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 )
 
 const defaultExecutionErrorCode = "EXECUTION_FAILED"
 
 type RuntimeExecutor interface {
 	Execute(context.Context, Operation) (OperationResult, error)
+}
+
+type CreateResultFinalizer interface {
+	FinalizeCreate(context.Context, Operation, provisioner.CreateWorkloadResult) error
 }
 
 type ExecutionError struct {

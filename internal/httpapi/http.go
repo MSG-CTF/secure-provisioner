@@ -7,6 +7,7 @@ import (
 	"mime"
 	"net/http"
 
+	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
 	"github.com/MSG-CTF/secure-provisioner/internal/operations"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 )
@@ -14,6 +15,7 @@ import (
 type API struct {
 	createWorkload provisioner.CreateWorkloadUseCase
 	runtime        RuntimeUseCase
+	directResolver isolation.Resolver
 }
 
 func NewHandler(createWorkload provisioner.CreateWorkloadUseCase) http.Handler {
@@ -26,6 +28,9 @@ func NewHandlerWithRuntime(createWorkload provisioner.CreateWorkloadUseCase, run
 
 func newHandler(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase) http.Handler {
 	api := &API{createWorkload: createWorkload, runtime: runtime}
+	if runtime == nil {
+		api.directResolver = isolation.NewStaticResolver()
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /internal/v1/instances", api.handleCreateInstance)
 	if runtime != nil {
@@ -56,6 +61,10 @@ func (api *API) handleCreateInstance(writer http.ResponseWriter, request *http.R
 	if api.runtime != nil {
 		operation, created, err := api.runtime.EnqueueCreate(createRequest.ToCommand())
 		if err != nil {
+			if errors.Is(err, isolation.ErrPolicyRejected) {
+				writeAPIError(writer, http.StatusUnprocessableEntity, "ISOLATION_POLICY_REJECTED", "isolation policy was rejected")
+				return
+			}
 			if errors.Is(err, operations.ErrIdempotencyConflict) {
 				writeAPIError(writer, http.StatusConflict, "REQUEST_ID_CONFLICT", "request_id is already used by another operation")
 				return
@@ -67,8 +76,28 @@ func (api *API) handleCreateInstance(writer http.ResponseWriter, request *http.R
 		return
 	}
 
-	result, err := api.createWorkload.CreateWorkload(request.Context(), createRequest.ToCommand())
+	command := createRequest.ToCommand()
+	policy, err := api.directResolver.Resolve(command.PolicyRequest)
 	if err != nil {
+		if errors.Is(err, isolation.ErrPolicyRejected) {
+			writeAPIError(writer, http.StatusUnprocessableEntity, "ISOLATION_POLICY_REJECTED", "isolation policy was rejected")
+			return
+		}
+		writeAPIError(writer, http.StatusBadGateway, "PROVISIONING_FAILED", "workload creation failed")
+		return
+	}
+	command.Policy = policy
+	command.ResourceLimits = provisioner.ResourceLimits{
+		CPUMillicores:       policy.ResourceLimits.CPUMillicores,
+		MemoryMiB:           policy.ResourceLimits.MemoryMiB,
+		EphemeralStorageMiB: policy.ResourceLimits.EphemeralStorageMiB,
+	}
+	result, err := api.createWorkload.CreateWorkload(request.Context(), command)
+	if err != nil {
+		if errors.Is(err, isolation.ErrPolicyRejected) {
+			writeAPIError(writer, http.StatusUnprocessableEntity, "ISOLATION_POLICY_REJECTED", "isolation policy was rejected")
+			return
+		}
 		if errors.Is(err, provisioner.ErrRuntimeUnavailable) {
 			writeAPIError(writer, http.StatusServiceUnavailable, "RUNTIME_UNAVAILABLE", "runtime adapter is unavailable")
 			return

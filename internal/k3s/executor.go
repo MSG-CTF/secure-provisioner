@@ -13,6 +13,10 @@ type CreateAdapter interface {
 	CreateWorkload(context.Context, provisioner.CreateWorkloadCommand) (provisioner.CreateWorkloadResult, error)
 }
 
+type CreateAdapterFinalizer interface {
+	FinalizeCreate(context.Context, provisioner.CreateWorkloadCommand, provisioner.CreateWorkloadResult) error
+}
+
 type DeleteWorkloadAdapter interface {
 	DeleteWorkload(context.Context, provisioner.DeleteWorkloadCommand, runtimebinding.Binding) error
 }
@@ -72,7 +76,25 @@ func (e *Executor) Execute(ctx context.Context, operation operations.Operation) 
 	}
 }
 
+func (e *Executor) FinalizeCreate(ctx context.Context, operation operations.Operation, result provisioner.CreateWorkloadResult) error {
+	if operation.Type != operations.OperationTypeCreate || operation.CreateCommand == nil {
+		return operations.NewExecutionError("UNSUPPORTED_OPERATION", false, nil)
+	}
+	finalizer, ok := e.create.(CreateAdapterFinalizer)
+	if !ok {
+		return nil
+	}
+	if err := finalizer.FinalizeCreate(ctx, *operation.CreateCommand, result); err != nil {
+		return classifyRuntimeExecutionError(err)
+	}
+	return nil
+}
+
 func classifyRuntimeExecutionError(err error) error {
+	var executionErr *operations.ExecutionError
+	if errors.As(err, &executionErr) {
+		return executionErr
+	}
 	var runtimeErr *RuntimeError
 	if errors.As(err, &runtimeErr) {
 		return operations.NewExecutionError(runtimeErr.Code(), runtimeErr.Retryable(), err)

@@ -16,7 +16,7 @@ func TestWorkerExecutesAndStoresSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	executor := &scriptedExecutor{results: []execution{{result: OperationResult{Create: &provisioner.CreateWorkloadResult{RuntimeWorkloadID: "default/inst-1", ServiceURL: "http://service.example"}}}}}
+	executor := &scriptedExecutor{results: []execution{{result: OperationResult{Create: &provisioner.CreateWorkloadResult{RuntimeWorkloadID: "default/inst-1", NamespaceUID: "namespace-uid-01", ServiceURL: "http://service.example"}}}}}
 	worker, err := NewWorker(store, executor, WorkerConfig{Concurrency: 1, Backoff: noBackoff, Sleep: sleepWithContext})
 	if err != nil {
 		t.Fatal(err)
@@ -360,6 +360,179 @@ func TestWorkerTreatsNextContextErrorAsNormalShutdown(t *testing.T) {
 	}
 }
 
+func TestWorkerCreateCheckpointResumesFinalizationWithoutSecondExecute(t *testing.T) {
+	store := NewMemoryStore(sequenceIDs("op-1"))
+	operation, _, err := store.EnqueueCreate(validCreateCommand("req-1"), 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := &checkpointFinalizingExecutor{finalizeErrors: []error{
+		NewExecutionError("ROLLBACK_FAILED", true, errors.New("temporary cleanup failure")),
+		nil,
+	}}
+	worker, err := NewWorker(store, executor, WorkerConfig{Concurrency: 1, Backoff: noBackoff, Sleep: sleepWithContext})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := store.Next(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.process(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	checkpointed, err := store.Get(operation.ID)
+	if err != nil || checkpointed.Status != OperationStatusQueued || checkpointed.CreateCheckpoint == nil || checkpointed.Result.Create != nil {
+		t.Fatalf("checkpointed operation = %#v, %v", checkpointed, err)
+	}
+
+	second, err := store.Next(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.process(context.Background(), second); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.Get(operation.ID)
+	if err != nil || stored.Status != OperationStatusSucceeded || stored.Attempt != 2 || stored.CreateCheckpoint != nil || stored.Result.Create == nil {
+		t.Fatalf("stored operation = %#v, %v", stored, err)
+	}
+	if executeCalls, finalizeCalls := executor.calls(); executeCalls != 1 || finalizeCalls != 2 {
+		t.Fatalf("executor calls = %d, finalizer calls = %d; want 1 and 2", executeCalls, finalizeCalls)
+	}
+}
+
+func TestWorkerRequeuesCheckpointOnCancellationAndResumesWithoutExecute(t *testing.T) {
+	memoryStore := NewMemoryStore(sequenceIDs("op-1"))
+	operation, _, err := memoryStore.EnqueueCreate(validCreateCommand("req-1"), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	store := &checkpointCancelingStore{Store: memoryStore, cancel: cancel}
+	executor := &checkpointFinalizingExecutor{}
+	worker, err := NewWorker(store, executor, WorkerConfig{Concurrency: 1, Backoff: noBackoff, Sleep: sleepWithContext})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := store.Next(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.process(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	checkpointed, err := store.Get(operation.ID)
+	if err != nil || checkpointed.Status != OperationStatusQueued || checkpointed.Attempt != 0 || checkpointed.CreateCheckpoint == nil {
+		t.Fatalf("requeued checkpoint = %#v, %v", checkpointed, err)
+	}
+
+	second, err := store.Next(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.process(context.Background(), second); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.Get(operation.ID)
+	if err != nil || stored.Status != OperationStatusSucceeded || stored.Attempt != 1 {
+		t.Fatalf("stored operation = %#v, %v", stored, err)
+	}
+	if executeCalls, finalizeCalls := executor.calls(); executeCalls != 1 || finalizeCalls != 1 {
+		t.Fatalf("executor calls = %d, finalizer calls = %d; want 1 and 1", executeCalls, finalizeCalls)
+	}
+}
+
+func TestWorkerFinalizesCheckpointWithinRetryPolicy(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		maxAttempts    int
+		finalizeErrors []error
+		wantAttempts   int
+		wantFinalizes  int
+	}{
+		{
+			name: "retryable stops at max attempts", maxAttempts: 2, wantAttempts: 2, wantFinalizes: 2,
+			finalizeErrors: []error{
+				NewExecutionError("ROLLBACK_FAILED", true, errors.New("temporary cleanup failure one")),
+				NewExecutionError("ROLLBACK_FAILED", true, errors.New("temporary cleanup failure two")),
+			},
+		},
+		{
+			name: "nonretryable stops immediately", maxAttempts: 3, wantAttempts: 1, wantFinalizes: 1,
+			finalizeErrors: []error{NewExecutionError("RUNTIME_BINDING_SAVE_FAILED", false, errors.New("binding save failed"))},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := NewMemoryStore(sequenceIDs("op-1"))
+			operation, _, err := store.EnqueueCreate(validCreateCommand("req-1"), test.maxAttempts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			executor := &checkpointFinalizingExecutor{finalizeErrors: test.finalizeErrors}
+			worker, err := NewWorker(store, executor, WorkerConfig{Concurrency: 1, Backoff: noBackoff, Sleep: sleepWithContext})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for attempt := 0; attempt < test.wantAttempts; attempt++ {
+				next, nextErr := store.Next(context.Background())
+				if nextErr != nil {
+					t.Fatal(nextErr)
+				}
+				if processErr := worker.process(context.Background(), next); processErr != nil {
+					t.Fatal(processErr)
+				}
+			}
+			stored, err := store.Get(operation.ID)
+			if err != nil || stored.Status != OperationStatusFailed || stored.Attempt != test.wantAttempts ||
+				stored.LastErrorCode == "" || stored.CreateCheckpoint == nil || stored.Result.Create != nil {
+				t.Fatalf("stored operation = %#v, %v", stored, err)
+			}
+			if executeCalls, finalizeCalls := executor.calls(); executeCalls != 1 || finalizeCalls != test.wantFinalizes {
+				t.Fatalf("executor calls = %d, finalizer calls = %d; want 1 and %d", executeCalls, finalizeCalls, test.wantFinalizes)
+			}
+		})
+	}
+}
+
+func TestWorkerCreateCheckpointIsNotSucceededUntilFinalizerCompletes(t *testing.T) {
+	store := NewMemoryStore(sequenceIDs("op-1"))
+	operation, _, err := store.EnqueueCreate(validCreateCommand("req-1"), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := &checkpointFinalizingExecutor{finalizeStarted: make(chan struct{}, 1), releaseFinalize: make(chan struct{})}
+	worker, err := NewWorker(store, executor, WorkerConfig{Concurrency: 1, Backoff: noBackoff, Sleep: sleepWithContext})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := store.Next(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- worker.process(context.Background(), next) }()
+	select {
+	case <-executor.finalizeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("finalizer did not start")
+	}
+	running, err := store.Get(operation.ID)
+	if err != nil || running.Status != OperationStatusRunning || running.CreateCheckpoint == nil || running.Result.Create != nil {
+		t.Fatalf("operation before finalizer completion = %#v, %v", running, err)
+	}
+	close(executor.releaseFinalize)
+	if err := receiveRun(t, done); err != nil {
+		t.Fatal(err)
+	}
+	succeeded, err := store.Get(operation.ID)
+	if err != nil || succeeded.Status != OperationStatusSucceeded || succeeded.CreateCheckpoint != nil || succeeded.Result.Create == nil {
+		t.Fatalf("operation after finalizer completion = %#v, %v", succeeded, err)
+	}
+}
+
 func runUntilTerminal(t *testing.T, worker *Worker, store Store, operationID string) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -420,7 +593,7 @@ func receiveRun(t *testing.T, done <-chan error) error {
 func noBackoff(int) time.Duration { return 0 }
 
 func successfulCreateResult() OperationResult {
-	return OperationResult{Create: &provisioner.CreateWorkloadResult{RuntimeWorkloadID: "default/inst-1", ServiceURL: "http://service.example"}}
+	return OperationResult{Create: &provisioner.CreateWorkloadResult{RuntimeWorkloadID: "default/inst-1", NamespaceUID: "namespace-uid-01", ServiceURL: "http://service.example"}}
 }
 
 func successfulDeleteResult() OperationResult {
@@ -462,6 +635,46 @@ type execution struct {
 type scriptedExecutor struct {
 	mu      sync.Mutex
 	results []execution
+}
+
+type checkpointFinalizingExecutor struct {
+	mu              sync.Mutex
+	executeCalls    int
+	finalizeCalls   int
+	finalizeErrors  []error
+	finalizeStarted chan struct{}
+	releaseFinalize chan struct{}
+}
+
+func (e *checkpointFinalizingExecutor) Execute(context.Context, Operation) (OperationResult, error) {
+	e.mu.Lock()
+	e.executeCalls++
+	e.mu.Unlock()
+	return successfulCreateResult(), nil
+}
+
+func (e *checkpointFinalizingExecutor) FinalizeCreate(_ context.Context, _ Operation, _ provisioner.CreateWorkloadResult) error {
+	e.mu.Lock()
+	e.finalizeCalls++
+	var err error
+	if len(e.finalizeErrors) > 0 {
+		err = e.finalizeErrors[0]
+		e.finalizeErrors = e.finalizeErrors[1:]
+	}
+	e.mu.Unlock()
+	if e.finalizeStarted != nil {
+		e.finalizeStarted <- struct{}{}
+	}
+	if e.releaseFinalize != nil {
+		<-e.releaseFinalize
+	}
+	return err
+}
+
+func (e *checkpointFinalizingExecutor) calls() (int, int) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.executeCalls, e.finalizeCalls
 }
 
 func (e *scriptedExecutor) Execute(context.Context, Operation) (OperationResult, error) {
@@ -574,6 +787,10 @@ func (contextErrorStore) MarkRunning(string) (Operation, error) {
 	return Operation{}, errors.New("not implemented")
 }
 
+func (contextErrorStore) CheckpointCreateResult(string, provisioner.CreateWorkloadResult) (Operation, error) {
+	return Operation{}, errors.New("not implemented")
+}
+
 func (contextErrorStore) MarkRetrying(string, string) (Operation, error) {
 	return Operation{}, errors.New("not implemented")
 }
@@ -591,6 +808,19 @@ func (contextErrorStore) MarkFailed(string, string) (Operation, error) {
 type cancellingNextStore struct {
 	Store
 	cancel context.CancelFunc
+}
+
+type checkpointCancelingStore struct {
+	Store
+	cancel context.CancelFunc
+}
+
+func (s *checkpointCancelingStore) CheckpointCreateResult(id string, result provisioner.CreateWorkloadResult) (Operation, error) {
+	operation, err := s.Store.CheckpointCreateResult(id, result)
+	if err == nil {
+		s.cancel()
+	}
+	return operation, err
 }
 
 func (s *cancellingNextStore) Next(ctx context.Context) (Operation, error) {

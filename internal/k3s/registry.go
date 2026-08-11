@@ -4,6 +4,8 @@ import (
 	"net/url"
 	"reflect"
 	"strings"
+
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 type Registry struct {
@@ -82,7 +84,7 @@ func (r *Registry) LookupForCreate(targetID string) (Cluster, error) {
 	if !cluster.Config.Enabled {
 		return Cluster{}, newRuntimeError("TARGET_DISABLED", false, nil)
 	}
-	return cluster, nil
+	return copyCluster(cluster), nil
 }
 
 func (r *Registry) LookupForMaintenance(targetID string) (Cluster, error) {
@@ -93,7 +95,7 @@ func (r *Registry) LookupForMaintenance(targetID string) (Cluster, error) {
 	if cluster.Client == nil || cluster.Metrics == nil {
 		return Cluster{}, newRuntimeError("K3S_UNAVAILABLE", true, nil)
 	}
-	return cluster, nil
+	return copyCluster(cluster), nil
 }
 
 func validateClusterConfig(config ClusterConfig, seenTargetIDs map[string]struct{}) (ClusterConfig, error) {
@@ -104,6 +106,9 @@ func validateClusterConfig(config ClusterConfig, seenTargetIDs map[string]struct
 		return ClusterConfig{}, newRuntimeError("CONFIG_INVALID", false, nil)
 	}
 	if config.Provider != ProviderAWS && config.Provider != ProviderGCP && config.Provider != ProviderNCP {
+		return ClusterConfig{}, newRuntimeError("CONFIG_INVALID", false, nil)
+	}
+	if config.Enabled && !validSecurityCapabilities(config.SecurityCapabilities) {
 		return ClusterConfig{}, newRuntimeError("CONFIG_INVALID", false, nil)
 	}
 	if config.ExposureMode == "" {
@@ -123,6 +128,50 @@ func validateClusterConfig(config ClusterConfig, seenTargetIDs map[string]struct
 	gateway.Path = strings.TrimRight(gateway.Path, "/")
 	gateway.RawPath = ""
 	config.PublicGateway = gateway.String()
+	config.SecurityCapabilities = copySecurityCapabilities(config.SecurityCapabilities)
 	seenTargetIDs[config.TargetID] = struct{}{}
 	return config, nil
+}
+
+func copyCluster(cluster Cluster) Cluster {
+	cluster.Config.SecurityCapabilities = copySecurityCapabilities(cluster.Config.SecurityCapabilities)
+	return cluster
+}
+
+func copySecurityCapabilities(capabilities SecurityCapabilities) SecurityCapabilities {
+	capabilities.DNSPodSelector = copySelector(capabilities.DNSPodSelector)
+	capabilities.IngressPodSelector = copySelector(capabilities.IngressPodSelector)
+	return capabilities
+}
+
+func copySelector(selector map[string]string) map[string]string {
+	if selector == nil {
+		return nil
+	}
+	copied := make(map[string]string, len(selector))
+	for key, value := range selector {
+		copied[key] = value
+	}
+	return copied
+}
+
+func validSecurityCapabilities(capabilities SecurityCapabilities) bool {
+	if strings.TrimSpace(capabilities.NetworkPolicyProvider) == "" ||
+		len(validation.IsDNS1123Label(capabilities.DNSNamespace)) != 0 ||
+		len(validation.IsDNS1123Label(capabilities.IngressNamespace)) != 0 {
+		return false
+	}
+	return validLabelSelector(capabilities.DNSPodSelector) && validLabelSelector(capabilities.IngressPodSelector)
+}
+
+func validLabelSelector(selector map[string]string) bool {
+	if len(selector) == 0 {
+		return false
+	}
+	for key, value := range selector {
+		if len(validation.IsQualifiedName(key)) != 0 || len(validation.IsValidLabelValue(value)) != 0 {
+			return false
+		}
+	}
+	return true
 }

@@ -59,27 +59,55 @@ func (a *DeleteAdapter) DeleteWorkload(ctx context.Context, command provisioner.
 	if err != nil {
 		return err
 	}
-	namespace, err := cluster.Client.CoreV1().Namespaces().Get(ctx, binding.Namespace, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		return nil
-	}
-	if err != nil {
-		if ctx.Err() != nil {
-			return operationCancelledError(ctx.Err())
+	deleteAccepted := false
+	var lastDeleteErr error
+	for attempt := 0; attempt < maxReconcileAttempts; attempt++ {
+		namespace, getErr := cluster.Client.CoreV1().Namespaces().Get(ctx, binding.Namespace, metav1.GetOptions{})
+		if apierrors.IsNotFound(getErr) {
+			return nil
 		}
-		return newRuntimeError("TARGET_TEMPORARILY_UNAVAILABLE", true, err)
-	}
-	if !namespaceOwnedByBinding(namespace.Labels, binding) {
-		return newRuntimeError("RUNTIME_OWNERSHIP_MISMATCH", false, nil)
-	}
+		if getErr != nil {
+			if ctx.Err() != nil {
+				return operationCancelledError(ctx.Err())
+			}
+			return namespaceAPIError(getErr)
+		}
+		if identityErr := namespaceBindingError(namespace, binding); identityErr != nil {
+			return identityErr
+		}
+		if namespace.DeletionTimestamp != nil {
+			deleteAccepted = true
+			break
+		}
 
-	propagation := metav1.DeletePropagationForeground
-	err = cluster.Client.CoreV1().Namespaces().Delete(ctx, binding.Namespace, metav1.DeleteOptions{PropagationPolicy: &propagation})
-	if err != nil && !apierrors.IsNotFound(err) {
+		propagation := metav1.DeletePropagationForeground
+		uid := namespace.UID
+		resourceVersion := namespace.ResourceVersion
+		err = cluster.Client.CoreV1().Namespaces().Delete(ctx, binding.Namespace, metav1.DeleteOptions{
+			PropagationPolicy: &propagation,
+			Preconditions: &metav1.Preconditions{
+				UID:             &uid,
+				ResourceVersion: &resourceVersion,
+			},
+		})
+		if err == nil {
+			deleteAccepted = true
+			break
+		}
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
 		if ctx.Err() != nil {
 			return operationCancelledError(ctx.Err())
 		}
-		return newRuntimeError("TARGET_TEMPORARILY_UNAVAILABLE", true, err)
+		lastDeleteErr = err
+		if apierrors.IsConflict(err) {
+			continue
+		}
+		return namespaceAPIError(err)
+	}
+	if !deleteAccepted {
+		return namespaceAPIError(lastDeleteErr)
 	}
 
 	waitCtx, cancel := context.WithTimeout(ctx, a.config.DeleteTimeout)
@@ -87,7 +115,7 @@ func (a *DeleteAdapter) DeleteWorkload(ctx context.Context, command provisioner.
 	ticker := time.NewTicker(a.config.PollInterval)
 	defer ticker.Stop()
 	for {
-		_, getErr := cluster.Client.CoreV1().Namespaces().Get(waitCtx, binding.Namespace, metav1.GetOptions{})
+		current, getErr := cluster.Client.CoreV1().Namespaces().Get(waitCtx, binding.Namespace, metav1.GetOptions{})
 		if apierrors.IsNotFound(getErr) {
 			return nil
 		}
@@ -98,7 +126,10 @@ func (a *DeleteAdapter) DeleteWorkload(ctx context.Context, command provisioner.
 				}
 				return newRuntimeError("NAMESPACE_DELETE_TIMEOUT", true, waitCtx.Err())
 			}
-			return newRuntimeError("TARGET_TEMPORARILY_UNAVAILABLE", true, getErr)
+			return namespaceAPIError(getErr)
+		}
+		if identityErr := namespaceBindingError(current, binding); identityErr != nil {
+			return identityErr
 		}
 		select {
 		case <-ctx.Done():
@@ -108,6 +139,20 @@ func (a *DeleteAdapter) DeleteWorkload(ctx context.Context, command provisioner.
 		case <-ticker.C:
 		}
 	}
+}
+
+func namespaceAPIError(err error) error {
+	return newRuntimeError("TARGET_TEMPORARILY_UNAVAILABLE", kubernetesErrorRetryable(err), err)
+}
+
+func namespaceBindingError(namespace metav1.Object, binding runtimebinding.Binding) error {
+	if string(namespace.GetUID()) != binding.NamespaceUID {
+		return newRuntimeError("RUNTIME_IDENTITY_MISMATCH", false, nil)
+	}
+	if !namespaceOwnedByBinding(namespace.GetLabels(), binding) {
+		return newRuntimeError("RUNTIME_OWNERSHIP_MISMATCH", false, nil)
+	}
+	return nil
 }
 
 func deleteMatchesBinding(command provisioner.DeleteWorkloadCommand, binding runtimebinding.Binding) bool {

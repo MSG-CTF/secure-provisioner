@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
 	"github.com/MSG-CTF/secure-provisioner/internal/operations"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 )
@@ -58,6 +59,227 @@ func TestCreateInstanceAcceptsSchedulerContract(t *testing.T) {
 	}
 	if contentType := response.Header().Get("Content-Type"); contentType != "application/json" {
 		t.Fatalf("Content-Type = %q, want application/json", contentType)
+	}
+}
+
+func TestCreateInstanceDirectPathResolvesPolicyBeforeCreate(t *testing.T) {
+	useCase := &recordingCreateUseCase{}
+	requestBody, err := json.Marshal(validIsolationCreateWorkloadRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(string(requestBody)))
+	request.Header.Set("Content-Type", "application/json")
+
+	NewHandler(useCase).ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusCreated, response.Body.String())
+	}
+	if useCase.calls != 1 || !useCase.command.Policy.Baseline.RunAsNonRoot ||
+		!useCase.command.Policy.Baseline.ReadOnlyRootFilesystem ||
+		useCase.command.ResourceLimits.MemoryMiB != 256 {
+		t.Fatalf("calls = %d; command = %#v", useCase.calls, useCase.command)
+	}
+}
+
+func TestCreateInstanceDirectPathMapsPolicyRejectionTo422(t *testing.T) {
+	useCase := &recordingCreateUseCase{}
+	createRequest := validIsolationCreateWorkloadRequest()
+	createRequest.Workload.OutboundMode = "PUBLIC_INTERNET"
+	requestBody, err := json.Marshal(createRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(string(requestBody)))
+	request.Header.Set("Content-Type", "application/json")
+
+	NewHandler(useCase).ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnprocessableEntity || useCase.calls != 0 {
+		t.Fatalf("status = %d; calls = %d; body = %s", response.Code, useCase.calls, response.Body.String())
+	}
+	assertErrorCode(t, response, "ISOLATION_POLICY_REJECTED")
+}
+
+func TestCreateInstanceAcceptsLegacyWireContractWithSafePolicyDefaults(t *testing.T) {
+	runtime := &recordingRuntimeUseCase{
+		operation: operations.Operation{ID: "operation-legacy", RequestID: "req-legacy", Type: operations.OperationTypeCreate, Status: operations.OperationStatusQueued},
+		created:   true,
+	}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(`{
+		"request_id":"req-legacy",
+		"instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001",
+		"team_id":1,
+		"target":{"runtime_type":"KUBERNETES","target_id":"cluster-main"},
+		"workload":{
+			"image":"registry.msgctf.local/challenges/web-01@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"container_port":8080,
+			"resource_limits":{"cpu_millicores":500,"memory_mib":512,"ephemeral_storage_mib":1024}
+		}
+	}`))
+	request.Header.Set("Content-Type", "application/json")
+
+	NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+
+	if response.Code != http.StatusAccepted || runtime.createCalls != 1 {
+		t.Fatalf("status = %d; calls = %d; body = %s", response.Code, runtime.createCalls, response.Body.String())
+	}
+	command := runtime.createCommand
+	if command.ChallengeRef != (provisioner.ChallengeRef{ChallengeID: "legacy", Version: "v1"}) ||
+		command.PolicyRequest.IsolationRef != (isolation.ProfileRef{Name: "STANDARD", Version: "v1"}) ||
+		command.PolicyRequest.ResourceRef != (isolation.ProfileRef{Name: "SMALL_SINGLE", Version: "v1"}) ||
+		command.PolicyRequest.OutboundMode != isolation.OutboundNone ||
+		command.PolicyRequest.Containers[0].RunAsUser != 10001 ||
+		command.ResourceLimits != (provisioner.ResourceLimits{CPUMillicores: 100, MemoryMiB: 128, EphemeralStorageMiB: 128}) {
+		t.Fatalf("legacy command = %#v", command)
+	}
+}
+
+func TestCreateInstanceRejectsExplicitEmptyLegacyPolicyFields(t *testing.T) {
+	legacySingle := legacyWireRequestJSON()
+	legacyMulti := legacyMultiWireRequestJSON()
+	testCases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "empty isolation ref",
+			body: strings.Replace(legacySingle, `"team_id":1,`, `"team_id":1,"isolation_ref":{},`, 1),
+		},
+		{
+			name: "null isolation ref",
+			body: strings.Replace(legacySingle, `"team_id":1,`, `"team_id":1,"isolation_ref":null,`, 1),
+		},
+		{
+			name: "noncanonical empty isolation ref",
+			body: strings.Replace(legacySingle, `"team_id":1,`, `"team_id":1,"ISOLATION_REF":{},`, 1),
+		},
+		{
+			name: "empty outbound mode",
+			body: strings.Replace(legacySingle, `"workload":{`, `"workload":{"outbound_mode":"",`, 1),
+		},
+		{
+			name: "noncanonical workload with empty outbound mode",
+			body: strings.Replace(legacySingle, `"workload":{`, `"WORKLOAD":{"outbound_mode":"",`, 1),
+		},
+		{
+			name: "zero run as user",
+			body: strings.Replace(legacyMulti, `"expose":true`, `"expose":true,"run_as_user":0`, 1),
+		},
+		{
+			name: "empty writable paths",
+			body: strings.Replace(legacyMulti, `"expose":true`, `"expose":true,"writable_paths":[]`, 1),
+		},
+		{
+			name: "empty internal connections",
+			body: strings.Replace(legacySingle, `"workload":{`, `"workload":{"internal_connections":[],`, 1),
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			runtime := &recordingRuntimeUseCase{}
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(testCase.body))
+			request.Header.Set("Content-Type", "application/json")
+
+			NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+
+			if response.Code != http.StatusBadRequest || runtime.createCalls != 0 {
+				t.Fatalf("status = %d; calls = %d; body = %s", response.Code, runtime.createCalls, response.Body.String())
+			}
+			assertErrorCode(t, response, "INVALID_REQUEST")
+		})
+	}
+}
+
+func TestCreateInstanceStillRejectsRawContainerSecuritySettings(t *testing.T) {
+	body := strings.Replace(
+		legacyMultiWireRequestJSON(),
+		`"expose":true`,
+		`"expose":true,"security_context":{"privileged":true}`,
+		1,
+	)
+	runtime := &recordingRuntimeUseCase{}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+
+	NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest || runtime.createCalls != 0 {
+		t.Fatalf("status = %d; calls = %d; body = %s", response.Code, runtime.createCalls, response.Body.String())
+	}
+	assertErrorCode(t, response, "INVALID_REQUEST")
+}
+
+func TestCreateInstanceRejectsCallerControlledRuntimeGroup(t *testing.T) {
+	body := strings.Replace(legacyMultiWireRequestJSON(), `"expose":true`, `"expose":true,"run_as_group":0`, 1)
+	runtime := &recordingRuntimeUseCase{}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+
+	NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest || runtime.createCalls != 0 {
+		t.Fatalf("status = %d; calls = %d; body = %s", response.Code, runtime.createCalls, response.Body.String())
+	}
+	assertErrorCode(t, response, "INVALID_REQUEST")
+}
+
+func TestCreateInstanceRejectsDuplicateJSONKeysAtEveryObjectLevel(t *testing.T) {
+	legacySingle := legacyWireRequestJSON()
+	legacyMulti := legacyMultiWireRequestJSON()
+	testCases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "exact duplicate parent",
+			body: strings.Replace(legacySingle, `"workload":{`, `"workload":null,"workload":{`, 1),
+		},
+		{
+			name: "case variant duplicate parent",
+			body: strings.Replace(legacySingle, `"workload":{`, `"WORKLOAD":null,"workload":{`, 1),
+		},
+		{
+			name: "duplicate policy child",
+			body: strings.Replace(
+				validCreateRequestJSON(),
+				`"isolation_ref":{"name":"STANDARD","version":"v1"}`,
+				`"isolation_ref":{"name":"STANDARD","name":"STANDARD","version":"v1"}`,
+				1,
+			),
+		},
+		{
+			name: "duplicate container field",
+			body: strings.Replace(legacyMulti, `"ports":[8080]`, `"ports":[8080],"ports":[8080]`, 1),
+		},
+		{
+			name: "case variant duplicate resource field",
+			body: strings.Replace(legacySingle, `"memory_mib":512`, `"memory_mib":512,"MEMORY_MIB":512`, 1),
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			runtime := &recordingRuntimeUseCase{}
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(testCase.body))
+			request.Header.Set("Content-Type", "application/json")
+
+			NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+
+			if response.Code != http.StatusBadRequest || runtime.createCalls != 0 {
+				t.Fatalf("status = %d; calls = %d; body = %s", response.Code, runtime.createCalls, response.Body.String())
+			}
+			assertErrorCode(t, response, "INVALID_REQUEST")
+		})
 	}
 }
 
@@ -184,6 +406,20 @@ func TestCreateInstanceMapsQueueFailureWithoutLeakingStoreDetails(t *testing.T) 
 	assertPublicErrorMessage(t, response, "CREATE_QUEUE_FAILED", "private operation store detail")
 }
 
+func TestCreateRejectsIsolationPolicy(t *testing.T) {
+	runtime := &recordingRuntimeUseCase{createErr: isolation.ErrPolicyRejected}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(validCreateRequestJSON()))
+	request.Header.Set("Content-Type", "application/json")
+
+	NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusUnprocessableEntity, response.Body.String())
+	}
+	assertErrorCode(t, response, "ISOLATION_POLICY_REJECTED")
+}
+
 func TestCreateInstanceRequiresJSONContentType(t *testing.T) {
 	useCase := &recordingCreateUseCase{}
 	runtime := &recordingRuntimeUseCase{}
@@ -207,6 +443,36 @@ type recordingCreateUseCase struct {
 	err     error
 	command provisioner.CreateWorkloadCommand
 	calls   int
+}
+
+func legacyWireRequestJSON() string {
+	return `{
+		"request_id":"req-legacy",
+		"instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001",
+		"team_id":1,
+		"target":{"runtime_type":"KUBERNETES","target_id":"cluster-main"},
+		"workload":{
+			"image":"registry.msgctf.local/challenges/web-01@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"container_port":8080,
+			"resource_limits":{"cpu_millicores":500,"memory_mib":512,"ephemeral_storage_mib":1024}
+		}
+	}`
+}
+
+func legacyMultiWireRequestJSON() string {
+	return `{
+		"request_id":"req-legacy-multi",
+		"instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001",
+		"team_id":18,
+		"target":{"runtime_type":"KUBERNETES","target_id":"aws-dev"},
+		"workload":{
+			"containers":[
+				{"name":"web","image":"web:latest","ports":[8080],"expose":true},
+				{"name":"api","image":"api:latest","ports":[8080],"expose":false}
+			],
+			"resource_limits":{"cpu_millicores":501,"memory_mib":513,"ephemeral_storage_mib":1025}
+		}
+	}`
 }
 
 func (useCase *recordingCreateUseCase) CreateWorkload(_ context.Context, command provisioner.CreateWorkloadCommand) (provisioner.CreateWorkloadResult, error) {

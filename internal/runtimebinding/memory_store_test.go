@@ -5,9 +5,11 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
 )
 
-func TestMemoryStoreSavesAndReturnsIndependentBinding(t *testing.T) {
+func TestBindingStoreSavesAndReturnsIndependentAppliedPolicy(t *testing.T) {
 	store := NewMemoryStore()
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	want := validBinding(now)
@@ -16,14 +18,29 @@ func TestMemoryStoreSavesAndReturnsIndependentBinding(t *testing.T) {
 	if err != nil || !created {
 		t.Fatalf("SaveCreated() = (%#v, %t, %v), want created binding", saved, created, err)
 	}
-	saved.TargetID = "mutated"
+	want.ContainerRequirements[0].Ports[0] = 9090
+	want.ContainerRequirements[0].WritablePaths[0].Path = "/mutated-input"
+	want.InternalConnections[0].Port = 9090
+	saved.ContainerRequirements[0].Ports[0] = 7070
+	saved.ContainerRequirements[0].WritablePaths[0].Path = "/mutated-result"
+	saved.InternalConnections[0].Port = 7070
 
 	got, err := store.Get(want.InstanceID)
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
-	if got != want {
-		t.Fatalf("Get() = %#v, want %#v", got, want)
+	if got.ContainerRequirements[0].Ports[0] != 8080 ||
+		got.ContainerRequirements[0].WritablePaths[0].Path != "/tmp" ||
+		got.InternalConnections[0].Port != 8080 {
+		t.Fatalf("Get() returned aliased applied policy = %#v", got)
+	}
+	got.ContainerRequirements[0].Ports[0] = 6060
+	gotAgain, err := store.Get(want.InstanceID)
+	if err != nil {
+		t.Fatalf("second Get() error = %v", err)
+	}
+	if gotAgain.ContainerRequirements[0].Ports[0] != 8080 {
+		t.Fatalf("second Get() returned aliased applied policy = %#v", gotAgain)
 	}
 }
 
@@ -38,8 +55,29 @@ func TestMemoryStoreAcceptsIdenticalCreateAsIdempotent(t *testing.T) {
 	if err != nil || created {
 		t.Fatalf("second SaveCreated() = (%#v, %t, %v), want existing binding", got, created, err)
 	}
-	if got != binding {
+	if !reflect.DeepEqual(got, binding) {
 		t.Fatalf("second SaveCreated() = %#v, want %#v", got, binding)
+	}
+}
+
+func TestBindingStoreRejectsDifferentAppliedPolicyForSameInstance(t *testing.T) {
+	store := NewMemoryStore()
+	first := validBinding(time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC))
+	if _, _, err := store.SaveCreated(first); err != nil {
+		t.Fatalf("first SaveCreated() error = %v", err)
+	}
+	conflict := copyBinding(first)
+	conflict.ContainerRequirements[0].RunAsUser++
+
+	if _, _, err := store.SaveCreated(conflict); !errors.Is(err, ErrConflict) {
+		t.Fatalf("SaveCreated(conflict) error = %v, want ErrConflict", err)
+	}
+	got, err := store.Get(first.InstanceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, first) {
+		t.Fatalf("stored binding changed after conflict: %#v", got)
 	}
 }
 
@@ -51,6 +89,30 @@ func TestMemoryStoreRejectsDifferentTargetForSameInstance(t *testing.T) {
 	}
 	conflict := first
 	conflict.TargetID = "gcp-dev"
+
+	if _, _, err := store.SaveCreated(conflict); !errors.Is(err, ErrConflict) {
+		t.Fatalf("SaveCreated(conflict) error = %v, want ErrConflict", err)
+	}
+}
+
+func TestMemoryStoreRejectsCreatedBindingWithoutNamespaceUID(t *testing.T) {
+	store := NewMemoryStore()
+	binding := validBinding(time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC))
+	binding.NamespaceUID = ""
+
+	if _, _, err := store.SaveCreated(binding); !errors.Is(err, ErrInvalidBinding) {
+		t.Fatalf("SaveCreated() error = %v, want ErrInvalidBinding", err)
+	}
+}
+
+func TestMemoryStoreRejectsDifferentNamespaceUIDForSameInstance(t *testing.T) {
+	store := NewMemoryStore()
+	first := validBinding(time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC))
+	if _, _, err := store.SaveCreated(first); err != nil {
+		t.Fatalf("first SaveCreated() error = %v", err)
+	}
+	conflict := first
+	conflict.NamespaceUID = "replacement-namespace-uid"
 
 	if _, _, err := store.SaveCreated(conflict); !errors.Is(err, ErrConflict) {
 		t.Fatalf("SaveCreated(conflict) error = %v, want ErrConflict", err)
@@ -136,9 +198,25 @@ func validBinding(now time.Time) Binding {
 		TeamID:            18,
 		TargetID:          "aws-dev",
 		Namespace:         "ctf-018f3f1e21b87a91a30b63b3400fd001",
+		NamespaceUID:      "namespace-uid-01",
 		RuntimeWorkloadID: "aws-dev/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge",
-		State:             StateCreated,
-		CreatedAt:         now,
-		UpdatedAt:         now,
+		ChallengeID:       "web-chall2",
+		ChallengeVersion:  "2026.08.1",
+		IsolationProfile:  "STANDARD@v1",
+		ResourceProfile:   "SMALL_MULTI@v1",
+		ContainerRequirements: []isolation.ContainerRequirement{
+			{Name: "web", Ports: []int{8080}, RunAsUser: 101, WritablePaths: []isolation.WritablePath{{Path: "/tmp", SizeMiB: 64}}},
+			{Name: "api", Ports: []int{8080}, RunAsUser: 10001},
+		},
+		InternalConnections: []isolation.InternalConnection{{
+			SourceContainer: "web", DestinationContainer: "api", Protocol: isolation.ProtocolTCP, Port: 8080,
+		}},
+		OutboundMode: isolation.OutboundNone,
+		ResourceLimits: isolation.ResourceLimits{
+			CPUMillicores: 200, MemoryMiB: 256, EphemeralStorageMiB: 256,
+		},
+		State:     StateCreated,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 }

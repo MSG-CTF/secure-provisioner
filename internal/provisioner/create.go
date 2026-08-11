@@ -3,6 +3,8 @@ package provisioner
 import (
 	"context"
 	"errors"
+
+	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
 )
 
 type RuntimeType string
@@ -17,6 +19,11 @@ type ResourceLimits struct {
 	EphemeralStorageMiB int
 }
 
+type ChallengeRef struct {
+	ChallengeID string
+	Version     string
+}
+
 type WorkloadContainer struct {
 	Name   string
 	Image  string
@@ -28,14 +35,18 @@ type CreateWorkloadCommand struct {
 	RequestID      string
 	InstanceID     string
 	TeamID         int64
+	ChallengeRef   ChallengeRef
 	RuntimeType    RuntimeType
 	TargetID       string
 	Containers     []WorkloadContainer
 	ResourceLimits ResourceLimits
+	PolicyRequest  isolation.Request
+	Policy         isolation.ResolvedPolicy
 }
 
 type CreateWorkloadResult struct {
 	RuntimeWorkloadID string
+	NamespaceUID      string
 	ServiceURL        string
 	Endpoints         []WorkloadEndpoint
 }

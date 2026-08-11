@@ -3,7 +3,6 @@ package k3s
 import (
 	"context"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -97,10 +96,8 @@ func (r *StatusReader) Get(ctx context.Context, binding runtimebinding.Binding) 
 	if err != nil {
 		return RuntimeStatus{}, newRuntimeError("TARGET_TEMPORARILY_UNAVAILABLE", true, err)
 	}
-	if namespace.Labels["msgctf.io/instance-id"] != binding.InstanceID ||
-		namespace.Labels["msgctf.io/team-id"] != strconv.FormatInt(binding.TeamID, 10) ||
-		namespace.Labels["app.kubernetes.io/managed-by"] != "secure-provisioner" {
-		return RuntimeStatus{}, newRuntimeError("RUNTIME_OWNERSHIP_MISMATCH", false, nil)
+	if identityErr := namespaceBindingError(namespace, binding); identityErr != nil {
+		return RuntimeStatus{}, identityErr
 	}
 
 	selector := labels.Set{

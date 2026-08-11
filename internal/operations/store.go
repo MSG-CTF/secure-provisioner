@@ -8,11 +8,12 @@ import (
 )
 
 var (
-	ErrOperationNotFound      = errors.New("operation not found")
-	ErrIdempotencyConflict    = errors.New("idempotency conflict")
-	ErrOperationIDConflict    = errors.New("operation ID conflict")
-	ErrInvalidTransition      = errors.New("invalid operation transition")
-	ErrInvalidOperationResult = errors.New("invalid operation result")
+	ErrOperationNotFound        = errors.New("operation not found")
+	ErrIdempotencyConflict      = errors.New("idempotency conflict")
+	ErrOperationIDConflict      = errors.New("operation ID conflict")
+	ErrInvalidTransition        = errors.New("invalid operation transition")
+	ErrInvalidOperationResult   = errors.New("invalid operation result")
+	ErrCreateCheckpointConflict = errors.New("create checkpoint conflict")
 )
 
 type Store interface {
@@ -22,6 +23,7 @@ type Store interface {
 	Get(string) (Operation, error)
 	GetByRequestID(string) (Operation, error)
 	MarkRunning(string) (Operation, error)
+	CheckpointCreateResult(string, provisioner.CreateWorkloadResult) (Operation, error)
 	MarkRetrying(string, string) (Operation, error)
 	Requeue(string) error
 	MarkSucceeded(string, OperationResult) (Operation, error)

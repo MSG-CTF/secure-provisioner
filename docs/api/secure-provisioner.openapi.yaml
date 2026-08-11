@@ -32,6 +32,15 @@ paths:
                   request_id: runtime-create-018f3f1e
                   instance_id: 018f3f1e-21b8-7a91-a30b-63b3400fd001
                   team_id: 18
+                  challenge_ref:
+                    challenge_id: web-chall2
+                    version: 2026.08.1
+                  isolation_ref:
+                    name: STANDARD
+                    version: v1
+                  resource_profile_ref:
+                    name: SMALL_MULTI
+                    version: v1
                   target:
                     runtime_type: KUBERNETES
                     target_id: aws-k3s-001
@@ -41,14 +50,84 @@ paths:
                         image: ghcr.io/msg-ctf/challenges/oob-test/web:latest
                         ports: [8080]
                         expose: true
-                      - name: internal
+                        run_as_user: 101
+                        writable_paths:
+                          - path: /tmp
+                            size_mib: 64
+                      - name: api
                         image: ghcr.io/msg-ctf/challenges/oob-test/web:latest
                         ports: [8080]
                         expose: false
+                        run_as_user: 10001
+                    internal_connections:
+                      - source_container: web
+                        destination_container: api
+                        protocol: TCP
+                        port: 8080
+                    outbound_mode: NONE
+                    resource_limits:
+                      cpu_millicores: 200
+                      memory_mib: 256
+                      ephemeral_storage_mib: 256
+              LegacyMultiContainer:
+                summary: Legacy migration request with policy fields omitted
+                value:
+                  request_id: runtime-create-legacy-018f3f1e
+                  instance_id: 018f3f1e-21b8-7a91-a30b-63b3400fd002
+                  team_id: 18
+                  target:
+                    runtime_type: KUBERNETES
+                    target_id: aws-k3s-001
+                  workload:
+                    containers:
+                      - name: web
+                        image: ghcr.io/msg-ctf/challenges/oob-test/web:latest
+                        ports: [8080]
+                        expose: true
+                      - name: api
+                        image: ghcr.io/msg-ctf/challenges/oob-test/web:latest
+                        ports: [8080]
                     resource_limits:
                       cpu_millicores: 500
                       memory_mib: 512
                       ephemeral_storage_mib: 1024
+              ExplicitNullableRequirements:
+                summary: Explicit policy request using decoder-compatible null values
+                value:
+                  request_id: runtime-create-nullable-018f3f1e
+                  instance_id: 018f3f1e-21b8-7a91-a30b-63b3400fd003
+                  team_id: 18
+                  challenge_ref:
+                    challenge_id: web-chall2
+                    version: 2026.08.1
+                  isolation_ref:
+                    name: STANDARD
+                    version: v1
+                  resource_profile_ref:
+                    name: SMALL_MULTI
+                    version: v1
+                  target:
+                    runtime_type: KUBERNETES
+                    target_id: aws-k3s-001
+                  workload:
+                    containers:
+                      - name: web
+                        image: ghcr.io/msg-ctf/challenges/oob-test/web:latest
+                        ports: [8080]
+                        expose: true
+                        run_as_user: 101
+                        writable_paths: null
+                      - name: api
+                        image: ghcr.io/msg-ctf/challenges/oob-test/web:latest
+                        ports: [8080]
+                        expose: null
+                        run_as_user: 10001
+                    internal_connections: null
+                    outbound_mode: NONE
+                    resource_limits:
+                      cpu_millicores: 200
+                      memory_mib: 256
+                      ephemeral_storage_mib: 256
       responses:
         "202":
           $ref: "#/components/responses/OperationAccepted"
@@ -88,6 +167,18 @@ paths:
                     error:
                       code: UNSUPPORTED_MEDIA_TYPE
                       message: Content-Type must be application/json
+        "422":
+          description: The syntactically valid isolation request was rejected by the trusted policy resolver
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                IsolationPolicyRejected:
+                  value:
+                    error:
+                      code: ISOLATION_POLICY_REJECTED
+                      message: isolation policy was rejected
         "502":
           description: Create operation could not be queued
           content:
@@ -304,12 +395,17 @@ paths:
                       code: INSTANCE_NOT_FOUND
                       message: instance runtime binding was not found
         "409":
-          description: Runtime ownership does not match the stored binding
+          description: Runtime identity or ownership does not match the stored binding
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               examples:
+                RuntimeIdentityMismatch:
+                  value:
+                    error:
+                      code: RUNTIME_IDENTITY_MISMATCH
+                      message: runtime identity does not match the stored binding
                 RuntimeOwnershipMismatch:
                   value:
                     error:
@@ -465,8 +561,25 @@ components:
           format: int64
           minimum: 0
     ResourceLimits:
-      allOf:
-        - $ref: "#/components/schemas/ResourceValues"
+      type: object
+      additionalProperties: false
+      required:
+        - cpu_millicores
+        - memory_mib
+        - ephemeral_storage_mib
+      properties:
+        cpu_millicores:
+          type: integer
+          format: int64
+          minimum: 1
+        memory_mib:
+          type: integer
+          format: int64
+          minimum: 1
+        ephemeral_storage_mib:
+          type: integer
+          format: int64
+          minimum: 1
     Workload:
       type: object
       additionalProperties: false
@@ -514,10 +627,27 @@ components:
         containers:
           type: array
           minItems: 1
+          minContains: 1
+          contains:
+            type: object
+            required:
+              - expose
+            properties:
+              expose:
+                const: true
           items:
             $ref: "#/components/schemas/RuntimeContainer"
         resource_limits:
           $ref: "#/components/schemas/ResourceLimits"
+        internal_connections:
+          type:
+            - array
+            - "null"
+          default: []
+          items:
+            $ref: "#/components/schemas/InternalConnection"
+        outbound_mode:
+          $ref: "#/components/schemas/OutboundMode"
     RuntimeContainer:
       type: object
       additionalProperties: false
@@ -525,7 +655,227 @@ components:
         - name
         - image
         - ports
-        - expose
+      properties:
+        name:
+          type: string
+          pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+          maxLength: 63
+        image:
+          type: string
+          minLength: 1
+        ports:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: integer
+            minimum: 1
+            maximum: 65535
+        run_as_user:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Approved non-root numeric UID; this is not a Kubernetes securityContext.
+        writable_paths:
+          type:
+            - array
+            - "null"
+          default: []
+          items:
+            $ref: "#/components/schemas/WritablePath"
+        expose:
+          type:
+            - boolean
+            - "null"
+          description: 참가자 외부 접속점(NodePort 또는 Ingress)에 공개할지 여부
+    ChallengeRef:
+      type: object
+      additionalProperties: false
+      required:
+        - challenge_id
+        - version
+      properties:
+        challenge_id:
+          type: string
+          minLength: 1
+        version:
+          type: string
+          minLength: 1
+    ProfileRef:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - version
+      properties:
+        name:
+          type: string
+          minLength: 1
+        version:
+          type: string
+          minLength: 1
+    WritablePath:
+      type: object
+      additionalProperties: false
+      required:
+        - path
+        - size_mib
+      properties:
+        path:
+          type: string
+          minLength: 2
+          pattern: "^/"
+          description: Clean absolute container path. Reserved host and service-account paths are rejected.
+        size_mib:
+          type: integer
+          format: int64
+          minimum: 1
+    InternalConnection:
+      type: object
+      additionalProperties: false
+      required:
+        - source_container
+        - destination_container
+        - protocol
+        - port
+      properties:
+        source_container:
+          type: string
+          pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+          maxLength: 63
+        destination_container:
+          type: string
+          pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+          maxLength: 63
+        protocol:
+          type: string
+          enum:
+            - TCP
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+    OutboundMode:
+      type: string
+      enum:
+        - NONE
+        - PUBLIC_INTERNET
+      description: The MVP resolver accepts NONE; PUBLIC_INTERNET is reserved and currently returns 422.
+    LegacyWorkload:
+      type: object
+      additionalProperties: false
+      required:
+        - resource_limits
+      oneOf:
+        - required:
+            - image
+            - container_port
+          not:
+            required:
+              - containers
+            properties:
+              containers: {}
+        - required:
+            - containers
+          not:
+            anyOf:
+              - required:
+                  - image
+                properties:
+                  image: {}
+              - required:
+                  - container_port
+                properties:
+                  container_port: {}
+      properties:
+        image:
+          type: string
+          minLength: 1
+        container_port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        containers:
+          type: array
+          minItems: 1
+          minContains: 1
+          contains:
+            type: object
+            required:
+              - expose
+            properties:
+              expose:
+                const: true
+          items:
+            $ref: "#/components/schemas/LegacyRuntimeContainer"
+        resource_limits:
+          $ref: "#/components/schemas/ResourceLimits"
+    PolicyWorkload:
+      type: object
+      additionalProperties: false
+      required:
+        - outbound_mode
+        - resource_limits
+      oneOf:
+        - required:
+            - image
+            - container_port
+          not:
+            required:
+              - containers
+            properties:
+              containers: {}
+        - required:
+            - containers
+          not:
+            anyOf:
+              - required:
+                  - image
+                properties:
+                  image: {}
+              - required:
+                  - container_port
+                properties:
+                  container_port: {}
+      properties:
+        image:
+          type: string
+          minLength: 1
+        container_port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        containers:
+          type: array
+          minItems: 1
+          minContains: 1
+          contains:
+            type: object
+            required:
+              - expose
+            properties:
+              expose:
+                const: true
+          items:
+            $ref: "#/components/schemas/PolicyRuntimeContainer"
+        internal_connections:
+          type:
+            - array
+            - "null"
+          default: []
+          items:
+            $ref: "#/components/schemas/InternalConnection"
+        outbound_mode:
+          $ref: "#/components/schemas/OutboundMode"
+        resource_limits:
+          $ref: "#/components/schemas/ResourceLimits"
+    LegacyRuntimeContainer:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - image
+        - ports
       properties:
         name:
           type: string
@@ -543,8 +893,50 @@ components:
             minimum: 1
             maximum: 65535
         expose:
-          type: boolean
+          type:
+            - boolean
+            - "null"
           description: 참가자 외부 접속점(NodePort 또는 Ingress)에 공개할지 여부
+    PolicyRuntimeContainer:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - image
+        - ports
+        - run_as_user
+      properties:
+        name:
+          type: string
+          pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+          maxLength: 63
+        image:
+          type: string
+          minLength: 1
+        ports:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: integer
+            minimum: 1
+            maximum: 65535
+        expose:
+          type:
+            - boolean
+            - "null"
+          description: 참가자 외부 접속점(NodePort 또는 Ingress)에 공개할지 여부
+        run_as_user:
+          type: integer
+          format: int64
+          minimum: 1
+        writable_paths:
+          type:
+            - array
+            - "null"
+          default: []
+          items:
+            $ref: "#/components/schemas/WritablePath"
     CreateInstanceRequest:
       type: object
       additionalProperties: false
@@ -554,6 +946,35 @@ components:
         - team_id
         - target
         - workload
+      oneOf:
+        - title: Legacy migration request
+          description: Omits every policy migration field and receives the documented safe defaults.
+          not:
+            anyOf:
+              - required:
+                  - challenge_ref
+                properties:
+                  challenge_ref: {}
+              - required:
+                  - isolation_ref
+                properties:
+                  isolation_ref: {}
+              - required:
+                  - resource_profile_ref
+                properties:
+                  resource_profile_ref: {}
+          properties:
+            workload:
+              $ref: "#/components/schemas/LegacyWorkload"
+        - title: Explicit isolation policy request
+          description: Policy migration fields are an all-or-none set.
+          required:
+            - challenge_ref
+            - isolation_ref
+            - resource_profile_ref
+          properties:
+            workload:
+              $ref: "#/components/schemas/PolicyWorkload"
       properties:
         request_id:
           type: string
@@ -565,6 +986,12 @@ components:
           type: integer
           format: int64
           minimum: 1
+        challenge_ref:
+          $ref: "#/components/schemas/ChallengeRef"
+        isolation_ref:
+          $ref: "#/components/schemas/ProfileRef"
+        resource_profile_ref:
+          $ref: "#/components/schemas/ProfileRef"
         target:
           $ref: "#/components/schemas/RuntimeTarget"
         workload:
