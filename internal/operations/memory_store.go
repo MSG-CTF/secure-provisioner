@@ -120,6 +120,30 @@ func (s *MemoryStore) MarkRunning(id string) (Operation, error) {
 	return copyOperation(*operation), nil
 }
 
+func (s *MemoryStore) CheckpointCreateResult(id string, result provisioner.CreateWorkloadResult) (Operation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	operation, err := s.find(id)
+	if err != nil {
+		return Operation{}, err
+	}
+	if operation.Status != OperationStatusRunning || operation.Type != OperationTypeCreate || operation.CreateCommand == nil {
+		return Operation{}, ErrInvalidTransition
+	}
+	if !validCreateWorkloadResult(result) {
+		return Operation{}, ErrInvalidOperationResult
+	}
+	if operation.CreateCheckpoint != nil {
+		if !sameCreateWorkloadResult(*operation.CreateCheckpoint, result) {
+			return Operation{}, ErrCreateCheckpointConflict
+		}
+		return copyOperation(*operation), nil
+	}
+	checkpoint := copyCreateWorkloadResult(result)
+	operation.CreateCheckpoint = &checkpoint
+	return copyOperation(*operation), nil
+}
+
 func (s *MemoryStore) MarkRetrying(id, errorCode string) (Operation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -174,6 +198,17 @@ func (s *MemoryStore) MarkSucceeded(id string, result OperationResult) (Operatio
 	if !operationResultMatchesType(operation.Type, result) {
 		return Operation{}, ErrInvalidOperationResult
 	}
+	if operation.Type == OperationTypeCreate {
+		if operation.CreateCheckpoint == nil {
+			return Operation{}, ErrInvalidTransition
+		}
+		if !sameCreateWorkloadResult(*operation.CreateCheckpoint, *result.Create) {
+			return Operation{}, ErrCreateCheckpointConflict
+		}
+		checkpoint := copyCreateWorkloadResult(*operation.CreateCheckpoint)
+		result.Create = &checkpoint
+		operation.CreateCheckpoint = nil
+	}
 	operation.Status = OperationStatusSucceeded
 	operation.Result = copyOperationResult(result)
 	return copyOperation(*operation), nil
@@ -196,7 +231,7 @@ func (s *MemoryStore) MarkFailed(id, errorCode string) (Operation, error) {
 
 func (s *MemoryStore) enqueueCreate(command provisioner.CreateWorkloadCommand, maxAttempts int) (Operation, bool, error) {
 	if existing, ok := s.operationForRequest(command.RequestID); ok {
-		if existing.Type == OperationTypeCreate && existing.CreateCommand != nil && *existing.CreateCommand == command {
+		if existing.Type == OperationTypeCreate && existing.CreateCommand != nil && sameCreateCommand(*existing.CreateCommand, command) {
 			return copyOperation(*existing), false, nil
 		}
 		return Operation{}, false, ErrIdempotencyConflict
@@ -319,12 +354,16 @@ func randomID() (string, error) {
 func copyOperation(operation Operation) Operation {
 	copy := operation
 	if operation.CreateCommand != nil {
-		command := *operation.CreateCommand
+		command := copyCreateCommand(*operation.CreateCommand)
 		copy.CreateCommand = &command
 	}
 	if operation.DeleteCommand != nil {
 		command := *operation.DeleteCommand
 		copy.DeleteCommand = &command
+	}
+	if operation.CreateCheckpoint != nil {
+		checkpoint := copyCreateWorkloadResult(*operation.CreateCheckpoint)
+		copy.CreateCheckpoint = &checkpoint
 	}
 	copy.Result = copyOperationResult(operation.Result)
 	return copy
@@ -333,7 +372,7 @@ func copyOperation(operation Operation) Operation {
 func copyOperationResult(result OperationResult) OperationResult {
 	copy := result
 	if result.Create != nil {
-		create := *result.Create
+		create := copyCreateWorkloadResult(*result.Create)
 		copy.Create = &create
 	}
 	return copy

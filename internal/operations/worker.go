@@ -106,12 +106,16 @@ func (w *Worker) process(ctx context.Context, operation Operation) error {
 	if err != nil {
 		return err
 	}
-	result, err := w.executor.Execute(ctx, running)
+	result, err := w.execute(ctx, running)
 	if err == nil {
 		_, err = w.store.MarkSucceeded(running.ID, result)
 		if errors.Is(err, ErrInvalidOperationResult) {
 			_, err = w.store.MarkFailed(running.ID, invalidOperationResultErrorCode)
 		}
+		return err
+	}
+	if errors.Is(err, ErrInvalidOperationResult) {
+		_, err = w.store.MarkFailed(running.ID, invalidOperationResultErrorCode)
 		return err
 	}
 	if ctx.Err() != nil && isContextError(err) {
@@ -132,6 +136,42 @@ func (w *Worker) process(ctx context.Context, operation Operation) error {
 		return err
 	}
 	return w.store.Requeue(running.ID)
+}
+
+func (w *Worker) execute(ctx context.Context, running Operation) (OperationResult, error) {
+	if running.Type != OperationTypeCreate {
+		return w.executor.Execute(ctx, running)
+	}
+
+	checkpointed := running
+	if checkpointed.CreateCheckpoint == nil {
+		result, err := w.executor.Execute(ctx, running)
+		if err != nil {
+			return OperationResult{}, err
+		}
+		if !operationResultMatchesType(OperationTypeCreate, result) {
+			return OperationResult{}, ErrInvalidOperationResult
+		}
+		checkpointed, err = w.store.CheckpointCreateResult(running.ID, *result.Create)
+		if err != nil {
+			return OperationResult{}, err
+		}
+	}
+	if checkpointed.CreateCheckpoint == nil {
+		return OperationResult{}, ErrInvalidOperationResult
+	}
+	createResult := copyCreateWorkloadResult(*checkpointed.CreateCheckpoint)
+	result := OperationResult{Create: &createResult}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	if finalizer, ok := w.executor.(CreateResultFinalizer); ok {
+		finalizerResult := copyCreateWorkloadResult(createResult)
+		if err := finalizer.FinalizeCreate(ctx, checkpointed, finalizerResult); err != nil {
+			return result, err
+		}
+	}
+	return result, nil
 }
 
 func sleepContext(ctx context.Context, duration time.Duration) error {

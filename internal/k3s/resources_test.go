@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -36,24 +37,30 @@ func TestBuildResourceSetCreatesOwnedKubernetesResources(t *testing.T) {
 		"msgctf.io/team-id":            "42",
 	}
 	for resource, labels := range map[string]map[string]string{
-		"namespace":    resources.Namespace.Labels,
+		"namespace": resources.Namespace.Labels,
+		"ingress":   resources.Ingress.Labels,
+	} {
+		assertExactOwnershipLabels(t, resource, labels, wantOwnerLabels)
+	}
+	wantContainerLabels := copyLabels(wantOwnerLabels)
+	wantContainerLabels[containerNameLabel] = resourceName
+	for resource, labels := range map[string]map[string]string{
 		"deployment":   resources.Deployment.Labels,
 		"pod template": resources.Deployment.Spec.Template.Labels,
 		"service":      resources.Service.Labels,
-		"ingress":      resources.Ingress.Labels,
 	} {
-		assertExactOwnershipLabels(t, resource, labels, wantOwnerLabels)
+		assertExactOwnershipLabels(t, resource, labels, wantContainerLabels)
 	}
 	if resources.Deployment.Spec.Replicas == nil || *resources.Deployment.Spec.Replicas != 1 {
 		t.Fatalf("replicas = %v, want explicit 1", resources.Deployment.Spec.Replicas)
 	}
 
 	container := resources.Deployment.Spec.Template.Spec.Containers[0]
-	if container.Image != command.Image {
-		t.Fatalf("image = %q, want %q", container.Image, command.Image)
+	if container.Image != command.Containers[0].Image {
+		t.Fatalf("image = %q, want %q", container.Image, command.Containers[0].Image)
 	}
-	if container.Ports[0].ContainerPort != int32(command.ContainerPort) {
-		t.Fatalf("container port = %d, want %d", container.Ports[0].ContainerPort, command.ContainerPort)
+	if container.Ports[0].ContainerPort != int32(command.Containers[0].Ports[0]) {
+		t.Fatalf("container port = %d, want %d", container.Ports[0].ContainerPort, command.Containers[0].Ports[0])
 	}
 	if resources.Service.Spec.Type != corev1.ServiceTypeClusterIP {
 		t.Fatalf("service type = %s, want ClusterIP", resources.Service.Spec.Type)
@@ -67,7 +74,7 @@ func TestBuildResourceSetCreatesOwnedKubernetesResources(t *testing.T) {
 		}
 	}
 
-	const wantSpecHash = "ea9e8f4af5eb13c9b5197ee513dbcb937f0895df3b93585dbc4a69789ffec320"
+	const wantSpecHash = "0a0f922bc61461aeb235a8777d9170fb3cfb09c3cb8bf29fa169fa315f9c4089"
 	if resources.ExpectedSpecHash != wantSpecHash {
 		t.Fatalf("ExpectedSpecHash = %q, want stable SHA-256", resources.ExpectedSpecHash)
 	}
@@ -79,7 +86,7 @@ func TestBuildResourceSetCreatesOwnedKubernetesResources(t *testing.T) {
 		if got != wantSpecHash {
 			t.Fatalf("%s spec hash = %q, want %q", resource, got, wantSpecHash)
 		}
-		if strings.Contains(got, command.Image) || strings.Contains(got, validCluster("aws-dev").Config.PublicGateway) {
+		if strings.Contains(got, command.Containers[0].Image) || strings.Contains(got, validCluster("aws-dev").Config.PublicGateway) {
 			t.Fatalf("%s spec hash exposes sensitive input", resource)
 		}
 	}
@@ -88,8 +95,8 @@ func TestBuildResourceSetCreatesOwnedKubernetesResources(t *testing.T) {
 	if path.Path != "/instances/"+command.InstanceID {
 		t.Fatalf("path = %q, want instance path", path.Path)
 	}
-	if path.Backend.Service.Name != resourceName || path.Backend.Service.Port.Number != int32(command.ContainerPort) {
-		t.Fatalf("ingress backend = %#v, want challenge:%d", path.Backend.Service, command.ContainerPort)
+	if path.Backend.Service.Name != resourceName || path.Backend.Service.Port.Number != int32(command.Containers[0].Ports[0]) {
+		t.Fatalf("ingress backend = %#v, want challenge:%d", path.Backend.Service, command.Containers[0].Ports[0])
 	}
 }
 
@@ -109,7 +116,7 @@ func TestBuildResourceSetSpecHashTracksSpecButNotRequestMetadata(t *testing.T) {
 		t.Fatalf("request metadata changed spec hash: %q != %q", retry.ExpectedSpecHash, first.ExpectedSpecHash)
 	}
 
-	command.Image = "registry.example.invalid/challenges/web@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	command.Containers[0].Image = "registry.example.invalid/challenges/web@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	revision, err := BuildResourceSet(validCluster("aws-dev"), command)
 	if err != nil {
 		t.Fatal(err)
@@ -153,19 +160,168 @@ func TestBuildResourceSetSetsCPUAndMemoryAndEphemeralStorageRequestsAndLimits(t 
 	}
 }
 
+func TestBuildResourceSetDistributesAggregateLimitsExactly(t *testing.T) {
+	command := validMultiCreateCommand("aws-dev")
+	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resources.Deployments) != 2 {
+		t.Fatalf("deployments = %d, want 2", len(resources.Deployments))
+	}
+
+	want := map[string]provisioner.ResourceLimits{
+		"web": {
+			CPUMillicores:       251,
+			MemoryMiB:           257,
+			EphemeralStorageMiB: 513,
+		},
+		"internal": {
+			CPUMillicores:       250,
+			MemoryMiB:           256,
+			EphemeralStorageMiB: 512,
+		},
+	}
+	gotTotal := provisioner.ResourceLimits{}
+	for _, deployment := range resources.Deployments {
+		container := deployment.Spec.Template.Spec.Containers[0]
+		expected, found := want[container.Name]
+		if !found {
+			t.Fatalf("unexpected container %q", container.Name)
+		}
+		got := provisioner.ResourceLimits{
+			CPUMillicores:       int(container.Resources.Limits.Cpu().MilliValue()),
+			MemoryMiB:           int(container.Resources.Limits.Memory().Value() / (1024 * 1024)),
+			EphemeralStorageMiB: int(container.Resources.Limits.StorageEphemeral().Value() / (1024 * 1024)),
+		}
+		if got != expected {
+			t.Fatalf("%s limits = %#v, want %#v", container.Name, got, expected)
+		}
+		gotTotal.CPUMillicores += got.CPUMillicores
+		gotTotal.MemoryMiB += got.MemoryMiB
+		gotTotal.EphemeralStorageMiB += got.EphemeralStorageMiB
+	}
+	if gotTotal != command.ResourceLimits {
+		t.Fatalf("distributed total = %#v, want %#v", gotTotal, command.ResourceLimits)
+	}
+}
+
+func TestBuildResourceSetCreatesMultipleContainerResources(t *testing.T) {
+	command := validMultiCreateCommand("aws-dev")
+	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resources.Deployments) != 2 || len(resources.Services) != 2 {
+		t.Fatalf("resources = %d deployments, %d services", len(resources.Deployments), len(resources.Services))
+	}
+	if resources.Deployments[0].Name != "web" || resources.Deployments[1].Name != "internal" {
+		t.Fatalf("deployment names = %q, %q", resources.Deployments[0].Name, resources.Deployments[1].Name)
+	}
+	if resources.Services[0].Name != "web" || resources.Services[1].Name != "internal" {
+		t.Fatalf("service names = %q, %q", resources.Services[0].Name, resources.Services[1].Name)
+	}
+	if len(resources.Services[1].Spec.Ports) != 2 ||
+		resources.Services[1].Spec.Ports[0].Port != 8080 ||
+		resources.Services[1].Spec.Ports[1].Port != 9090 {
+		t.Fatalf("internal service ports = %#v", resources.Services[1].Spec.Ports)
+	}
+	paths := resources.Ingress.Spec.Rules[0].HTTP.Paths
+	if len(paths) != 1 {
+		t.Fatalf("ingress paths = %#v, want one exposed port", paths)
+	}
+	if paths[0].Path != "/instances/"+command.InstanceID ||
+		paths[0].Backend.Service.Name != "web" ||
+		paths[0].Backend.Service.Port.Number != 8080 {
+		t.Fatalf("public path = %#v", paths[0])
+	}
+	if len(resources.Endpoints) != 1 ||
+		resources.Endpoints[0].ContainerName != "web" ||
+		resources.Endpoints[0].Port != 8080 ||
+		resources.ServiceURL != resources.Endpoints[0].ServiceURL {
+		t.Fatalf("endpoints = %#v, service URL = %q", resources.Endpoints, resources.ServiceURL)
+	}
+}
+
+func TestBuildResourceSetUsesNodePortOnlyForExposedContainers(t *testing.T) {
+	command := validMultiCreateCommand("aws-dev")
+	command.Containers[0].Ports = []int{8080, 8443}
+	command.Policy = resolvedPolicyForCommand(command, "SMALL_MULTI")
+	cluster := validCluster("aws-dev")
+	cluster.Config.ExposureMode = ExposureModeNodePort
+	cluster.Config.PublicGateway = "http://203.0.113.10"
+
+	resources, err := BuildResourceSet(cluster, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resources.Ingress != nil {
+		t.Fatalf("Ingress = %#v, want nil in NodePort mode", resources.Ingress)
+	}
+	if resources.Services[0].Name != "web" || resources.Services[0].Spec.Type != corev1.ServiceTypeNodePort {
+		t.Fatalf("public service = %#v, want web NodePort", resources.Services[0])
+	}
+	if resources.Services[1].Name != "internal" || resources.Services[1].Spec.Type != corev1.ServiceTypeClusterIP {
+		t.Fatalf("internal service = %#v, want internal ClusterIP", resources.Services[1])
+	}
+	if got := resources.ResourceQuota.Spec.Hard[corev1.ResourceServicesNodePorts]; got.Cmp(resource.MustParse("2")) != 0 {
+		t.Fatalf("services.nodeports quota = %s, want 2 for the exposed service ports", got.String())
+	}
+	if len(resources.Endpoints) != 0 || resources.ServiceURL != "" {
+		t.Fatalf("unallocated endpoints = %#v, service URL = %q", resources.Endpoints, resources.ServiceURL)
+	}
+}
+
+func TestBuildNodePortEndpointsUsesKubernetesAllocationsInServiceOrder(t *testing.T) {
+	command := validMultiCreateCommand("aws-dev")
+	cluster := validCluster("aws-dev")
+	cluster.Config.ExposureMode = ExposureModeNodePort
+	cluster.Config.PublicGateway = "http://203.0.113.10"
+	resources, err := BuildResourceSet(cluster, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources.Services[0].Spec.Ports[0].NodePort = 31042
+
+	endpoints, err := BuildNodePortEndpoints(cluster.Config.PublicGateway, resources.Services)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []provisioner.WorkloadEndpoint{{ContainerName: "web", Port: 8080, ServiceURL: "http://203.0.113.10:31042"}}
+	if !reflect.DeepEqual(endpoints, want) {
+		t.Fatalf("endpoints = %#v, want %#v", endpoints, want)
+	}
+}
+
+func TestBuildNodePortEndpointsRejectsMissingAllocation(t *testing.T) {
+	command := validMultiCreateCommand("aws-dev")
+	cluster := validCluster("aws-dev")
+	cluster.Config.ExposureMode = ExposureModeNodePort
+	cluster.Config.PublicGateway = "http://203.0.113.10"
+	resources, err := BuildResourceSet(cluster, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = BuildNodePortEndpoints(cluster.Config.PublicGateway, resources.Services)
+	if runtimeErrorCode(t, err) != "RESOURCE_APPLY_FAILED" {
+		t.Fatalf("code = %q, want RESOURCE_APPLY_FAILED", runtimeErrorCode(t, err))
+	}
+}
+
 func TestBuildResourceSetRejectsInvalidCommandWithoutEmbeddingSensitiveData(t *testing.T) {
 	secretImage := "registry.example.invalid/private/secret-challenge:token-123"
 	for _, mutate := range []func(*provisioner.CreateWorkloadCommand){
 		func(command *provisioner.CreateWorkloadCommand) { command.InstanceID = "not-a-uuid" },
 		func(command *provisioner.CreateWorkloadCommand) { command.TargetID = "other-target" },
-		func(command *provisioner.CreateWorkloadCommand) { command.Image = "" },
-		func(command *provisioner.CreateWorkloadCommand) { command.ContainerPort = 0 },
+		func(command *provisioner.CreateWorkloadCommand) { command.Containers[0].Image = "" },
+		func(command *provisioner.CreateWorkloadCommand) { command.Containers[0].Ports[0] = 0 },
 		func(command *provisioner.CreateWorkloadCommand) { command.ResourceLimits.CPUMillicores = 0 },
 		func(command *provisioner.CreateWorkloadCommand) { command.ResourceLimits.MemoryMiB = 0 },
 		func(command *provisioner.CreateWorkloadCommand) { command.ResourceLimits.EphemeralStorageMiB = 0 },
 	} {
 		command := validCreateCommand("aws-dev")
-		command.Image = secretImage
+		command.Containers[0].Image = secretImage
 		mutate(&command)
 
 		_, err := BuildResourceSet(validCluster("aws-dev"), command)
@@ -220,22 +376,90 @@ func validCluster(targetID string) Cluster {
 		TargetID:      targetID,
 		PublicGateway: "https://gateway.example.invalid",
 		IngressClass:  "nginx",
+		SecurityCapabilities: SecurityCapabilities{
+			NetworkPolicyEnforced:          true,
+			SupplementalGroupsPolicyStrict: true,
+			NetworkPolicyProvider:          "kube-router",
+			DNSNamespace:                   "kube-system",
+			DNSPodSelector:                 map[string]string{"k8s-app": "kube-dns"},
+			IngressNamespace:               "ingress-system",
+			IngressPodSelector:             map[string]string{"app.kubernetes.io/name": "traefik"},
+		},
 	}}
 }
 
 func validCreateCommand(targetID string) provisioner.CreateWorkloadCommand {
-	return provisioner.CreateWorkloadCommand{
-		RequestID:     "req-01",
-		InstanceID:    "018f3f1e-21b8-7a91-a30b-63b3400fd001",
-		TeamID:        42,
-		RuntimeType:   provisioner.RuntimeTypeKubernetes,
-		TargetID:      targetID,
-		Image:         "registry.example.invalid/challenges/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		ContainerPort: 8080,
+	command := provisioner.CreateWorkloadCommand{
+		RequestID:   "req-01",
+		InstanceID:  "018f3f1e-21b8-7a91-a30b-63b3400fd001",
+		TeamID:      42,
+		RuntimeType: provisioner.RuntimeTypeKubernetes,
+		TargetID:    targetID,
+		Containers: []provisioner.WorkloadContainer{{
+			Name:   "challenge",
+			Image:  "registry.example.invalid/challenges/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Ports:  []int{8080},
+			Expose: true,
+		}},
 		ResourceLimits: provisioner.ResourceLimits{
 			CPUMillicores:       500,
 			MemoryMiB:           512,
 			EphemeralStorageMiB: 1024,
+		},
+	}
+	command.Policy = resolvedPolicyForCommand(command, "SMALL_SINGLE")
+	return command
+}
+
+func validMultiCreateCommand(targetID string) provisioner.CreateWorkloadCommand {
+	command := provisioner.CreateWorkloadCommand{
+		RequestID:   "req-multi",
+		InstanceID:  "018f3f1e-21b8-7a91-a30b-63b3400fd001",
+		TeamID:      42,
+		RuntimeType: provisioner.RuntimeTypeKubernetes,
+		TargetID:    targetID,
+		Containers: []provisioner.WorkloadContainer{
+			{Name: "web", Image: "ghcr.io/msg-ctf/challenges/oob-test/web:latest", Ports: []int{8080}, Expose: true},
+			{Name: "internal", Image: "ghcr.io/msg-ctf/challenges/oob-test/web:latest", Ports: []int{8080, 9090}, Expose: false},
+		},
+		ResourceLimits: provisioner.ResourceLimits{
+			CPUMillicores:       501,
+			MemoryMiB:           513,
+			EphemeralStorageMiB: 1025,
+		},
+	}
+	command.Policy = resolvedPolicyForCommand(command, "SMALL_MULTI")
+	return command
+}
+
+func resolvedPolicyForCommand(command provisioner.CreateWorkloadCommand, resourceProfile string) isolation.ResolvedPolicy {
+	containers := make([]isolation.ContainerRequirement, len(command.Containers))
+	for index, container := range command.Containers {
+		containers[index] = isolation.ContainerRequirement{
+			Name:      container.Name,
+			Ports:     append([]int(nil), container.Ports...),
+			RunAsUser: int64(10001 + index),
+		}
+	}
+	return isolation.ResolvedPolicy{
+		ChallengeID:  "challenge-1",
+		IsolationRef: isolation.ProfileRef{Name: "STANDARD", Version: "v1"},
+		ResourceRef:  isolation.ProfileRef{Name: resourceProfile, Version: "v1"},
+		Baseline: isolation.Baseline{
+			AutomountServiceAccountToken: false,
+			RunAsNonRoot:                 true,
+			ReadOnlyRootFilesystem:       true,
+			AllowPrivilegeEscalation:     false,
+			Privileged:                   false,
+			DropAllCapabilities:          true,
+			SeccompRuntimeDefault:        true,
+		},
+		Containers:   containers,
+		OutboundMode: isolation.OutboundNone,
+		ResourceLimits: isolation.ResourceLimits{
+			CPUMillicores:       command.ResourceLimits.CPUMillicores,
+			MemoryMiB:           command.ResourceLimits.MemoryMiB,
+			EphemeralStorageMiB: command.ResourceLimits.EphemeralStorageMiB,
 		},
 	}
 }

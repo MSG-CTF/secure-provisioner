@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -32,7 +33,7 @@ func TestMemoryStoreRejectsIdempotencyConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	command.Image = "different:tag"
+	command.Containers[0].Image = "different:tag"
 	if _, _, err := store.EnqueueCreate(command, 3); !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("got %v", err)
 	}
@@ -208,21 +209,218 @@ func TestMemoryStoreTransitionsAndReturnsCopies(t *testing.T) {
 	if err != nil || running.Attempt != 1 || running.Status != OperationStatusRunning {
 		t.Fatalf("running: %#v %v", running, err)
 	}
-	result := OperationResult{Create: &provisioner.CreateWorkloadResult{RuntimeWorkloadID: "default/inst-1", ServiceURL: "http://service.example"}}
+	result := OperationResult{Create: &provisioner.CreateWorkloadResult{RuntimeWorkloadID: "default/inst-1", NamespaceUID: "namespace-uid-01", ServiceURL: "http://service.example"}}
+	if _, err := store.CheckpointCreateResult(next.ID, *result.Create); err != nil {
+		t.Fatal(err)
+	}
 	succeeded, err := store.MarkSucceeded(next.ID, result)
 	if err != nil || succeeded.Status != OperationStatusSucceeded {
 		t.Fatalf("succeeded: %#v %v", succeeded, err)
 	}
 
 	original.Status = OperationStatusFailed
-	original.CreateCommand.Image = "mutated:tag"
+	original.CreateCommand.Containers[0].Image = "mutated:tag"
 	succeeded.Result.Create.ServiceURL = "http://mutated.example"
 	stored, err := store.Get(next.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.Status != OperationStatusSucceeded || stored.CreateCommand.Image != "nginx:1.27" || stored.Result.Create.ServiceURL != "http://service.example" {
+	if stored.Status != OperationStatusSucceeded ||
+		stored.CreateCommand.Containers[0].Image != "nginx:1.27" ||
+		stored.Result.Create.ServiceURL != "http://service.example" {
 		t.Fatalf("store leaked mutable state: %#v", stored)
+	}
+}
+
+func TestMemoryStoreCopiesCreateContainerSlices(t *testing.T) {
+	store := NewMemoryStore(sequenceIDs("op-1"))
+	command := validCreateCommand("req-1")
+	enqueued, _, err := store.EnqueueCreate(command, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	command.Containers[0].Image = "mutated:latest"
+	command.Containers[0].Ports[0] = 9999
+	enqueued.CreateCommand.Containers[0].Image = "returned:latest"
+	enqueued.CreateCommand.Containers[0].Ports[0] = 7777
+
+	stored, err := store.Get(enqueued.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.CreateCommand.Containers[0].Image != "nginx:1.27" ||
+		stored.CreateCommand.Containers[0].Ports[0] != 8080 {
+		t.Fatalf("store leaked command slices: %#v", stored.CreateCommand)
+	}
+}
+
+func TestMemoryStoreCopiesCreateResultEndpoints(t *testing.T) {
+	store := NewMemoryStore(sequenceIDs("op-1"))
+	operation := enqueueAndStart(t, store, "req-1")
+	result := OperationResult{Create: &provisioner.CreateWorkloadResult{
+		RuntimeWorkloadID: "target-1/ns/challenge",
+		NamespaceUID:      "namespace-uid-01",
+		ServiceURL:        "https://gateway.example/instances/inst-1",
+		Endpoints: []provisioner.WorkloadEndpoint{{
+			ContainerName: "web",
+			Port:          8080,
+			ServiceURL:    "https://gateway.example/instances/inst-1",
+		}},
+	}}
+	if _, err := store.CheckpointCreateResult(operation.ID, *result.Create); err != nil {
+		t.Fatal(err)
+	}
+	succeeded, err := store.MarkSucceeded(operation.ID, result)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result.Create.Endpoints[0].Port = 9999
+	succeeded.Result.Create.Endpoints[0].ServiceURL = "https://mutated.example"
+
+	stored, err := store.Get(operation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint := stored.Result.Create.Endpoints[0]
+	if endpoint.Port != 8080 || endpoint.ServiceURL != "https://gateway.example/instances/inst-1" {
+		t.Fatalf("store leaked result endpoints: %#v", endpoint)
+	}
+}
+
+func TestMemoryStoreCreateCheckpointIsDeepCopiedIdempotentAndImmutable(t *testing.T) {
+	store := NewMemoryStore(sequenceIDs("op-1"))
+	operation := enqueueAndStart(t, store, "req-1")
+	result := validCreateCheckpointResult()
+
+	checkpointed, err := store.CheckpointCreateResult(operation.ID, result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result.Endpoints[0].Port = 9999
+	checkpointed.CreateCheckpoint.Endpoints[0].ServiceURL = "https://mutated.example"
+
+	stored, err := store.Get(operation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Result.Create != nil || stored.CreateCheckpoint == nil ||
+		stored.CreateCheckpoint.RuntimeWorkloadID != "target-1/ns/challenge" ||
+		stored.CreateCheckpoint.NamespaceUID != "namespace-uid-01" ||
+		stored.CreateCheckpoint.Endpoints[0].Port != 8080 ||
+		stored.CreateCheckpoint.Endpoints[0].ServiceURL != "https://gateway.example/instances/inst-1" {
+		t.Fatalf("stored checkpoint = %#v", stored)
+	}
+	if _, err := store.CheckpointCreateResult(operation.ID, validCreateCheckpointResult()); err != nil {
+		t.Fatalf("identical CheckpointCreateResult() error = %v", err)
+	}
+	conflict := validCreateCheckpointResult()
+	conflict.NamespaceUID = "replacement-namespace-uid"
+	if _, err := store.CheckpointCreateResult(operation.ID, conflict); !errors.Is(err, ErrCreateCheckpointConflict) {
+		t.Fatalf("conflicting CheckpointCreateResult() error = %v, want ErrCreateCheckpointConflict", err)
+	}
+	stored, err = store.Get(operation.ID)
+	if err != nil || stored.CreateCheckpoint == nil || stored.CreateCheckpoint.NamespaceUID != "namespace-uid-01" {
+		t.Fatalf("stored checkpoint changed after conflict: %#v, %v", stored, err)
+	}
+}
+
+func TestMemoryStoreCreateCheckpointPreservesEmptyEndpointSliceForIdempotency(t *testing.T) {
+	store := NewMemoryStore(sequenceIDs("op-1"))
+	operation := enqueueAndStart(t, store, "req-1")
+	result := validCreateCheckpointResult()
+	result.Endpoints = []provisioner.WorkloadEndpoint{}
+
+	if _, err := store.CheckpointCreateResult(operation.ID, result); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CheckpointCreateResult(operation.ID, result); err != nil {
+		t.Fatalf("identical empty-slice checkpoint error = %v", err)
+	}
+	succeeded, err := store.MarkSucceeded(operation.ID, OperationResult{Create: &result})
+	if err != nil {
+		t.Fatalf("empty-slice checkpoint promotion error = %v", err)
+	}
+	if succeeded.Result.Create == nil || succeeded.Result.Create.Endpoints == nil || len(succeeded.Result.Create.Endpoints) != 0 {
+		t.Fatalf("promoted endpoints = %#v, want non-nil empty slice", succeeded.Result.Create)
+	}
+}
+
+func TestMemoryStoreCreateCheckpointRejectsInvalidResultStateAndType(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		result provisioner.CreateWorkloadResult
+	}{
+		{name: "missing runtime workload id", result: func() provisioner.CreateWorkloadResult {
+			result := validCreateCheckpointResult()
+			result.RuntimeWorkloadID = ""
+			return result
+		}()},
+		{name: "missing namespace uid", result: func() provisioner.CreateWorkloadResult {
+			result := validCreateCheckpointResult()
+			result.NamespaceUID = ""
+			return result
+		}()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := NewMemoryStore(sequenceIDs("op-1"))
+			operation := enqueueAndStart(t, store, "req-1")
+			if _, err := store.CheckpointCreateResult(operation.ID, test.result); !errors.Is(err, ErrInvalidOperationResult) {
+				t.Fatalf("CheckpointCreateResult() error = %v, want ErrInvalidOperationResult", err)
+			}
+		})
+	}
+
+	store := NewMemoryStore(sequenceIDs("op-1", "op-2"))
+	queued, _, err := store.EnqueueCreate(validCreateCommand("req-1"), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CheckpointCreateResult(queued.ID, validCreateCheckpointResult()); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("queued create checkpoint error = %v, want ErrInvalidTransition", err)
+	}
+	deleteOperation, _, err := store.EnqueueDelete(validDeleteCommand("req-2"), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkRunning(deleteOperation.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CheckpointCreateResult(deleteOperation.ID, validCreateCheckpointResult()); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("delete checkpoint error = %v, want ErrInvalidTransition", err)
+	}
+}
+
+func TestMemoryStorePromotesCreateCheckpointOnlyWithExactResultAndClearsIt(t *testing.T) {
+	store := NewMemoryStore(sequenceIDs("op-1", "op-2"))
+	withoutCheckpoint := enqueueAndStart(t, store, "req-1")
+	result := validCreateCheckpointResult()
+	if _, err := store.MarkSucceeded(withoutCheckpoint.ID, OperationResult{Create: &result}); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("MarkSucceeded() without checkpoint error = %v, want ErrInvalidTransition", err)
+	}
+
+	operation := enqueueAndStart(t, store, "req-2")
+	if _, err := store.CheckpointCreateResult(operation.ID, result); err != nil {
+		t.Fatal(err)
+	}
+	mismatch := result
+	mismatch.ServiceURL = "https://different.example"
+	if _, err := store.MarkSucceeded(operation.ID, OperationResult{Create: &mismatch}); !errors.Is(err, ErrCreateCheckpointConflict) {
+		t.Fatalf("MarkSucceeded() mismatch error = %v, want ErrCreateCheckpointConflict", err)
+	}
+	stillRunning, err := store.Get(operation.ID)
+	if err != nil || stillRunning.Status != OperationStatusRunning || stillRunning.Result.Create != nil || stillRunning.CreateCheckpoint == nil {
+		t.Fatalf("operation changed after mismatched promotion: %#v, %v", stillRunning, err)
+	}
+
+	succeeded, err := store.MarkSucceeded(operation.ID, OperationResult{Create: &result})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if succeeded.Status != OperationStatusSucceeded || succeeded.CreateCheckpoint != nil ||
+		succeeded.Result.Create == nil || !reflect.DeepEqual(*succeeded.Result.Create, result) {
+		t.Fatalf("succeeded operation = %#v", succeeded)
 	}
 }
 
@@ -290,7 +488,7 @@ func TestMemoryStoreRejectsInvalidCreateSuccessResult(t *testing.T) {
 func TestMemoryStoreRejectsInvalidDeleteSuccessResult(t *testing.T) {
 	for _, result := range []OperationResult{
 		{},
-		{Create: &provisioner.CreateWorkloadResult{RuntimeWorkloadID: "default/inst-1", ServiceURL: "http://service.example"}},
+		{Create: &provisioner.CreateWorkloadResult{RuntimeWorkloadID: "default/inst-1", NamespaceUID: "namespace-uid-01", ServiceURL: "http://service.example"}},
 	} {
 		store := NewMemoryStore(sequenceIDs("op-1"))
 		operation, _, err := store.EnqueueDelete(validDeleteCommand("req-1"), 2)
@@ -420,8 +618,24 @@ func TestMemoryStoreGetsOperationByRequestID(t *testing.T) {
 func validCreateCommand(requestID string) provisioner.CreateWorkloadCommand {
 	return provisioner.CreateWorkloadCommand{
 		RequestID: requestID, InstanceID: "inst-1", TeamID: 7,
-		RuntimeType: provisioner.RuntimeTypeKubernetes, TargetID: "target-1", Image: "nginx:1.27", ContainerPort: 8080,
+		RuntimeType: provisioner.RuntimeTypeKubernetes, TargetID: "target-1",
+		Containers: []provisioner.WorkloadContainer{{
+			Name: "challenge", Image: "nginx:1.27", Ports: []int{8080}, Expose: true,
+		}},
 		ResourceLimits: provisioner.ResourceLimits{CPUMillicores: 100, MemoryMiB: 128, EphemeralStorageMiB: 256},
+	}
+}
+
+func validCreateCheckpointResult() provisioner.CreateWorkloadResult {
+	return provisioner.CreateWorkloadResult{
+		RuntimeWorkloadID: "target-1/ns/challenge",
+		NamespaceUID:      "namespace-uid-01",
+		ServiceURL:        "https://gateway.example/instances/inst-1",
+		Endpoints: []provisioner.WorkloadEndpoint{{
+			ContainerName: "web",
+			Port:          8080,
+			ServiceURL:    "https://gateway.example/instances/inst-1",
+		}},
 	}
 }
 

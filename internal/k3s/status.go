@@ -3,13 +3,16 @@ package k3s
 import (
 	"context"
 	"sort"
-	"strconv"
+	"strings"
 	"time"
 
 	"github.com/MSG-CTF/secure-provisioner/internal/runtimebinding"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/client-go/kubernetes"
 	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 )
 
@@ -93,10 +96,8 @@ func (r *StatusReader) Get(ctx context.Context, binding runtimebinding.Binding) 
 	if err != nil {
 		return RuntimeStatus{}, newRuntimeError("TARGET_TEMPORARILY_UNAVAILABLE", true, err)
 	}
-	if namespace.Labels["msgctf.io/instance-id"] != binding.InstanceID ||
-		namespace.Labels["msgctf.io/team-id"] != strconv.FormatInt(binding.TeamID, 10) ||
-		namespace.Labels["app.kubernetes.io/managed-by"] != "secure-provisioner" {
-		return RuntimeStatus{}, newRuntimeError("RUNTIME_OWNERSHIP_MISMATCH", false, nil)
+	if identityErr := namespaceBindingError(namespace, binding); identityErr != nil {
+		return RuntimeStatus{}, identityErr
 	}
 
 	selector := labels.Set{
@@ -166,12 +167,99 @@ func (r *StatusReader) Get(ctx context.Context, binding runtimebinding.Binding) 
 		}
 	}
 
-	status.EndpointReady, err = hasReadyEndpoint(ctx, cluster.Client, binding.Namespace)
-	if err != nil {
-		return RuntimeStatus{}, newRuntimeError("TARGET_TEMPORARILY_UNAVAILABLE", true, err)
+	if len(status.Containers) > 0 {
+		if cluster.Config.ExposureMode == ExposureModeNodePort {
+			status.EndpointReady, err = hasReadyNodePortEndpoints(ctx, cluster.Client, binding.Namespace, binding.InstanceID)
+		} else {
+			status.EndpointReady, err = hasReadyIngressEndpoints(ctx, cluster.Client, binding.Namespace)
+		}
+		if err != nil {
+			return RuntimeStatus{}, newRuntimeError("TARGET_TEMPORARILY_UNAVAILABLE", true, err)
+		}
 	}
 	status.Phase = deriveRuntimePhase(binding.State, status.Containers, status.EndpointReady)
 	return status, nil
+}
+
+func hasReadyIngressEndpoints(ctx context.Context, client kubernetes.Interface, namespace string) (bool, error) {
+	ingress, err := client.NetworkingV1().Ingresses(namespace).Get(ctx, resourceName, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	serviceNames := make(map[string]struct{})
+	for _, rule := range ingress.Spec.Rules {
+		if rule.HTTP == nil {
+			continue
+		}
+		for _, path := range rule.HTTP.Paths {
+			if path.Backend.Service != nil && strings.TrimSpace(path.Backend.Service.Name) != "" {
+				serviceNames[path.Backend.Service.Name] = struct{}{}
+			}
+		}
+	}
+	if len(serviceNames) == 0 {
+		return false, nil
+	}
+	for serviceName := range serviceNames {
+		serviceReady, listErr := hasReadyServiceEndpoints(ctx, client, namespace, serviceName)
+		if listErr != nil {
+			return false, listErr
+		}
+		if !serviceReady {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func hasReadyNodePortEndpoints(ctx context.Context, client kubernetes.Interface, namespace, instanceID string) (bool, error) {
+	services, err := client.CoreV1().Services(namespace).List(ctx, metav1.ListOptions{LabelSelector: labels.Set{
+		"app.kubernetes.io/managed-by": "secure-provisioner",
+		"msgctf.io/instance-id":        instanceID,
+	}.String()})
+	if err != nil {
+		return false, err
+	}
+	found := false
+	for _, service := range services.Items {
+		if service.Spec.Type != corev1.ServiceTypeNodePort {
+			continue
+		}
+		found = true
+		ready, endpointErr := hasReadyServiceEndpoints(ctx, client, namespace, service.Name)
+		if endpointErr != nil {
+			return false, endpointErr
+		}
+		if !ready {
+			return false, nil
+		}
+	}
+	return found, nil
+}
+
+func hasReadyServiceEndpoints(ctx context.Context, client kubernetes.Interface, namespace, serviceName string) (bool, error) {
+	endpointSlices, err := client.DiscoveryV1().EndpointSlices(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labels.Set{discoveryv1.LabelServiceName: serviceName}.String(),
+	})
+	if err != nil {
+		return false, err
+	}
+	for _, endpointSlice := range endpointSlices.Items {
+		for _, endpoint := range endpointSlice.Endpoints {
+			if endpoint.Conditions.Ready != nil && !*endpoint.Conditions.Ready {
+				continue
+			}
+			for _, address := range endpoint.Addresses {
+				if strings.TrimSpace(address) != "" {
+					return true, nil
+				}
+			}
+		}
+	}
+	return false, nil
 }
 
 func mapNodeRuntimeStatus(node corev1.Node, pods []corev1.Pod, usage *ResourceUsage) NodeRuntimeStatus {

@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
+
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 	metricsclient "k8s.io/metrics/pkg/client/clientset/versioned"
@@ -40,14 +42,27 @@ func (f *sequenceFactory) FromKubeconfig(string) (ClientSet, error) {
 
 func validClusterConfig(targetID string, provider Provider, kubeconfigPath string) ClusterConfig {
 	return ClusterConfig{
-		TargetID:       targetID,
-		Provider:       provider,
-		Region:         "test-region",
-		Architecture:   "amd64",
-		KubeconfigPath: kubeconfigPath,
-		PublicGateway:  "https://gateway.example.invalid/",
-		IngressClass:   "nginx",
-		Enabled:        true,
+		TargetID:             targetID,
+		Provider:             provider,
+		Region:               "test-region",
+		Architecture:         "amd64",
+		KubeconfigPath:       kubeconfigPath,
+		PublicGateway:        "https://gateway.example.invalid/",
+		IngressClass:         "nginx",
+		Enabled:              true,
+		SecurityCapabilities: supportedSecurityCapabilities(),
+	}
+}
+
+func supportedSecurityCapabilities() SecurityCapabilities {
+	return SecurityCapabilities{
+		NetworkPolicyEnforced:          true,
+		SupplementalGroupsPolicyStrict: true,
+		NetworkPolicyProvider:          "kube-router",
+		DNSNamespace:                   "kube-system",
+		DNSPodSelector:                 map[string]string{"k8s-app": "kube-dns"},
+		IngressNamespace:               "kube-system",
+		IngressPodSelector:             map[string]string{"app.kubernetes.io/name": "traefik"},
 	}
 }
 
@@ -85,6 +100,65 @@ func TestNewRegistryCreatesDistinctClientsPerEnabledTarget(t *testing.T) {
 	}
 	if aws.Config.PublicGateway != "https://gateway.example.invalid" {
 		t.Fatalf("PublicGateway = %q, want trailing slash removed", aws.Config.PublicGateway)
+	}
+}
+
+func TestNewRegistryCopiesInputSecurityCapabilitySelectors(t *testing.T) {
+	config := validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")
+	registry, err := NewRegistry([]ClusterConfig{config}, &sequenceFactory{clients: []kubernetes.Interface{fake.NewSimpleClientset()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	config.SecurityCapabilities.DNSPodSelector["k8s-app"] = "tampered$value"
+	delete(config.SecurityCapabilities.IngressPodSelector, "app.kubernetes.io/name")
+	cluster, err := registry.Lookup("aws-dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSupportedSelectors(t, cluster)
+}
+
+func TestRegistryLookupsDoNotExposeStoredSecurityCapabilitySelectors(t *testing.T) {
+	registry, err := NewRegistry(
+		[]ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")},
+		&sequenceFactory{clients: []kubernetes.Interface{fake.NewSimpleClientset()}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	created, err := registry.LookupForCreate("aws-dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	created.Config.SecurityCapabilities.DNSPodSelector["k8s-app"] = "tampered$value"
+	delete(created.Config.SecurityCapabilities.IngressPodSelector, "app.kubernetes.io/name")
+
+	maintenance, err := registry.LookupForMaintenance("aws-dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSupportedSelectors(t, maintenance)
+	maintenance.Config.SecurityCapabilities.DNSPodSelector["k8s-app"] = "second$tamper"
+	delete(maintenance.Config.SecurityCapabilities.IngressPodSelector, "app.kubernetes.io/name")
+
+	current, err := registry.Lookup("aws-dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSupportedSelectors(t, current)
+}
+
+func assertSupportedSelectors(t *testing.T, cluster Cluster) {
+	t.Helper()
+	capabilities := cluster.Config.SecurityCapabilities
+	if capabilities.DNSPodSelector["k8s-app"] != "kube-dns" ||
+		capabilities.IngressPodSelector["app.kubernetes.io/name"] != "traefik" {
+		t.Fatalf("security capability selectors = %#v / %#v", capabilities.DNSPodSelector, capabilities.IngressPodSelector)
+	}
+	if err := cluster.Supports(isolation.ResolvedPolicy{}); err != nil {
+		t.Fatalf("Cluster.Supports() error = %v", err)
 	}
 }
 
@@ -201,6 +275,28 @@ func TestNewRegistryRejectsUnsafeGateway(t *testing.T) {
 		t.Run(gateway, func(t *testing.T) {
 			config := validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")
 			config.PublicGateway = gateway
+			_, err := NewRegistry([]ClusterConfig{config}, &sequenceFactory{})
+			if runtimeErrorCode(t, err) != "CONFIG_INVALID" {
+				t.Fatalf("code = %q, want CONFIG_INVALID", runtimeErrorCode(t, err))
+			}
+		})
+	}
+}
+
+func TestNewRegistryRejectsInvalidNodePortExposureConfig(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		mode    ExposureMode
+		gateway string
+	}{
+		{name: "unknown mode", mode: ExposureMode("OTHER"), gateway: "http://203.0.113.10"},
+		{name: "gateway path", mode: ExposureModeNodePort, gateway: "http://203.0.113.10/challenges"},
+		{name: "gateway port", mode: ExposureModeNodePort, gateway: "http://203.0.113.10:8080"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config := validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")
+			config.ExposureMode = test.mode
+			config.PublicGateway = test.gateway
 			_, err := NewRegistry([]ClusterConfig{config}, &sequenceFactory{})
 			if runtimeErrorCode(t, err) != "CONFIG_INVALID" {
 				t.Fatalf("code = %q, want CONFIG_INVALID", runtimeErrorCode(t, err))

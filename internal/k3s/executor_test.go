@@ -3,6 +3,7 @@ package k3s
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/MSG-CTF/secure-provisioner/internal/operations"
@@ -12,7 +13,7 @@ import (
 
 func TestExecutorRoutesCreateOperationToSelectedTarget(t *testing.T) {
 	command := provisioner.CreateWorkloadCommand{RequestID: "req-1", TargetID: "aws-dev"}
-	want := provisioner.CreateWorkloadResult{RuntimeWorkloadID: "aws-dev/instance-1", ServiceURL: "https://instance-1.aws-dev.example"}
+	want := provisioner.CreateWorkloadResult{RuntimeWorkloadID: "aws-dev/instance-1", NamespaceUID: "namespace-uid-01", ServiceURL: "https://instance-1.aws-dev.example"}
 	adapter := &recordingCreateAdapter{result: want}
 	executor, err := NewExecutor(adapter)
 	if err != nil {
@@ -26,10 +27,10 @@ func TestExecutorRoutesCreateOperationToSelectedTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if adapter.calls != 1 || adapter.command != command {
+	if adapter.calls != 1 || !reflect.DeepEqual(adapter.command, command) {
 		t.Fatalf("adapter calls = %d, command = %#v", adapter.calls, adapter.command)
 	}
-	if result.Create == nil || *result.Create != want || result.DeleteCompleted {
+	if result.Create == nil || !reflect.DeepEqual(*result.Create, want) || result.DeleteCompleted {
 		t.Fatalf("result = %#v", result)
 	}
 }
@@ -71,7 +72,7 @@ func TestExecutorRoutesDeleteUsingStoredBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if deleteAdapter.calls != 1 || deleteAdapter.command != command || deleteAdapter.binding != binding {
+	if deleteAdapter.calls != 1 || deleteAdapter.command != command || !reflect.DeepEqual(deleteAdapter.binding, binding) {
 		t.Fatalf("delete call = %#v", deleteAdapter)
 	}
 	if !result.DeleteCompleted || result.Create != nil {
@@ -94,6 +95,40 @@ func TestExecutorMapsRuntimeErrorToStableExecutionError(t *testing.T) {
 	}
 	if err.Error() != "K3S_UNAVAILABLE" || !errors.Is(err, cause) {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestExecutorFinalizesCreateThroughAdapterWithStableErrorClassification(t *testing.T) {
+	cause := errors.New("binding cleanup temporarily unavailable")
+	adapter := &recordingFinalizingCreateAdapter{finalizeErr: newRuntimeError("ROLLBACK_FAILED", true, cause)}
+	executor, err := NewExecutor(adapter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := provisioner.CreateWorkloadCommand{RequestID: "req-1", TargetID: "aws-dev"}
+	result := provisioner.CreateWorkloadResult{RuntimeWorkloadID: "aws-dev/instance-1", NamespaceUID: "namespace-uid-01"}
+	operation := operations.Operation{Type: operations.OperationTypeCreate, CreateCommand: &command}
+
+	err = executor.FinalizeCreate(context.Background(), operation, result)
+	if code, retryable := operations.ClassifyExecutionError(err); code != "ROLLBACK_FAILED" || !retryable {
+		t.Fatalf("classification = %q, %v", code, retryable)
+	}
+	if !errors.Is(err, cause) || adapter.finalizeCalls != 1 || !reflect.DeepEqual(adapter.finalizeCommand, command) || !reflect.DeepEqual(adapter.finalizeResult, result) {
+		t.Fatalf("finalization = %#v; error = %v", adapter, err)
+	}
+}
+
+func TestExecutorFinalizesCreateAsNoopForGenericCreateAdapter(t *testing.T) {
+	executor, err := NewExecutor(&recordingCreateAdapter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := provisioner.CreateWorkloadCommand{RequestID: "req-1", TargetID: "aws-dev"}
+	err = executor.FinalizeCreate(context.Background(), operations.Operation{
+		Type: operations.OperationTypeCreate, CreateCommand: &command,
+	}, provisioner.CreateWorkloadResult{RuntimeWorkloadID: "aws-dev/instance-1", NamespaceUID: "namespace-uid-01"})
+	if err != nil {
+		t.Fatalf("FinalizeCreate() generic adapter error = %v", err)
 	}
 }
 
@@ -153,6 +188,21 @@ type recordingDeleteAdapter struct {
 	command provisioner.DeleteWorkloadCommand
 	binding runtimebinding.Binding
 	err     error
+}
+
+type recordingFinalizingCreateAdapter struct {
+	recordingCreateAdapter
+	finalizeCalls   int
+	finalizeCommand provisioner.CreateWorkloadCommand
+	finalizeResult  provisioner.CreateWorkloadResult
+	finalizeErr     error
+}
+
+func (a *recordingFinalizingCreateAdapter) FinalizeCreate(_ context.Context, command provisioner.CreateWorkloadCommand, result provisioner.CreateWorkloadResult) error {
+	a.finalizeCalls++
+	a.finalizeCommand = command
+	a.finalizeResult = result
+	return a.finalizeErr
 }
 
 func (a *recordingDeleteAdapter) DeleteWorkload(_ context.Context, command provisioner.DeleteWorkloadCommand, binding runtimebinding.Binding) error {
