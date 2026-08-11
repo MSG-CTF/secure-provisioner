@@ -31,7 +31,13 @@ func newTestEnvironment(t *testing.T, expirationInterval time.Duration) *testEnv
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	service := provisioner.NewService(dependencyMock.URL, logger, expirationInterval)
 	ctx, cancel := context.WithCancel(context.Background())
-	service.Start(ctx, 4)
+	service.StartWithOptions(ctx, provisioner.WorkerOptions{
+		Concurrency:    4,
+		PollInterval:   time.Millisecond,
+		LeaseDuration:  time.Second,
+		MaximumRetries: 3,
+		RetryBaseDelay: 10 * time.Millisecond,
+	})
 	provisionerServer := httptest.NewServer(provisioner.NewHandler(service))
 	brokerMock := httptest.NewServer(ctfmock.NewHandler(provisionerServer.URL))
 
@@ -66,7 +72,7 @@ func TestConcurrentCreateUsesOneTeamChallengeInstance(t *testing.T) {
 			request := createRequest(
 				fmt.Sprintf("req-concurrent-%d", requestNumber),
 				fmt.Sprintf("inst-concurrent-%d", requestNumber),
-				"team-a",
+				101,
 				"pwn-101",
 				time.Now().UTC().Add(time.Hour),
 			)
@@ -113,7 +119,7 @@ func TestConcurrentCreateUsesOneTeamChallengeInstance(t *testing.T) {
 	}
 	assertIsolationBaseline(t, resources)
 
-	webRequest := createRequest("req-web", "inst-web", "team-a", "web-101", time.Now().UTC().Add(time.Hour))
+	webRequest := createRequest("req-web", "inst-web", 101, "web-101", time.Now().UTC().Add(time.Hour))
 	var webAccepted provisioner.AcceptedOperation
 	if err := doJSON(http.MethodPost, environment.brokerMock.URL+"/mock/v1/broker/instances", webRequest, http.StatusAccepted, &webAccepted); err != nil {
 		t.Fatal(err)
@@ -147,7 +153,7 @@ func TestEndpointFailureRollsBackFakeRuntime(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	request := createRequest("req-failure", "inst-failure", "team-b", "pwn-101", time.Now().UTC().Add(time.Hour))
+	request := createRequest("req-failure", "inst-failure", 102, "pwn-101", time.Now().UTC().Add(time.Hour))
 	var accepted provisioner.AcceptedOperation
 	if err := doJSON(http.MethodPost, environment.brokerMock.URL+"/mock/v1/broker/instances", request, http.StatusAccepted, &accepted); err != nil {
 		t.Fatal(err)
@@ -171,7 +177,7 @@ func TestEndpointFailureRollsBackFakeRuntime(t *testing.T) {
 func TestTTLAutomaticallyTerminatesInstance(t *testing.T) {
 	environment := newTestEnvironment(t, 10*time.Millisecond)
 
-	request := createRequest("req-ttl", "inst-ttl", "team-c", "web-101", time.Now().UTC().Add(250*time.Millisecond))
+	request := createRequest("req-ttl", "inst-ttl", 103, "web-101", time.Now().UTC().Add(250*time.Millisecond))
 	var accepted provisioner.AcceptedOperation
 	if err := doJSON(http.MethodPost, environment.brokerMock.URL+"/mock/v1/broker/instances", request, http.StatusAccepted, &accepted); err != nil {
 		t.Fatal(err)
@@ -181,7 +187,7 @@ func TestTTLAutomaticallyTerminatesInstance(t *testing.T) {
 	waitForPhase(t, environment.brokerMock.URL, accepted.InstanceID, provisioner.PhaseTerminated, 3*time.Second)
 }
 
-func createRequest(requestID string, instanceID string, teamID string, challengeID string, expiresAt time.Time) provisioner.CreateRequest {
+func createRequest(requestID string, instanceID string, teamID int64, challengeID string, expiresAt time.Time) provisioner.CreateRequest {
 	return provisioner.CreateRequest{
 		RequestID:     requestID,
 		InstanceID:    instanceID,

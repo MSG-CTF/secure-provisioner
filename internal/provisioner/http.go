@@ -15,6 +15,7 @@ func NewHandler(service *Service) http.Handler {
 	api := &API{service: service}
 	mux := http.NewServeMux()
 
+	mux.HandleFunc("GET /{$}", api.handleDashboard)
 	mux.HandleFunc("GET /health/live", api.handleLive)
 	mux.HandleFunc("GET /health/ready", api.handleReady)
 	mux.HandleFunc("POST /internal/v1/instances", api.handleCreateInstance)
@@ -44,7 +45,7 @@ func (api *API) handleCreateInstance(writer http.ResponseWriter, request *http.R
 	accepted, err := api.service.AcceptCreate(request.Context(), createRequest)
 	if err != nil {
 		if errors.Is(err, ErrInstanceIDInUse) {
-			writeAPIError(writer, http.StatusConflict, "INSTANCE_ID_IN_USE", "instanceId is already in use")
+			writeAPIError(writer, http.StatusConflict, "INSTANCE_ID_IN_USE", "instance_id is already in use")
 			return
 		}
 		writeAPIError(writer, http.StatusBadRequest, "INVALID_REQUEST", err.Error())

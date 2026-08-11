@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: provisioner
+      POSTGRES_USER: provisioner
+      POSTGRES_PASSWORD: provisioner
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - provisioner-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U provisioner -d provisioner"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  provisioner-postgres-data:

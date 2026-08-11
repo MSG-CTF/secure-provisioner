@@ -70,21 +70,21 @@ func (client *dependencyClient) verifyEndpoint(ctx context.Context, endpoint str
 
 func (client *dependencyClient) releaseReservation(ctx context.Context, reservationID string, instanceID string) error {
 	payload := map[string]string{
-		"reservationId": reservationID,
-		"instanceId":    instanceID,
+		"reservation_id": reservationID,
+		"instance_id":    instanceID,
 	}
 	return client.postJSON(ctx, "/mock/v1/scheduler/releases", payload)
 }
 
 func (client *dependencyClient) publishEvent(ctx context.Context, target string, eventName string, instance Instance) error {
 	payload := map[string]any{
-		"event":       eventName,
-		"instanceId":  instance.InstanceID,
-		"teamId":      instance.TeamID,
-		"challengeId": instance.ChallengeID,
-		"phase":       instance.Phase,
-		"endpoint":    instance.Endpoint,
-		"expiresAt":   instance.ExpiresAt,
+		"event":        eventName,
+		"instance_id":  instance.InstanceID,
+		"team_id":      instance.TeamID,
+		"challenge_id": instance.ChallengeID,
+		"phase":        instance.Phase,
+		"endpoint":     instance.Endpoint,
+		"expires_at":   instance.ExpiresAt,
 	}
 	return client.postJSON(ctx, target, payload)
 }
