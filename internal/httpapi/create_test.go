@@ -235,7 +235,7 @@ func TestDocumentedCreateRequestExamplesDecodeAndValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	examples := document.Paths["/internal/v1/instances"].Post.RequestBody.Content["application/json"].Examples
-	for _, name := range []string{"MultiContainer", "LegacyMultiContainer", "ExplicitNullableRequirements"} {
+	for _, name := range []string{"MultiContainer", "Pwn", "LegacyMultiContainer", "ExplicitNullableRequirements"} {
 		example, found := examples[name]
 		if !found {
 			t.Fatalf("OpenAPI create example %q not found", name)
