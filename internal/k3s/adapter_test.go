@@ -889,7 +889,7 @@ func TestUpsertServicePreservesAllocatedNodePortOnReconcile(t *testing.T) {
 	if got := stored.Spec.Ports[0].NodePort; got != 31042 {
 		t.Fatalf("NodePort = %d, want 31042", got)
 	}
-	endpoints, err := BuildNodePortEndpoints(cluster.Config.PublicGateway, []*corev1.Service{stored})
+	endpoints, err := BuildNodePortEndpoints(cluster.Config.PublicGateway, isolation.EndpointProtocolHTTP, []*corev1.Service{stored})
 	if err != nil {
 		t.Fatal(err)
 	}

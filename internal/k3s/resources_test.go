@@ -56,6 +56,9 @@ func TestBuildResourceSetCreatesOwnedKubernetesResources(t *testing.T) {
 	}
 
 	container := resources.Deployment.Spec.Template.Spec.Containers[0]
+	if resources.Deployment.Spec.Template.Spec.RuntimeClassName != nil {
+		t.Fatalf("Web RuntimeClassName = %#v, want target default runtime", resources.Deployment.Spec.Template.Spec.RuntimeClassName)
+	}
 	if container.Image != command.Containers[0].Image {
 		t.Fatalf("image = %q, want %q", container.Image, command.Containers[0].Image)
 	}
@@ -74,7 +77,7 @@ func TestBuildResourceSetCreatesOwnedKubernetesResources(t *testing.T) {
 		}
 	}
 
-	const wantSpecHash = "0a0f922bc61461aeb235a8777d9170fb3cfb09c3cb8bf29fa169fa315f9c4089"
+	const wantSpecHash = "7e5ed2f6298bda28bd27f885c31feab342ccf048bb51e019fe87f31b5d728616"
 	if resources.ExpectedSpecHash != wantSpecHash {
 		t.Fatalf("ExpectedSpecHash = %q, want stable SHA-256", resources.ExpectedSpecHash)
 	}
@@ -123,6 +126,42 @@ func TestBuildResourceSetSpecHashTracksSpecButNotRequestMetadata(t *testing.T) {
 	}
 	if revision.ExpectedSpecHash == first.ExpectedSpecHash {
 		t.Fatal("image revision did not change spec hash")
+	}
+}
+
+func TestBuildResourceSetSpecHashTracksWorkloadProfile(t *testing.T) {
+	cluster := nodePortGVisorCluster("aws-dev")
+	web := validCreateCommand("aws-dev")
+	webResources, err := BuildResourceSet(cluster, web)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pwn := validPwnCreateCommand("aws-dev")
+	pwn.Containers[0].Image = web.Containers[0].Image
+	pwn.Containers[0].Ports = append([]int(nil), web.Containers[0].Ports...)
+	pwn.Policy.Containers[0].Ports = append([]int(nil), web.Policy.Containers[0].Ports...)
+	pwnResources, err := BuildResourceSet(cluster, pwn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if webResources.ExpectedSpecHash == pwnResources.ExpectedSpecHash {
+		t.Fatal("Web and Pwn policies produced the same spec hash")
+	}
+}
+
+func TestBuildResourceSetAppliesGVisorToEveryPwnDeployment(t *testing.T) {
+	resources, err := BuildResourceSet(nodePortGVisorCluster("aws-dev"), validPwnCreateCommand("aws-dev"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, deployment := range resources.Deployments {
+		runtimeClassName := deployment.Spec.Template.Spec.RuntimeClassName
+		if runtimeClassName == nil || *runtimeClassName != "gvisor" {
+			t.Fatalf("%s RuntimeClassName = %#v, want gvisor", deployment.Name, runtimeClassName)
+		}
+	}
+	if resources.Ingress != nil || resources.Services[0].Spec.Type != corev1.ServiceTypeNodePort || len(resources.Services[0].Spec.Ports) != 1 {
+		t.Fatalf("Pwn exposure resources = %#v / %#v", resources.Ingress, resources.Services[0].Spec)
 	}
 }
 
@@ -238,6 +277,7 @@ func TestBuildResourceSetCreatesMultipleContainerResources(t *testing.T) {
 	if len(resources.Endpoints) != 1 ||
 		resources.Endpoints[0].ContainerName != "web" ||
 		resources.Endpoints[0].Port != 8080 ||
+		resources.Endpoints[0].Protocol != isolation.EndpointProtocolHTTP ||
 		resources.ServiceURL != resources.Endpoints[0].ServiceURL {
 		t.Fatalf("endpoints = %#v, service URL = %q", resources.Endpoints, resources.ServiceURL)
 	}
@@ -283,11 +323,32 @@ func TestBuildNodePortEndpointsUsesKubernetesAllocationsInServiceOrder(t *testin
 	}
 	resources.Services[0].Spec.Ports[0].NodePort = 31042
 
-	endpoints, err := BuildNodePortEndpoints(cluster.Config.PublicGateway, resources.Services)
+	endpoints, err := BuildNodePortEndpoints(cluster.Config.PublicGateway, isolation.EndpointProtocolHTTP, resources.Services)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []provisioner.WorkloadEndpoint{{ContainerName: "web", Port: 8080, ServiceURL: "http://203.0.113.10:31042"}}
+	want := []provisioner.WorkloadEndpoint{{ContainerName: "web", Port: 8080, Protocol: isolation.EndpointProtocolHTTP, ServiceURL: "http://203.0.113.10:31042"}}
+	if !reflect.DeepEqual(endpoints, want) {
+		t.Fatalf("endpoints = %#v, want %#v", endpoints, want)
+	}
+}
+
+func TestBuildNodePortEndpointsReturnsTCPAddressForPwn(t *testing.T) {
+	cluster := nodePortGVisorCluster("aws-dev")
+	resources, err := BuildResourceSet(cluster, validPwnCreateCommand("aws-dev"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources.Services[0].Spec.Ports[0].NodePort = 31337
+
+	endpoints, err := BuildNodePortEndpoints(cluster.Config.PublicGateway, isolation.EndpointProtocolTCP, resources.Services)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []provisioner.WorkloadEndpoint{{
+		ContainerName: "challenge", Port: 31337, Protocol: isolation.EndpointProtocolTCP,
+		ServiceURL: "tcp://203.0.113.10:31337",
+	}}
 	if !reflect.DeepEqual(endpoints, want) {
 		t.Fatalf("endpoints = %#v, want %#v", endpoints, want)
 	}
@@ -303,7 +364,7 @@ func TestBuildNodePortEndpointsRejectsMissingAllocation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = BuildNodePortEndpoints(cluster.Config.PublicGateway, resources.Services)
+	_, err = BuildNodePortEndpoints(cluster.Config.PublicGateway, isolation.EndpointProtocolHTTP, resources.Services)
 	if runtimeErrorCode(t, err) != "RESOURCE_APPLY_FAILED" {
 		t.Fatalf("code = %q, want RESOURCE_APPLY_FAILED", runtimeErrorCode(t, err))
 	}
@@ -389,6 +450,14 @@ func validCluster(targetID string) Cluster {
 	}}
 }
 
+func nodePortGVisorCluster(targetID string) Cluster {
+	cluster := validCluster(targetID)
+	cluster.Config.ExposureMode = ExposureModeNodePort
+	cluster.Config.PublicGateway = "http://203.0.113.10"
+	cluster.Config.SecurityCapabilities.RuntimeClasses = []string{"gvisor"}
+	return cluster
+}
+
 func validCreateCommand(targetID string) provisioner.CreateWorkloadCommand {
 	command := provisioner.CreateWorkloadCommand{
 		RequestID:   "req-01",
@@ -409,6 +478,18 @@ func validCreateCommand(targetID string) provisioner.CreateWorkloadCommand {
 		},
 	}
 	command.Policy = resolvedPolicyForCommand(command, "SMALL_SINGLE")
+	return command
+}
+
+func validPwnCreateCommand(targetID string) provisioner.CreateWorkloadCommand {
+	command := validCreateCommand(targetID)
+	command.Containers[0].Image = "registry.example.invalid/challenges/pwn@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	command.Containers[0].Ports = []int{31337}
+	command.Policy = resolvedPolicyForCommand(command, "SMALL_SINGLE")
+	command.Policy.WorkloadProfileRef = isolation.ProfileRef{Name: "PWN", Version: "v1"}
+	command.Policy.RuntimeClassName = "gvisor"
+	command.Policy.EndpointProtocol = isolation.EndpointProtocolTCP
+	command.Policy.ExposureRequirement = isolation.ExposureNodePortOnly
 	return command
 }
 
@@ -439,13 +520,17 @@ func resolvedPolicyForCommand(command provisioner.CreateWorkloadCommand, resourc
 		containers[index] = isolation.ContainerRequirement{
 			Name:      container.Name,
 			Ports:     append([]int(nil), container.Ports...),
+			Expose:    container.Expose,
 			RunAsUser: int64(10001 + index),
 		}
 	}
 	return isolation.ResolvedPolicy{
-		ChallengeID:  "challenge-1",
-		IsolationRef: isolation.ProfileRef{Name: "STANDARD", Version: "v1"},
-		ResourceRef:  isolation.ProfileRef{Name: resourceProfile, Version: "v1"},
+		ChallengeID:         "challenge-1",
+		IsolationRef:        isolation.ProfileRef{Name: "STANDARD", Version: "v1"},
+		WorkloadProfileRef:  isolation.ProfileRef{Name: "WEB", Version: "v1"},
+		ResourceRef:         isolation.ProfileRef{Name: resourceProfile, Version: "v1"},
+		EndpointProtocol:    isolation.EndpointProtocolHTTP,
+		ExposureRequirement: isolation.ExposureAnySupported,
 		Baseline: isolation.Baseline{
 			AutomountServiceAccountToken: false,
 			RunAsNonRoot:                 true,
