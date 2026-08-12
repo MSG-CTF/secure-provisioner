@@ -384,6 +384,7 @@ func validCluster(targetID string) Cluster {
 			DNSPodSelector:                 map[string]string{"k8s-app": "kube-dns"},
 			IngressNamespace:               "ingress-system",
 			IngressPodSelector:             map[string]string{"app.kubernetes.io/name": "traefik"},
+			RuntimeClasses:                 []string{"gvisor"},
 		},
 	}}
 }

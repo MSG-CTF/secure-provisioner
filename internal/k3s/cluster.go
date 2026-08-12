@@ -1,6 +1,8 @@
 package k3s
 
 import (
+	"slices"
+
 	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
 
 	"k8s.io/client-go/kubernetes"
@@ -42,6 +44,7 @@ type SecurityCapabilities struct {
 	DNSPodSelector                 map[string]string `json:"dns_pod_selector"`
 	IngressNamespace               string            `json:"ingress_namespace"`
 	IngressPodSelector             map[string]string `json:"ingress_pod_selector"`
+	RuntimeClasses                 []string          `json:"runtime_classes,omitempty"`
 }
 
 type Cluster struct {
@@ -50,11 +53,17 @@ type Cluster struct {
 	Metrics metricsclient.Interface
 }
 
-func (c Cluster) Supports(_ isolation.ResolvedPolicy) error {
+func (c Cluster) Supports(policy isolation.ResolvedPolicy) error {
 	capabilities := c.Config.SecurityCapabilities
 	if !capabilities.NetworkPolicyEnforced ||
 		!capabilities.SupplementalGroupsPolicyStrict ||
 		!validSecurityCapabilities(capabilities) {
+		return newRuntimeError("TARGET_CAPABILITY_MISMATCH", false, nil)
+	}
+	if policy.RuntimeClassName != "" && !slices.Contains(capabilities.RuntimeClasses, policy.RuntimeClassName) {
+		return newRuntimeError("TARGET_CAPABILITY_MISMATCH", false, nil)
+	}
+	if policy.ExposureRequirement == isolation.ExposureNodePortOnly && c.Config.ExposureMode != ExposureModeNodePort {
 		return newRuntimeError("TARGET_CAPABILITY_MISMATCH", false, nil)
 	}
 	return nil

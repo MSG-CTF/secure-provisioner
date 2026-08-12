@@ -21,7 +21,7 @@ func writeRegistryFile(t *testing.T, content string) string {
 	return path
 }
 
-const completeSecurityCapabilitiesJSON = `{"network_policy_enforced":true,"supplemental_groups_policy_strict":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`
+const completeSecurityCapabilitiesJSON = `{"network_policy_enforced":true,"supplemental_groups_policy_strict":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"},"runtime_classes":["gvisor"]}`
 
 func TestLoadClusterConfigsAcceptsCompleteIsolationCapability(t *testing.T) {
 	path := writeRegistryFile(t, `{"clusters":[{"target_id":"lab","provider":"AWS","region":"ap-northeast-2","architecture":"amd64","kubeconfig_path":"lab.yaml","public_gateway":"https://lab.example","enabled":true,"security_capabilities":`+completeSecurityCapabilitiesJSON+`}]}`)
@@ -36,7 +36,9 @@ func TestLoadClusterConfigsAcceptsCompleteIsolationCapability(t *testing.T) {
 	}
 	if !cluster.Config.SecurityCapabilities.NetworkPolicyEnforced ||
 		!cluster.Config.SecurityCapabilities.SupplementalGroupsPolicyStrict ||
-		cluster.Config.SecurityCapabilities.NetworkPolicyProvider != "kube-router" {
+		cluster.Config.SecurityCapabilities.NetworkPolicyProvider != "kube-router" ||
+		len(cluster.Config.SecurityCapabilities.RuntimeClasses) != 1 ||
+		cluster.Config.SecurityCapabilities.RuntimeClasses[0] != "gvisor" {
 		t.Fatalf("security capabilities = %#v", cluster.Config.SecurityCapabilities)
 	}
 }

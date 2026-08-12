@@ -37,6 +37,7 @@ type registrySecurityCapabilities struct {
 	DNSPodSelector                 map[string]string `json:"dns_pod_selector"`
 	IngressNamespace               string            `json:"ingress_namespace"`
 	IngressPodSelector             map[string]string `json:"ingress_pod_selector"`
+	RuntimeClasses                 []string          `json:"runtime_classes,omitempty"`
 }
 
 func LoadRegistry(path string, factory ClientFactory) (*Registry, error) {
@@ -185,6 +186,7 @@ func (c registrySecurityCapabilities) clusterCapabilities() SecurityCapabilities
 		DNSPodSelector:        c.DNSPodSelector,
 		IngressNamespace:      c.IngressNamespace,
 		IngressPodSelector:    c.IngressPodSelector,
+		RuntimeClasses:        append([]string(nil), c.RuntimeClasses...),
 	}
 	if c.NetworkPolicyEnforced != nil {
 		capabilities.NetworkPolicyEnforced = *c.NetworkPolicyEnforced

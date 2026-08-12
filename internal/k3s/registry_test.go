@@ -2,6 +2,7 @@ package k3s
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -63,6 +64,7 @@ func supportedSecurityCapabilities() SecurityCapabilities {
 		DNSPodSelector:                 map[string]string{"k8s-app": "kube-dns"},
 		IngressNamespace:               "kube-system",
 		IngressPodSelector:             map[string]string{"app.kubernetes.io/name": "traefik"},
+		RuntimeClasses:                 []string{"gvisor"},
 	}
 }
 
@@ -112,6 +114,7 @@ func TestNewRegistryCopiesInputSecurityCapabilitySelectors(t *testing.T) {
 
 	config.SecurityCapabilities.DNSPodSelector["k8s-app"] = "tampered$value"
 	delete(config.SecurityCapabilities.IngressPodSelector, "app.kubernetes.io/name")
+	config.SecurityCapabilities.RuntimeClasses[0] = "tampered"
 	cluster, err := registry.Lookup("aws-dev")
 	if err != nil {
 		t.Fatal(err)
@@ -134,6 +137,7 @@ func TestRegistryLookupsDoNotExposeStoredSecurityCapabilitySelectors(t *testing.
 	}
 	created.Config.SecurityCapabilities.DNSPodSelector["k8s-app"] = "tampered$value"
 	delete(created.Config.SecurityCapabilities.IngressPodSelector, "app.kubernetes.io/name")
+	created.Config.SecurityCapabilities.RuntimeClasses[0] = "tampered"
 
 	maintenance, err := registry.LookupForMaintenance("aws-dev")
 	if err != nil {
@@ -142,6 +146,7 @@ func TestRegistryLookupsDoNotExposeStoredSecurityCapabilitySelectors(t *testing.
 	assertSupportedSelectors(t, maintenance)
 	maintenance.Config.SecurityCapabilities.DNSPodSelector["k8s-app"] = "second$tamper"
 	delete(maintenance.Config.SecurityCapabilities.IngressPodSelector, "app.kubernetes.io/name")
+	maintenance.Config.SecurityCapabilities.RuntimeClasses[0] = "second-tamper"
 
 	current, err := registry.Lookup("aws-dev")
 	if err != nil {
@@ -154,11 +159,69 @@ func assertSupportedSelectors(t *testing.T, cluster Cluster) {
 	t.Helper()
 	capabilities := cluster.Config.SecurityCapabilities
 	if capabilities.DNSPodSelector["k8s-app"] != "kube-dns" ||
-		capabilities.IngressPodSelector["app.kubernetes.io/name"] != "traefik" {
+		capabilities.IngressPodSelector["app.kubernetes.io/name"] != "traefik" ||
+		!slices.Equal(capabilities.RuntimeClasses, []string{"gvisor"}) {
 		t.Fatalf("security capability selectors = %#v / %#v", capabilities.DNSPodSelector, capabilities.IngressPodSelector)
 	}
 	if err := cluster.Supports(isolation.ResolvedPolicy{}); err != nil {
 		t.Fatalf("Cluster.Supports() error = %v", err)
+	}
+}
+
+func TestNewRegistryAcceptsWebOnlyTargetWithoutRuntimeClasses(t *testing.T) {
+	config := validClusterConfig("web-only", ProviderAWS, "web-kubeconfig")
+	config.SecurityCapabilities.RuntimeClasses = nil
+	registry, err := NewRegistry(
+		[]ClusterConfig{config},
+		&sequenceFactory{clients: []kubernetes.Interface{fake.NewSimpleClientset()}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cluster, err := registry.Lookup("web-only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cluster.Config.SecurityCapabilities.RuntimeClasses) != 0 {
+		t.Fatalf("runtime classes = %#v", cluster.Config.SecurityCapabilities.RuntimeClasses)
+	}
+}
+
+func TestNewRegistryRejectsInvalidRuntimeClasses(t *testing.T) {
+	for _, runtimeClasses := range [][]string{{""}, {"GVisor"}, {"gvisor", "gvisor"}} {
+		t.Run(strings.Join(runtimeClasses, ","), func(t *testing.T) {
+			config := validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")
+			config.SecurityCapabilities.RuntimeClasses = runtimeClasses
+			_, err := NewRegistry([]ClusterConfig{config}, &sequenceFactory{})
+			if runtimeErrorCode(t, err) != "CONFIG_INVALID" {
+				t.Fatalf("code = %q, want CONFIG_INVALID", runtimeErrorCode(t, err))
+			}
+		})
+	}
+}
+
+func TestClusterSupportsPwnOnlyWithGVisorAndNodePort(t *testing.T) {
+	policy := isolation.ResolvedPolicy{
+		RuntimeClassName:    "gvisor",
+		ExposureRequirement: isolation.ExposureNodePortOnly,
+	}
+	cluster := Cluster{Config: validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}
+
+	cluster.Config.SecurityCapabilities.RuntimeClasses = nil
+	cluster.Config.ExposureMode = ExposureModeNodePort
+	if code := runtimeErrorCode(t, cluster.Supports(policy)); code != "TARGET_CAPABILITY_MISMATCH" {
+		t.Fatalf("missing gVisor code = %q", code)
+	}
+
+	cluster.Config.SecurityCapabilities.RuntimeClasses = []string{"gvisor"}
+	cluster.Config.ExposureMode = ExposureModeIngressPath
+	if code := runtimeErrorCode(t, cluster.Supports(policy)); code != "TARGET_CAPABILITY_MISMATCH" {
+		t.Fatalf("Ingress Pwn code = %q", code)
+	}
+
+	cluster.Config.ExposureMode = ExposureModeNodePort
+	if err := cluster.Supports(policy); err != nil {
+		t.Fatalf("supported Pwn target rejected: %v", err)
 	}
 }
 

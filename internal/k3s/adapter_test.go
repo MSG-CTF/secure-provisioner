@@ -708,6 +708,42 @@ func TestAdapterRejectsTargetWithoutRequiredIsolationCapability(t *testing.T) {
 	}
 }
 
+func TestAdapterRejectsUnsupportedPwnTargetBeforeKubernetesCalls(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*ClusterConfig)
+	}{
+		{name: "missing gVisor", mutate: func(config *ClusterConfig) {
+			config.ExposureMode = ExposureModeNodePort
+			config.SecurityCapabilities.RuntimeClasses = nil
+		}},
+		{name: "Ingress exposure", mutate: func(config *ClusterConfig) {
+			config.ExposureMode = ExposureModeIngressPath
+			config.SecurityCapabilities.RuntimeClasses = []string{"gvisor"}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			command := validCreateCommand("aws-dev")
+			command.Policy.WorkloadProfileRef = isolation.ProfileRef{Name: "PWN", Version: "v1"}
+			command.Policy.RuntimeClassName = "gvisor"
+			command.Policy.EndpointProtocol = isolation.EndpointProtocolTCP
+			command.Policy.ExposureRequirement = isolation.ExposureNodePortOnly
+			config := validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")
+			test.mutate(&config)
+			client := fake.NewSimpleClientset()
+			adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{config}, client))
+
+			_, err := adapter.CreateWorkload(context.Background(), command)
+			if code := runtimeErrorCode(t, err); code != "TARGET_CAPABILITY_MISMATCH" {
+				t.Fatalf("code = %q, want TARGET_CAPABILITY_MISMATCH", code)
+			}
+			if got := len(client.Actions()); got != 0 {
+				t.Fatalf("K3s client actions = %d, want 0", got)
+			}
+		})
+	}
+}
+
 func TestAdapterAppliesAllContainerResources(t *testing.T) {
 	command := validMultiCreateCommand("aws-dev")
 	client := readyMultiContainerClient(t, command)

@@ -141,6 +141,7 @@ func copyCluster(cluster Cluster) Cluster {
 func copySecurityCapabilities(capabilities SecurityCapabilities) SecurityCapabilities {
 	capabilities.DNSPodSelector = copySelector(capabilities.DNSPodSelector)
 	capabilities.IngressPodSelector = copySelector(capabilities.IngressPodSelector)
+	capabilities.RuntimeClasses = append([]string(nil), capabilities.RuntimeClasses...)
 	return capabilities
 }
 
@@ -161,7 +162,20 @@ func validSecurityCapabilities(capabilities SecurityCapabilities) bool {
 		len(validation.IsDNS1123Label(capabilities.IngressNamespace)) != 0 {
 		return false
 	}
-	return validLabelSelector(capabilities.DNSPodSelector) && validLabelSelector(capabilities.IngressPodSelector)
+	if !validLabelSelector(capabilities.DNSPodSelector) || !validLabelSelector(capabilities.IngressPodSelector) {
+		return false
+	}
+	seenRuntimeClasses := make(map[string]struct{}, len(capabilities.RuntimeClasses))
+	for _, runtimeClass := range capabilities.RuntimeClasses {
+		if len(validation.IsDNS1123Label(runtimeClass)) != 0 {
+			return false
+		}
+		if _, exists := seenRuntimeClasses[runtimeClass]; exists {
+			return false
+		}
+		seenRuntimeClasses[runtimeClass] = struct{}{}
+	}
+	return true
 }
 
 func validLabelSelector(selector map[string]string) bool {
