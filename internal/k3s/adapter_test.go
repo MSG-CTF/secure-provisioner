@@ -2998,6 +2998,7 @@ func applyDocumentedDeploymentDefaults(deployment *appsv1.Deployment) {
 	podSpec.RestartPolicy = corev1.RestartPolicyAlways
 	podSpec.DNSPolicy = corev1.DNSClusterFirst
 	podSpec.SchedulerName = corev1.DefaultSchedulerName
+	podSpec.DeprecatedServiceAccount = podSpec.ServiceAccountName
 	podSpec.TerminationGracePeriodSeconds = ptr.To[int64](30)
 	for index := range podSpec.Containers {
 		container := &podSpec.Containers[index]

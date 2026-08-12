@@ -108,13 +108,13 @@ func validateClusterConfig(config ClusterConfig, seenTargetIDs map[string]struct
 	if config.Provider != ProviderAWS && config.Provider != ProviderGCP && config.Provider != ProviderNCP {
 		return ClusterConfig{}, newRuntimeError("CONFIG_INVALID", false, nil)
 	}
-	if config.Enabled && !validSecurityCapabilities(config.SecurityCapabilities) {
-		return ClusterConfig{}, newRuntimeError("CONFIG_INVALID", false, nil)
-	}
 	if config.ExposureMode == "" {
 		config.ExposureMode = ExposureModeIngressPath
 	}
 	if config.ExposureMode != ExposureModeIngressPath && config.ExposureMode != ExposureModeNodePort {
+		return ClusterConfig{}, newRuntimeError("CONFIG_INVALID", false, nil)
+	}
+	if config.Enabled && !validSecurityCapabilities(config.SecurityCapabilities, config.ExposureMode) {
 		return ClusterConfig{}, newRuntimeError("CONFIG_INVALID", false, nil)
 	}
 
@@ -156,13 +156,17 @@ func copySelector(selector map[string]string) map[string]string {
 	return copied
 }
 
-func validSecurityCapabilities(capabilities SecurityCapabilities) bool {
+func validSecurityCapabilities(capabilities SecurityCapabilities, exposureMode ExposureMode) bool {
 	if strings.TrimSpace(capabilities.NetworkPolicyProvider) == "" ||
-		len(validation.IsDNS1123Label(capabilities.DNSNamespace)) != 0 ||
-		len(validation.IsDNS1123Label(capabilities.IngressNamespace)) != 0 {
+		len(validation.IsDNS1123Label(capabilities.DNSNamespace)) != 0 {
 		return false
 	}
-	if !validLabelSelector(capabilities.DNSPodSelector) || !validLabelSelector(capabilities.IngressPodSelector) {
+	if !validLabelSelector(capabilities.DNSPodSelector) {
+		return false
+	}
+	if exposureMode != ExposureModeNodePort &&
+		(len(validation.IsDNS1123Label(capabilities.IngressNamespace)) != 0 ||
+			!validLabelSelector(capabilities.IngressPodSelector)) {
 		return false
 	}
 	seenRuntimeClasses := make(map[string]struct{}, len(capabilities.RuntimeClasses))

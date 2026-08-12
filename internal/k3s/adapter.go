@@ -738,6 +738,9 @@ func normalizeDeploymentAPIDefaults(deployment *appsv1.Deployment) {
 	if podSpec.SchedulerName == "" {
 		podSpec.SchedulerName = corev1.DefaultSchedulerName
 	}
+	if podSpec.DeprecatedServiceAccount == "" {
+		podSpec.DeprecatedServiceAccount = podSpec.ServiceAccountName
+	}
 	if podSpec.TerminationGracePeriodSeconds == nil {
 		value := int64(corev1.DefaultTerminationGracePeriodSeconds)
 		podSpec.TerminationGracePeriodSeconds = &value

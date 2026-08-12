@@ -306,6 +306,20 @@ func TestDocumentedCreateRequestExamplesDecodeAndValidate(t *testing.T) {
 	}
 }
 
+func TestMaintainedMultiContainerRequestExampleDecodesAndValidates(t *testing.T) {
+	encoded, err := os.ReadFile("../../examples/requests/create-multi-container.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request CreateWorkloadRequest
+	if err := json.Unmarshal(encoded, &request); err != nil {
+		t.Fatalf("decode maintained request example: %v", err)
+	}
+	if err := request.Validate(); err != nil {
+		t.Fatalf("validate maintained request example: %v", err)
+	}
+}
+
 func validMultiCreateWorkloadRequest() CreateWorkloadRequest {
 	return validCreateWorkloadRequest()
 }

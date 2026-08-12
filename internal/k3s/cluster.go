@@ -59,7 +59,7 @@ func (c Cluster) Supports(policy isolation.ResolvedPolicy) error {
 	if !capabilities.NetworkPolicyEnforced ||
 		!capabilities.SupplementalGroupsPolicyStrict ||
 		!capabilities.PodPIDLimitEnforced ||
-		!validSecurityCapabilities(capabilities) {
+		!validSecurityCapabilities(capabilities, c.Config.ExposureMode) {
 		return newRuntimeError("TARGET_CAPABILITY_MISMATCH", false, nil)
 	}
 	if policy.RuntimeClassName != "" && !slices.Contains(capabilities.RuntimeClasses, policy.RuntimeClassName) {
