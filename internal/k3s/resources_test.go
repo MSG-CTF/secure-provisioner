@@ -523,7 +523,7 @@ func validMultiCreateCommand(targetID string) provisioner.CreateWorkloadCommand 
 	return command
 }
 
-func resolvedPolicyForCommand(command provisioner.CreateWorkloadCommand, resourceProfile string) isolation.ResolvedPolicy {
+func resolvedPolicyForCommand(command provisioner.CreateWorkloadCommand, _ string) isolation.ResolvedPolicy {
 	containers := make([]isolation.ContainerRequirement, len(command.Containers))
 	for index, container := range command.Containers {
 		containers[index] = isolation.ContainerRequirement{
@@ -533,30 +533,19 @@ func resolvedPolicyForCommand(command provisioner.CreateWorkloadCommand, resourc
 			RunAsUser: int64(10001 + index),
 		}
 	}
-	return isolation.ResolvedPolicy{
-		ChallengeID:         "challenge-1",
-		IsolationRef:        isolation.ProfileRef{Name: "STANDARD", Version: "v1"},
-		WorkloadProfileRef:  isolation.ProfileRef{Name: "WEB", Version: "v1"},
-		ResourceRef:         isolation.ProfileRef{Name: resourceProfile, Version: "v1"},
-		EndpointProtocol:    isolation.EndpointProtocolHTTP,
-		ExposureRequirement: isolation.ExposureAnySupported,
-		Baseline: isolation.Baseline{
-			AutomountServiceAccountToken: false,
-			RunAsNonRoot:                 true,
-			ReadOnlyRootFilesystem:       true,
-			AllowPrivilegeEscalation:     false,
-			Privileged:                   false,
-			DropAllCapabilities:          true,
-			SeccompRuntimeDefault:        true,
-		},
-		Containers:   containers,
-		OutboundMode: isolation.OutboundNone,
+	policy, err := isolation.NewStaticResolver().Resolve(isolation.Request{
+		WorkloadProfile: isolation.WorkloadProfileWeb,
+		Containers:      containers,
 		ResourceLimits: isolation.ResourceLimits{
 			CPUMillicores:       command.ResourceLimits.CPUMillicores,
 			MemoryMiB:           command.ResourceLimits.MemoryMiB,
 			EphemeralStorageMiB: command.ResourceLimits.EphemeralStorageMiB,
 		},
+	})
+	if err != nil {
+		panic(err)
 	}
+	return policy
 }
 
 func resourceQuantityMilli(value int) *resource.Quantity {

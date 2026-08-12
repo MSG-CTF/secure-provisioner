@@ -499,34 +499,21 @@ func TestAdapterAcceptsDocumentedDeploymentAPIServerDefaults(t *testing.T) {
 	}
 }
 
-func TestDefaultImagePullPolicyMatchesKubernetesTagAndDigestRules(t *testing.T) {
-	digest := strings.Repeat("a", 64)
-	for _, test := range []struct {
-		name  string
-		image string
-		want  corev1.PullPolicy
-	}{
-		{name: "latest tag with digest", image: "registry.example/challenge:latest@sha256:" + digest, want: corev1.PullAlways},
-		{name: "version tag with digest", image: "registry.example/challenge:v2@sha256:" + digest, want: corev1.PullIfNotPresent},
-		{name: "digest without tag", image: "registry.example/challenge@sha256:" + digest, want: corev1.PullIfNotPresent},
-		{name: "registry port without tag", image: "registry.example:5000/challenge", want: corev1.PullAlways},
-		{name: "registry port and digest without tag", image: "registry.example:5000/challenge@sha256:" + digest, want: corev1.PullIfNotPresent},
-		{name: "registry port latest tag and digest", image: "registry.example:5000/challenge:latest@sha256:" + digest, want: corev1.PullAlways},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			if got := defaultImagePullPolicy(test.image); got != test.want {
-				t.Fatalf("defaultImagePullPolicy(%q) = %q, want %q", test.image, got, test.want)
-			}
-		})
-	}
+func TestRenderedContainersUseIfNotPresentForPrePullAndLazyPull(t *testing.T) {
+	command := validMultiCreateCommand("aws-dev")
+	command.Containers[0].Image = "registry.example/challenge:latest"
+	command.Containers[1].Image = "registry.example/sidecar"
 
-	container := corev1.Container{
-		Image:           "registry.example/challenge:latest@sha256:" + digest,
-		ImagePullPolicy: corev1.PullNever,
+	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
 	}
-	normalizeContainerAPIDefaults(&container)
-	if container.ImagePullPolicy != corev1.PullNever {
-		t.Fatalf("explicit imagePullPolicy = %q, want unchanged %q", container.ImagePullPolicy, corev1.PullNever)
+	for _, deployment := range resources.Deployments {
+		for _, container := range deployment.Spec.Template.Spec.Containers {
+			if container.ImagePullPolicy != corev1.PullIfNotPresent {
+				t.Fatalf("container %q pull policy = %q, want %q", container.Name, container.ImagePullPolicy, corev1.PullIfNotPresent)
+			}
+		}
 	}
 }
 

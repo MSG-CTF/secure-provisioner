@@ -109,15 +109,11 @@ func TestNewApplicationQueuesCreateThroughRuntimeService(t *testing.T) {
 		"request_id":"req-01",
 		"instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001",
 		"team_id":18,
-		"challenge_ref":{"challenge_id":"web-chall1","version":"2026.08.1"},
-		"isolation_ref":{"name":"STANDARD","version":"v1"},
-		"workload_profile_ref":{"name":"WEB","version":"v1"},
-		"resource_profile_ref":{"name":"SMALL_SINGLE","version":"v1"},
+		"isolation_profile":"WEB",
 		"target":{"runtime_type":"KUBERNETES","target_id":"aws-dev"},
 		"workload":{
 			"image":"registry.example.test/challenge@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			"container_port":8080,
-			"outbound_mode":"NONE",
 			"resource_limits":{"cpu_millicores":100,"memory_mib":128,"ephemeral_storage_mib":128}
 		}
 	}`

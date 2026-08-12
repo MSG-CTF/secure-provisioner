@@ -145,9 +145,10 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 		}
 
 		podContainer := corev1.Container{
-			Name:  container.Name,
-			Image: container.Image,
-			Ports: containerPorts,
+			Name:            container.Name,
+			Image:           container.Image,
+			ImagePullPolicy: corev1.PullIfNotPresent,
+			Ports:           containerPorts,
 			Resources: corev1.ResourceRequirements{
 				Requests: quantities,
 				Limits:   quantities.DeepCopy(),

@@ -24,10 +24,8 @@ func validateResolvedPolicy(
 	containers []provisioner.WorkloadContainer,
 ) (map[string]isolation.ContainerRequirement, bool) {
 	policy := command.Policy
-	if policy.ChallengeID == "" ||
-		policy.IsolationRef != (isolation.ProfileRef{Name: "STANDARD", Version: "v1"}) ||
+	if policy.IsolationRef != (isolation.ProfileRef{Name: "STANDARD", Version: "v1"}) ||
 		!canonicalExecutionPolicy(policy) ||
-		policy.ResourceRef.Name == "" || policy.ResourceRef.Version == "" ||
 		policy.OutboundMode != isolation.OutboundNone ||
 		policy.Baseline != requiredSecurityBaseline() ||
 		len(policy.Containers) != len(containers) ||

@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 	"github.com/MSG-CTF/secure-provisioner/internal/runtimebinding"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -26,8 +26,8 @@ func TestIntegrationCreateCommandUsesCanonicalResolvedPolicy(t *testing.T) {
 		"018f3f1e-21b8-7a91-a30b-63b3400fd001",
 		"request-01",
 		[]provisioner.WorkloadContainer{{Name: "challenge", Image: "registry.example.invalid/challenge:latest", Ports: []int{8080}, Expose: true}},
-		isolation.ProfileRef{Name: "WEB", Version: "v1"},
-		isolation.ProfileRef{Name: "SMALL_SINGLE", Version: "v1"},
+		isolation.WorkloadProfileWeb,
+		isolation.ResourceLimits{CPUMillicores: 100, MemoryMiB: 128, EphemeralStorageMiB: 128},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -49,8 +49,8 @@ func TestIntegrationPwnResolvesGVisorAndReturnsTCPEndpoint(t *testing.T) {
 		[]provisioner.WorkloadContainer{{
 			Name: "challenge", Image: "registry.example.invalid/pwn:latest", Ports: []int{31337}, Expose: true,
 		}},
-		isolation.ProfileRef{Name: "PWN", Version: "v1"},
-		isolation.ProfileRef{Name: "SMALL_SINGLE", Version: "v1"},
+		isolation.WorkloadProfilePwn,
+		isolation.ResourceLimits{CPUMillicores: 100, MemoryMiB: 128, EphemeralStorageMiB: 128},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -173,8 +173,8 @@ func TestK3sIntegrationCreateReadyAndCleanup(t *testing.T) {
 		[]provisioner.WorkloadContainer{{
 			Name: "challenge", Image: image, Ports: []int{port}, Expose: true,
 		}},
-		isolation.ProfileRef{Name: "WEB", Version: "v1"},
-		isolation.ProfileRef{Name: "SMALL_SINGLE", Version: "v1"},
+		isolation.WorkloadProfileWeb,
+		isolation.ResourceLimits{CPUMillicores: 100, MemoryMiB: 128, EphemeralStorageMiB: 128},
 	)
 	if err != nil {
 		t.Fatal("integrationCreateCommand() failed")
@@ -216,6 +216,100 @@ func TestK3sIntegrationCreateReadyAndCleanup(t *testing.T) {
 	readyEndpoint, err := hasReadyEndpoint(testCtx, cluster.Client, namespace)
 	if err != nil || !readyEndpoint {
 		t.Fatal("ready EndpointSlice cannot be reconfirmed")
+	}
+}
+
+func TestK3sIntegrationPwnCreateReadyAndCleanup(t *testing.T) {
+	targetID := requireIntegrationEnv(t, "K3S_INTEGRATION_TARGET_ID")
+	kubeconfig := requireIntegrationEnv(t, "K3S_INTEGRATION_KUBECONFIG")
+	gateway := requireIntegrationEnv(t, "K3S_INTEGRATION_PUBLIC_GATEWAY")
+	image := requireIntegrationEnv(t, "K3S_INTEGRATION_IMAGE")
+	port := requireIntegrationPort(t, "K3S_INTEGRATION_CONTAINER_PORT")
+	instanceID := integrationUUID(t)
+
+	registry, err := NewRegistry([]ClusterConfig{{
+		TargetID:       targetID,
+		Provider:       ProviderAWS,
+		Region:         "ap-northeast-2",
+		Architecture:   "amd64",
+		KubeconfigPath: kubeconfig,
+		PublicGateway:  gateway,
+		ExposureMode:   ExposureModeNodePort,
+		Enabled:        true,
+		SecurityCapabilities: SecurityCapabilities{
+			NetworkPolicyEnforced:          true,
+			SupplementalGroupsPolicyStrict: true,
+			PodPIDLimitEnforced:            true,
+			NetworkPolicyProvider:          "kube-router",
+			DNSNamespace:                   "kube-system",
+			DNSPodSelector:                 map[string]string{"k8s-app": "kube-dns"},
+			RuntimeClasses:                 []string{"gvisor"},
+		},
+	}}, KubeconfigClientFactory{})
+	if err != nil {
+		t.Fatal("NewRegistry() failed")
+	}
+	cluster, err := registry.Lookup(targetID)
+	if err != nil {
+		t.Fatal("Registry.Lookup() failed")
+	}
+	testCtx, cancel := context.WithTimeout(context.Background(), 7*time.Minute)
+	defer cancel()
+	namespace, err := NamespaceForInstance(instanceID)
+	if err != nil {
+		t.Fatal("NamespaceForInstance() failed")
+	}
+	t.Cleanup(func() { deleteIntegrationNamespace(t, cluster.Client, namespace) })
+
+	adapter, err := NewAdapter(registry, AdapterConfig{
+		ReadyTimeout: 5 * time.Minute, PollInterval: time.Second, RollbackTimeout: 30 * time.Second,
+	})
+	if err != nil {
+		t.Fatal("NewAdapter() failed")
+	}
+	command, err := integrationCreateCommand(
+		targetID,
+		instanceID,
+		integrationUUID(t),
+		[]provisioner.WorkloadContainer{{Name: "challenge", Image: image, Ports: []int{port}, Expose: true}},
+		isolation.WorkloadProfilePwn,
+		isolation.ResourceLimits{CPUMillicores: 100, MemoryMiB: 128, EphemeralStorageMiB: 128},
+	)
+	if err != nil {
+		t.Fatal("integrationCreateCommand() failed")
+	}
+	result, err := adapter.CreateWorkload(testCtx, command)
+	if err != nil {
+		t.Fatal("CreateWorkload() failed")
+	}
+	if len(result.Endpoints) != 1 || result.Endpoints[0].Protocol != isolation.EndpointProtocolTCP ||
+		!strings.HasPrefix(result.Endpoints[0].ServiceURL, "tcp://") {
+		t.Fatalf("Pwn endpoints = %#v", result.Endpoints)
+	}
+	deployment, err := cluster.Client.AppsV1().Deployments(namespace).Get(testCtx, resourceName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal("Pwn deployment cannot be retrieved")
+	}
+	if deployment.Spec.Template.Spec.RuntimeClassName == nil || *deployment.Spec.Template.Spec.RuntimeClassName != "gvisor" {
+		t.Fatalf("runtimeClassName = %#v", deployment.Spec.Template.Spec.RuntimeClassName)
+	}
+	service, err := cluster.Client.CoreV1().Services(namespace).Get(testCtx, resourceName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal("Pwn service cannot be retrieved")
+	}
+	if service.Spec.Type != corev1.ServiceTypeNodePort || len(service.Spec.Ports) != 1 || service.Spec.Ports[0].NodePort == 0 {
+		t.Fatalf("Pwn service = %#v", service.Spec)
+	}
+	policies, err := cluster.Client.NetworkingV1().NetworkPolicies(namespace).List(testCtx, metav1.ListOptions{})
+	if err != nil {
+		t.Fatal("Pwn NetworkPolicies cannot be retrieved")
+	}
+	foundDefaultDeny := false
+	for _, policy := range policies.Items {
+		foundDefaultDeny = foundDefaultDeny || policy.Name == "default-deny-all"
+	}
+	if !foundDefaultDeny {
+		t.Fatalf("Pwn NetworkPolicies = %#v, want default-deny-all", policies.Items)
 	}
 }
 
@@ -277,8 +371,8 @@ func TestK3sIntegrationCreateMultiContainerReadyAndDelete(t *testing.T) {
 			{Name: "web", Image: image, Ports: []int{port}, Expose: true},
 			{Name: "internal", Image: image, Ports: []int{port}, Expose: false},
 		},
-		isolation.ProfileRef{Name: "WEB", Version: "v1"},
-		isolation.ProfileRef{Name: "SMALL_MULTI", Version: "v1"},
+		isolation.WorkloadProfileWeb,
+		isolation.ResourceLimits{CPUMillicores: 200, MemoryMiB: 256, EphemeralStorageMiB: 256},
 	)
 	if err != nil {
 		t.Fatal("integrationCreateCommand() failed")
@@ -338,18 +432,9 @@ func integrationCreateCommand(
 	instanceID string,
 	requestID string,
 	containers []provisioner.WorkloadContainer,
-	workloadProfileRef isolation.ProfileRef,
-	resourceRef isolation.ProfileRef,
+	workloadProfile isolation.WorkloadProfile,
+	limits isolation.ResourceLimits,
 ) (provisioner.CreateWorkloadCommand, error) {
-	var limits isolation.ResourceLimits
-	switch resourceRef {
-	case (isolation.ProfileRef{Name: "SMALL_SINGLE", Version: "v1"}):
-		limits = isolation.ResourceLimits{CPUMillicores: 100, MemoryMiB: 128, EphemeralStorageMiB: 128}
-	case (isolation.ProfileRef{Name: "SMALL_MULTI", Version: "v1"}):
-		limits = isolation.ResourceLimits{CPUMillicores: 200, MemoryMiB: 256, EphemeralStorageMiB: 256}
-	default:
-		return provisioner.CreateWorkloadCommand{}, fmt.Errorf("unsupported integration resource profile %s@%s", resourceRef.Name, resourceRef.Version)
-	}
 	requirements := make([]isolation.ContainerRequirement, len(containers))
 	for index, container := range containers {
 		requirements[index] = isolation.ContainerRequirement{
@@ -360,13 +445,9 @@ func integrationCreateCommand(
 		}
 	}
 	policyRequest := isolation.Request{
-		ChallengeID:        "k3s-integration",
-		IsolationRef:       isolation.ProfileRef{Name: "STANDARD", Version: "v1"},
-		WorkloadProfileRef: workloadProfileRef,
-		ResourceRef:        resourceRef,
-		Containers:         requirements,
-		OutboundMode:       isolation.OutboundNone,
-		ResourceLimits:     limits,
+		WorkloadProfile: workloadProfile,
+		Containers:      requirements,
+		ResourceLimits:  limits,
 	}
 	policy, err := isolation.NewStaticResolver().Resolve(policyRequest)
 	if err != nil {
@@ -376,7 +457,6 @@ func integrationCreateCommand(
 		RequestID:      requestID,
 		InstanceID:     instanceID,
 		TeamID:         18,
-		ChallengeRef:   provisioner.ChallengeRef{ChallengeID: policy.ChallengeID, Version: "integration"},
 		RuntimeType:    provisioner.RuntimeTypeKubernetes,
 		TargetID:       targetID,
 		Containers:     append([]provisioner.WorkloadContainer(nil), containers...),

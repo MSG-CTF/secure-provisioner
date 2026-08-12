@@ -69,8 +69,7 @@ type InternalConnection struct {
 type OutboundMode string
 
 const (
-	OutboundNone           OutboundMode = "NONE"
-	OutboundPublicInternet OutboundMode = "PUBLIC_INTERNET"
+	OutboundNone OutboundMode = "NONE"
 )
 
 type Request struct {
@@ -81,10 +80,8 @@ type Request struct {
 }
 
 type ResolvedPolicy struct {
-	ChallengeID         string
 	IsolationRef        ProfileRef
 	WorkloadProfileRef  ProfileRef
-	ResourceRef         ProfileRef
 	Baseline            Baseline
 	RuntimeClassName    string
 	EndpointProtocol    EndpointProtocol
