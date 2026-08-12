@@ -150,9 +150,17 @@ func TestBuildResourceSetSpecHashTracksWorkloadProfile(t *testing.T) {
 }
 
 func TestBuildResourceSetAppliesGVisorToEveryPwnDeployment(t *testing.T) {
-	resources, err := BuildResourceSet(nodePortGVisorCluster("aws-dev"), validPwnCreateCommand("aws-dev"))
+	command := validMultiCreateCommand("aws-dev")
+	command.Policy.WorkloadProfileRef = isolation.ProfileRef{Name: "PWN", Version: "v1"}
+	command.Policy.RuntimeClassName = "gvisor"
+	command.Policy.EndpointProtocol = isolation.EndpointProtocolTCP
+	command.Policy.ExposureRequirement = isolation.ExposureNodePortOnly
+	resources, err := BuildResourceSet(nodePortGVisorCluster("aws-dev"), command)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(resources.Deployments) != 2 {
+		t.Fatalf("deployments = %d, want 2", len(resources.Deployments))
 	}
 	for _, deployment := range resources.Deployments {
 		runtimeClassName := deployment.Spec.Template.Spec.RuntimeClassName
