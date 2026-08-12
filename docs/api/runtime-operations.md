@@ -125,7 +125,7 @@ trusted profile과 정확히 일치해야 한다. MVP는 `SMALL_SINGLE@v1`을
 root UID(`run_as_user <= 0`), 잘못된 절대 경로·크기·중첩 writable path, 잘못된
 내부 연결과 지원하지 않는 outbound enum처럼 요청 자체가 유효하지 않으면 `400
 INVALID_REQUEST`다. 형식은 유효하지만 알려지지 않았거나 자원값과 일치하지 않는
-profile, `/proc`·`/sys`·`/var/run/secrets` 아래 writable path, writable 합계가
+profile, `/proc`·`/sys`·`/dev`·`/var/run/secrets` 아래 writable path, writable 합계가
 ephemeral-storage 한도를 넘는 요청, 현재 승인하지 않는 `PUBLIC_INTERNET`은 trusted
 resolver가 `422 ISOLATION_POLICY_REJECTED`로 거절한다.
 
