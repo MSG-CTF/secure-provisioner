@@ -131,6 +131,7 @@ func TestCreateInstanceAcceptsLegacyWireContractWithSafePolicyDefaults(t *testin
 	command := runtime.createCommand
 	if command.ChallengeRef != (provisioner.ChallengeRef{ChallengeID: "legacy", Version: "v1"}) ||
 		command.PolicyRequest.IsolationRef != (isolation.ProfileRef{Name: "STANDARD", Version: "v1"}) ||
+		command.PolicyRequest.WorkloadProfileRef != (isolation.ProfileRef{Name: "WEB", Version: "v1"}) ||
 		command.PolicyRequest.ResourceRef != (isolation.ProfileRef{Name: "SMALL_SINGLE", Version: "v1"}) ||
 		command.PolicyRequest.OutboundMode != isolation.OutboundNone ||
 		command.PolicyRequest.Containers[0].RunAsUser != 10001 ||

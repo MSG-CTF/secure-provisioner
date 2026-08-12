@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
 	"github.com/MSG-CTF/secure-provisioner/internal/k3s"
 	"github.com/MSG-CTF/secure-provisioner/internal/operations"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
@@ -303,6 +304,7 @@ func TestGetOperationReturnsCreateAndDeleteResults(t *testing.T) {
 					Endpoints: []provisioner.WorkloadEndpoint{{
 						ContainerName: "web",
 						Port:          8080,
+						Protocol:      isolation.EndpointProtocolHTTP,
 						ServiceURL:    "https://challenge.example.test",
 					}},
 				}},
@@ -313,6 +315,7 @@ func TestGetOperationReturnsCreateAndDeleteResults(t *testing.T) {
 				Endpoints: []WorkloadEndpointResponse{{
 					ContainerName: "web",
 					Port:          8080,
+					Protocol:      "HTTP",
 					ServiceURL:    "https://challenge.example.test",
 				}},
 			},

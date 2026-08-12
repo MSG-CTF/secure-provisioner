@@ -19,6 +19,7 @@ func TestCreateWorkloadRequestDecodesMultipleContainers(t *testing.T) {
 		"team_id":18,
 		"challenge_ref":{"challenge_id":"web-chall2","version":"2026.08.1"},
 		"isolation_ref":{"name":"STANDARD","version":"v1"},
+		"workload_profile_ref":{"name":"WEB","version":"v1"},
 		"resource_profile_ref":{"name":"SMALL_MULTI","version":"v1"},
 		"target":{"runtime_type":"KUBERNETES","target_id":"aws-dev"},
 		"workload":{
@@ -74,6 +75,7 @@ func TestCreateWorkloadRequestConvertsApprovedIsolationRequirements(t *testing.T
 	request := validMultiCreateWorkloadRequest()
 	request.ChallengeRef = ChallengeRef{ChallengeID: "web-chall2", Version: "2026.08.1"}
 	request.IsolationRef = ProfileRef{Name: "STANDARD", Version: "v1"}
+	request.WorkloadProfileRef = ProfileRef{Name: "WEB", Version: "v1"}
 	request.ResourceProfileRef = ProfileRef{Name: "SMALL_MULTI", Version: "v1"}
 	request.Workload.Containers[0].RunAsUser = 101
 	request.Workload.Containers[0].WritablePaths = []WritablePath{{Path: "/tmp", SizeMiB: 64}}
@@ -89,10 +91,13 @@ func TestCreateWorkloadRequestConvertsApprovedIsolationRequirements(t *testing.T
 		t.Fatal(err)
 	}
 	command := request.ToCommand()
-	if command.ChallengeRef.ChallengeID != "web-chall2" || command.PolicyRequest.IsolationRef.Name != "STANDARD" {
+	if command.ChallengeRef.ChallengeID != "web-chall2" || command.PolicyRequest.IsolationRef.Name != "STANDARD" ||
+		command.PolicyRequest.WorkloadProfileRef != (isolation.ProfileRef{Name: "WEB", Version: "v1"}) {
 		t.Fatalf("command = %#v", command)
 	}
 	if command.Policy.IsolationRef.Name != "STANDARD" ||
+		command.Policy.WorkloadProfileRef != command.PolicyRequest.WorkloadProfileRef ||
+		!command.PolicyRequest.Containers[0].Expose ||
 		command.PolicyRequest.Containers[0].RunAsUser != 101 ||
 		!reflect.DeepEqual(command.PolicyRequest.Containers[0].WritablePaths, command.Policy.Containers[0].WritablePaths) ||
 		len(command.PolicyRequest.InternalConnections) != 1 ||
@@ -108,6 +113,7 @@ func TestCreateWorkloadRequestRejectsInvalidIsolation(t *testing.T) {
 	}{
 		{name: "missing challenge", mutate: func(request *CreateWorkloadRequest) { request.ChallengeRef.ChallengeID = "" }},
 		{name: "missing isolation profile", mutate: func(request *CreateWorkloadRequest) { request.IsolationRef.Name = "" }},
+		{name: "missing workload profile", mutate: func(request *CreateWorkloadRequest) { request.WorkloadProfileRef.Name = "" }},
 		{name: "root UID", mutate: func(request *CreateWorkloadRequest) { request.Workload.Containers[0].RunAsUser = 0 }},
 		{name: "relative writable path", mutate: func(request *CreateWorkloadRequest) {
 			request.Workload.Containers[0].WritablePaths = []WritablePath{{Path: "tmp", SizeMiB: 8}}
@@ -166,6 +172,7 @@ func TestCreateWorkloadRequestDefaultsLegacyMultiContainerPolicy(t *testing.T) {
 
 	command := request.ToCommand()
 	if command.PolicyRequest.ResourceRef != (isolation.ProfileRef{Name: "SMALL_MULTI", Version: "v1"}) ||
+		command.PolicyRequest.WorkloadProfileRef != (isolation.ProfileRef{Name: "WEB", Version: "v1"}) ||
 		command.PolicyRequest.Containers[0].RunAsUser != 10001 ||
 		command.PolicyRequest.Containers[1].RunAsUser != 10001 ||
 		command.PolicyRequest.ResourceLimits != (isolation.ResourceLimits{CPUMillicores: 200, MemoryMiB: 256, EphemeralStorageMiB: 256}) {
@@ -181,6 +188,7 @@ func TestCreateWorkloadRequestAcceptsNullableOptionalPolicyRequirements(t *testi
 		"team_id":18,
 		"challenge_ref":{"challenge_id":"web-chall2","version":"2026.08.1"},
 		"isolation_ref":{"name":"STANDARD","version":"v1"},
+		"workload_profile_ref":{"name":"WEB","version":"v1"},
 		"resource_profile_ref":{"name":"SMALL_MULTI","version":"v1"},
 		"target":{"runtime_type":"KUBERNETES","target_id":"aws-dev"},
 		"workload":{
@@ -329,6 +337,7 @@ func validMultiCreateWorkloadRequest() CreateWorkloadRequest {
 			Version:     "2026.08.1",
 		},
 		IsolationRef:       ProfileRef{Name: "STANDARD", Version: "v1"},
+		WorkloadProfileRef: ProfileRef{Name: "WEB", Version: "v1"},
 		ResourceProfileRef: ProfileRef{Name: "SMALL_MULTI", Version: "v1"},
 		Target: RuntimeTarget{
 			RuntimeType: RuntimeTypeKubernetes,
@@ -365,6 +374,7 @@ func validIsolationCreateWorkloadRequest() CreateWorkloadRequest {
 	request := validMultiCreateWorkloadRequest()
 	request.ChallengeRef = ChallengeRef{ChallengeID: "web-chall2", Version: "2026.08.1"}
 	request.IsolationRef = ProfileRef{Name: "STANDARD", Version: "v1"}
+	request.WorkloadProfileRef = ProfileRef{Name: "WEB", Version: "v1"}
 	request.ResourceProfileRef = ProfileRef{Name: "SMALL_MULTI", Version: "v1"}
 	request.Workload.Containers[0].RunAsUser = 101
 	request.Workload.Containers[0].WritablePaths = []WritablePath{{Path: "/tmp", SizeMiB: 64}}
@@ -388,6 +398,7 @@ func validCreateWorkloadRequest() CreateWorkloadRequest {
 			Version:     "2026.08.1",
 		},
 		IsolationRef:       ProfileRef{Name: "STANDARD", Version: "v1"},
+		WorkloadProfileRef: ProfileRef{Name: "WEB", Version: "v1"},
 		ResourceProfileRef: ProfileRef{Name: "SMALL_SINGLE", Version: "v1"},
 		Target: RuntimeTarget{
 			RuntimeType: RuntimeTypeKubernetes,
@@ -413,6 +424,7 @@ func validCreateRequestJSON() string {
 		"team_id":1,
 		"challenge_ref":{"challenge_id":"web-chall1","version":"2026.08.1"},
 		"isolation_ref":{"name":"STANDARD","version":"v1"},
+		"workload_profile_ref":{"name":"WEB","version":"v1"},
 		"resource_profile_ref":{"name":"SMALL_SINGLE","version":"v1"},
 		"target":{"runtime_type":"KUBERNETES","target_id":"cluster-main"},
 		"workload":{

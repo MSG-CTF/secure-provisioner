@@ -54,6 +54,7 @@ type CreateWorkloadResult struct {
 type WorkloadEndpoint struct {
 	ContainerName string
 	Port          int
+	Protocol      isolation.EndpointProtocol
 	ServiceURL    string
 }
 

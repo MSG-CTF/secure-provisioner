@@ -39,8 +39,10 @@ func TestCreateOperationCopiesPolicyAndIncludesItInIdempotency(t *testing.T) {
 	command := provisioner.CreateWorkloadCommand{
 		RequestID: "req-policy",
 		PolicyRequest: isolation.Request{
+			IsolationRef:       isolation.ProfileRef{Name: "STANDARD", Version: "v1"},
+			WorkloadProfileRef: isolation.ProfileRef{Name: "WEB", Version: "v1"},
 			Containers: []isolation.ContainerRequirement{{
-				Name: "web", Ports: []int{8080}, RunAsUser: 101,
+				Name: "web", Ports: []int{8080}, Expose: true, RunAsUser: 101,
 				WritablePaths: []isolation.WritablePath{{Path: "/tmp", SizeMiB: 64}},
 			}},
 			InternalConnections: []isolation.InternalConnection{{
@@ -48,9 +50,12 @@ func TestCreateOperationCopiesPolicyAndIncludesItInIdempotency(t *testing.T) {
 			}},
 		},
 		Policy: isolation.ResolvedPolicy{
-			IsolationRef: isolation.ProfileRef{Name: "STANDARD", Version: "v1"},
+			IsolationRef:        isolation.ProfileRef{Name: "STANDARD", Version: "v1"},
+			WorkloadProfileRef:  isolation.ProfileRef{Name: "WEB", Version: "v1"},
+			EndpointProtocol:    isolation.EndpointProtocolHTTP,
+			ExposureRequirement: isolation.ExposureAnySupported,
 			Containers: []isolation.ContainerRequirement{{
-				Name: "web", Ports: []int{8080}, RunAsUser: 101,
+				Name: "web", Ports: []int{8080}, Expose: true, RunAsUser: 101,
 				WritablePaths: []isolation.WritablePath{{Path: "/tmp", SizeMiB: 64}},
 			}},
 			InternalConnections: []isolation.InternalConnection{{
@@ -93,6 +98,12 @@ func TestCreateOperationCopiesPolicyAndIncludesItInIdempotency(t *testing.T) {
 		}},
 		{name: "internal connections", mutate: func(command *provisioner.CreateWorkloadCommand) {
 			command.Policy.InternalConnections[0].Port = 9090
+		}},
+		{name: "workload profile", mutate: func(command *provisioner.CreateWorkloadCommand) {
+			command.Policy.WorkloadProfileRef = isolation.ProfileRef{Name: "PWN", Version: "v1"}
+		}},
+		{name: "endpoint protocol", mutate: func(command *provisioner.CreateWorkloadCommand) {
+			command.Policy.EndpointProtocol = isolation.EndpointProtocolTCP
 		}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {

@@ -38,6 +38,9 @@ paths:
                   isolation_ref:
                     name: STANDARD
                     version: v1
+                  workload_profile_ref:
+                    name: WEB
+                    version: v1
                   resource_profile_ref:
                     name: SMALL_MULTI
                     version: v1
@@ -102,6 +105,9 @@ paths:
                     version: 2026.08.1
                   isolation_ref:
                     name: STANDARD
+                    version: v1
+                  workload_profile_ref:
+                    name: WEB
                     version: v1
                   resource_profile_ref:
                     name: SMALL_MULTI
@@ -315,6 +321,7 @@ paths:
                       endpoints:
                         - container_name: web
                           port: 8080
+                          protocol: HTTP
                           service_url: http://203.0.113.10:31042
                 DeleteSucceeded:
                   value:
@@ -960,6 +967,10 @@ components:
                 properties:
                   isolation_ref: {}
               - required:
+                  - workload_profile_ref
+                properties:
+                  workload_profile_ref: {}
+              - required:
                   - resource_profile_ref
                 properties:
                   resource_profile_ref: {}
@@ -971,6 +982,7 @@ components:
           required:
             - challenge_ref
             - isolation_ref
+            - workload_profile_ref
             - resource_profile_ref
           properties:
             workload:
@@ -989,6 +1001,8 @@ components:
         challenge_ref:
           $ref: "#/components/schemas/ChallengeRef"
         isolation_ref:
+          $ref: "#/components/schemas/ProfileRef"
+        workload_profile_ref:
           $ref: "#/components/schemas/ProfileRef"
         resource_profile_ref:
           $ref: "#/components/schemas/ProfileRef"
@@ -1070,6 +1084,7 @@ components:
       required:
         - container_name
         - port
+        - protocol
         - service_url
       properties:
         container_name:
@@ -1078,6 +1093,11 @@ components:
           type: integer
           minimum: 1
           maximum: 65535
+        protocol:
+          type: string
+          enum:
+            - HTTP
+            - TCP
         service_url:
           type: string
           format: uri

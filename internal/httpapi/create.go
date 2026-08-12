@@ -74,6 +74,7 @@ type CreateWorkloadRequest struct {
 	TeamID              int64           `json:"team_id"`
 	ChallengeRef        ChallengeRef    `json:"challenge_ref"`
 	IsolationRef        ProfileRef      `json:"isolation_ref"`
+	WorkloadProfileRef  ProfileRef      `json:"workload_profile_ref"`
 	ResourceProfileRef  ProfileRef      `json:"resource_profile_ref"`
 	Target              RuntimeTarget   `json:"target"`
 	Workload            RuntimeWorkload `json:"workload"`
@@ -175,7 +176,7 @@ func hasPolicyFieldPresence(data []byte) bool {
 	if json.Unmarshal(data, &topLevel) != nil {
 		return false
 	}
-	if hasAnyJSONKey(topLevel, "challenge_ref", "isolation_ref", "resource_profile_ref") {
+	if hasAnyJSONKey(topLevel, "challenge_ref", "isolation_ref", "workload_profile_ref", "resource_profile_ref") {
 		return true
 	}
 
@@ -278,6 +279,7 @@ func (request *CreateWorkloadRequest) applyLegacyPolicyDefaults(containers []pro
 	}
 	request.ChallengeRef = ChallengeRef{ChallengeID: "legacy", Version: "v1"}
 	request.IsolationRef = ProfileRef{Name: "STANDARD", Version: "v1"}
+	request.WorkloadProfileRef = ProfileRef{Name: "WEB", Version: "v1"}
 	request.Workload.OutboundMode = string(isolation.OutboundNone)
 	if len(containers) == 1 {
 		request.ResourceProfileRef = ProfileRef{Name: "SMALL_SINGLE", Version: "v1"}
@@ -293,7 +295,7 @@ func (request *CreateWorkloadRequest) applyLegacyPolicyDefaults(containers []pro
 
 func (request CreateWorkloadRequest) usesLegacyPolicyContract() bool {
 	if request.policyFieldsPresent || request.ChallengeRef != (ChallengeRef{}) || request.IsolationRef != (ProfileRef{}) ||
-		request.ResourceProfileRef != (ProfileRef{}) || request.Workload.OutboundMode != "" ||
+		request.WorkloadProfileRef != (ProfileRef{}) || request.ResourceProfileRef != (ProfileRef{}) || request.Workload.OutboundMode != "" ||
 		len(request.Workload.InternalConnections) != 0 {
 		return false
 	}
@@ -396,6 +398,9 @@ func (request CreateWorkloadRequest) validateIsolation(containers []provisioner.
 	if !validProfileRef(request.IsolationRef) {
 		return fmt.Errorf("isolation_ref name and version are required")
 	}
+	if !validProfileRef(request.WorkloadProfileRef) {
+		return fmt.Errorf("workload_profile_ref name and version are required")
+	}
 	if !validProfileRef(request.ResourceProfileRef) {
 		return fmt.Errorf("resource_profile_ref name and version are required")
 	}
@@ -464,6 +469,7 @@ func (request CreateWorkloadRequest) toPolicyRequest(containers []provisioner.Wo
 		requirements[index] = isolation.ContainerRequirement{
 			Name:          container.Name,
 			Ports:         append([]int(nil), container.Ports...),
+			Expose:        container.Expose,
 			RunAsUser:     runAsUser,
 			WritablePaths: make([]isolation.WritablePath, len(writablePaths)),
 		}
@@ -483,6 +489,7 @@ func (request CreateWorkloadRequest) toPolicyRequest(containers []provisioner.Wo
 	return isolation.Request{
 		ChallengeID:         request.ChallengeRef.ChallengeID,
 		IsolationRef:        isolation.ProfileRef{Name: request.IsolationRef.Name, Version: request.IsolationRef.Version},
+		WorkloadProfileRef:  isolation.ProfileRef{Name: request.WorkloadProfileRef.Name, Version: request.WorkloadProfileRef.Version},
 		ResourceRef:         isolation.ProfileRef{Name: request.ResourceProfileRef.Name, Version: request.ResourceProfileRef.Version},
 		Containers:          requirements,
 		InternalConnections: connections,
@@ -499,6 +506,7 @@ func unresolvedPolicy(request isolation.Request) isolation.ResolvedPolicy {
 	return isolation.ResolvedPolicy{
 		ChallengeID:         request.ChallengeID,
 		IsolationRef:        request.IsolationRef,
+		WorkloadProfileRef:  request.WorkloadProfileRef,
 		ResourceRef:         request.ResourceRef,
 		Containers:          request.Containers,
 		InternalConnections: request.InternalConnections,

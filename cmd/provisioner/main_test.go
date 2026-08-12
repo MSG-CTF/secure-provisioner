@@ -111,6 +111,7 @@ func TestNewApplicationQueuesCreateThroughRuntimeService(t *testing.T) {
 		"team_id":18,
 		"challenge_ref":{"challenge_id":"web-chall1","version":"2026.08.1"},
 		"isolation_ref":{"name":"STANDARD","version":"v1"},
+		"workload_profile_ref":{"name":"WEB","version":"v1"},
 		"resource_profile_ref":{"name":"SMALL_SINGLE","version":"v1"},
 		"target":{"runtime_type":"KUBERNETES","target_id":"aws-dev"},
 		"workload":{

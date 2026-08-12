@@ -94,6 +94,7 @@ type OperationResultResponse struct {
 type WorkloadEndpointResponse struct {
 	ContainerName string `json:"container_name"`
 	Port          int    `json:"port"`
+	Protocol      string `json:"protocol"`
 	ServiceURL    string `json:"service_url"`
 }
 
@@ -320,6 +321,7 @@ func newWorkloadEndpointResponse(endpoint provisioner.WorkloadEndpoint) Workload
 	return WorkloadEndpointResponse{
 		ContainerName: endpoint.ContainerName,
 		Port:          endpoint.Port,
+		Protocol:      string(endpoint.Protocol),
 		ServiceURL:    endpoint.ServiceURL,
 	}
 }

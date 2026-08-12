@@ -802,11 +802,12 @@ func createCommand() provisioner.CreateWorkloadCommand {
 			EphemeralStorageMiB: 128,
 		},
 		PolicyRequest: isolation.Request{
-			ChallengeID:  "web-chall1",
-			IsolationRef: isolation.ProfileRef{Name: "STANDARD", Version: "v1"},
-			ResourceRef:  isolation.ProfileRef{Name: "SMALL_SINGLE", Version: "v1"},
+			ChallengeID:        "web-chall1",
+			IsolationRef:       isolation.ProfileRef{Name: "STANDARD", Version: "v1"},
+			WorkloadProfileRef: isolation.ProfileRef{Name: "WEB", Version: "v1"},
+			ResourceRef:        isolation.ProfileRef{Name: "SMALL_SINGLE", Version: "v1"},
 			Containers: []isolation.ContainerRequirement{{
-				Name: "challenge", Ports: []int{8080}, RunAsUser: 10001,
+				Name: "challenge", Ports: []int{8080}, Expose: true, RunAsUser: 10001,
 			}},
 			OutboundMode:   isolation.OutboundNone,
 			ResourceLimits: isolation.ResourceLimits{CPUMillicores: 100, MemoryMiB: 128, EphemeralStorageMiB: 128},
@@ -834,11 +835,12 @@ func createPolicyCommand() provisioner.CreateWorkloadCommand {
 		{Name: "api", Image: "registry.example.invalid/api@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Ports: []int{8080}},
 	}
 	command.PolicyRequest = isolation.Request{
-		ChallengeID:  "web-chall2",
-		IsolationRef: isolation.ProfileRef{Name: "STANDARD", Version: "v1"},
-		ResourceRef:  isolation.ProfileRef{Name: "SMALL_MULTI", Version: "v1"},
+		ChallengeID:        "web-chall2",
+		IsolationRef:       isolation.ProfileRef{Name: "STANDARD", Version: "v1"},
+		WorkloadProfileRef: isolation.ProfileRef{Name: "WEB", Version: "v1"},
+		ResourceRef:        isolation.ProfileRef{Name: "SMALL_MULTI", Version: "v1"},
 		Containers: []isolation.ContainerRequirement{
-			{Name: "web", Ports: []int{8000}, RunAsUser: 101, WritablePaths: []isolation.WritablePath{{Path: "/tmp", SizeMiB: 64}}},
+			{Name: "web", Ports: []int{8000}, Expose: true, RunAsUser: 101, WritablePaths: []isolation.WritablePath{{Path: "/tmp", SizeMiB: 64}}},
 			{Name: "api", Ports: []int{8080}, RunAsUser: 10001},
 		},
 		InternalConnections: []isolation.InternalConnection{{
