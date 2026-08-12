@@ -27,7 +27,6 @@ type RuntimeWorkload struct {
 	ContainerPort       int                  `json:"container_port,omitempty"`
 	Containers          []RuntimeContainer   `json:"containers,omitempty"`
 	InternalConnections []InternalConnection `json:"internal_connections,omitempty"`
-	OutboundMode        string               `json:"outbound_mode"`
 	ResourceLimits      ResourceLimits       `json:"resource_limits"`
 }
 
@@ -38,16 +37,6 @@ type RuntimeContainer struct {
 	Expose        bool           `json:"expose"`
 	RunAsUser     int64          `json:"run_as_user"`
 	WritablePaths []WritablePath `json:"writable_paths,omitempty"`
-}
-
-type ChallengeRef struct {
-	ChallengeID string `json:"challenge_id"`
-	Version     string `json:"version"`
-}
-
-type ProfileRef struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
 }
 
 type WritablePath struct {
@@ -69,16 +58,12 @@ type ResourceLimits struct {
 }
 
 type CreateWorkloadRequest struct {
-	RequestID           string          `json:"request_id"`
-	InstanceID          string          `json:"instance_id"`
-	TeamID              int64           `json:"team_id"`
-	ChallengeRef        ChallengeRef    `json:"challenge_ref"`
-	IsolationRef        ProfileRef      `json:"isolation_ref"`
-	WorkloadProfileRef  ProfileRef      `json:"workload_profile_ref"`
-	ResourceProfileRef  ProfileRef      `json:"resource_profile_ref"`
-	Target              RuntimeTarget   `json:"target"`
-	Workload            RuntimeWorkload `json:"workload"`
-	policyFieldsPresent bool
+	RequestID        string          `json:"request_id"`
+	InstanceID       string          `json:"instance_id"`
+	TeamID           int64           `json:"team_id"`
+	IsolationProfile string          `json:"isolation_profile"`
+	Target           RuntimeTarget   `json:"target"`
+	Workload         RuntimeWorkload `json:"workload"`
 }
 
 func (request *CreateWorkloadRequest) UnmarshalJSON(data []byte) error {
@@ -93,7 +78,6 @@ func (request *CreateWorkloadRequest) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*request = CreateWorkloadRequest(decoded)
-	request.policyFieldsPresent = hasPolicyFieldPresence(data)
 	return nil
 }
 
@@ -171,61 +155,6 @@ func scanJSONValue(decoder *json.Decoder) error {
 	}
 }
 
-func hasPolicyFieldPresence(data []byte) bool {
-	var topLevel map[string]json.RawMessage
-	if json.Unmarshal(data, &topLevel) != nil {
-		return false
-	}
-	if hasAnyJSONKey(topLevel, "challenge_ref", "isolation_ref", "workload_profile_ref", "resource_profile_ref") {
-		return true
-	}
-
-	var workload map[string]json.RawMessage
-	workloadJSON, _ := jsonField(topLevel, "workload")
-	if json.Unmarshal(workloadJSON, &workload) != nil {
-		return false
-	}
-	if hasAnyJSONKey(workload, "outbound_mode", "internal_connections") {
-		return true
-	}
-
-	var containers []json.RawMessage
-	containersJSON, _ := jsonField(workload, "containers")
-	if json.Unmarshal(containersJSON, &containers) != nil {
-		return false
-	}
-	for _, rawContainer := range containers {
-		var container map[string]json.RawMessage
-		if json.Unmarshal(rawContainer, &container) != nil {
-			continue
-		}
-		if hasAnyJSONKey(container, "run_as_user", "writable_paths") {
-			return true
-		}
-	}
-	return false
-}
-
-func hasAnyJSONKey(fields map[string]json.RawMessage, names ...string) bool {
-	for key := range fields {
-		for _, name := range names {
-			if strings.EqualFold(key, name) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func jsonField(fields map[string]json.RawMessage, name string) (json.RawMessage, bool) {
-	for key, value := range fields {
-		if strings.EqualFold(key, name) {
-			return value, true
-		}
-	}
-	return nil, false
-}
-
 type CreateWorkloadResponse struct {
 	RuntimeWorkloadID string                     `json:"runtime_workload_id"`
 	ServiceURL        string                     `json:"service_url"`
@@ -241,6 +170,10 @@ func (request *CreateWorkloadRequest) Validate() error {
 	}
 	if request.TeamID <= 0 {
 		return fmt.Errorf("team_id must be positive")
+	}
+	if request.IsolationProfile != string(isolation.WorkloadProfileWeb) &&
+		request.IsolationProfile != string(isolation.WorkloadProfilePwn) {
+		return fmt.Errorf("isolation_profile must be WEB or PWN")
 	}
 	if request.Target.RuntimeType != RuntimeTypeKubernetes {
 		return fmt.Errorf("runtime_type must be %s", RuntimeTypeKubernetes)
@@ -266,57 +199,18 @@ func (request *CreateWorkloadRequest) Validate() error {
 		request.Workload.ResourceLimits.EphemeralStorageMiB < len(containers) {
 		return fmt.Errorf("resource limits must provide at least one unit per container")
 	}
-	request.applyLegacyPolicyDefaults(containers)
 	if err := request.validateIsolation(containers); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (request *CreateWorkloadRequest) applyLegacyPolicyDefaults(containers []provisioner.WorkloadContainer) {
-	if !request.usesLegacyPolicyContract() {
-		return
-	}
-	request.ChallengeRef = ChallengeRef{ChallengeID: "legacy", Version: "v1"}
-	request.IsolationRef = ProfileRef{Name: "STANDARD", Version: "v1"}
-	request.WorkloadProfileRef = ProfileRef{Name: "WEB", Version: "v1"}
-	request.Workload.OutboundMode = string(isolation.OutboundNone)
-	if len(containers) == 1 {
-		request.ResourceProfileRef = ProfileRef{Name: "SMALL_SINGLE", Version: "v1"}
-		request.Workload.ResourceLimits = ResourceLimits{CPUMillicores: 100, MemoryMiB: 128, EphemeralStorageMiB: 128}
-	} else {
-		request.ResourceProfileRef = ProfileRef{Name: "SMALL_MULTI", Version: "v1"}
-		request.Workload.ResourceLimits = ResourceLimits{CPUMillicores: 200, MemoryMiB: 256, EphemeralStorageMiB: 256}
-	}
-	for index := range request.Workload.Containers {
-		request.Workload.Containers[index].RunAsUser = 10001
-	}
-}
-
-func (request CreateWorkloadRequest) usesLegacyPolicyContract() bool {
-	if request.policyFieldsPresent || request.ChallengeRef != (ChallengeRef{}) || request.IsolationRef != (ProfileRef{}) ||
-		request.WorkloadProfileRef != (ProfileRef{}) || request.ResourceProfileRef != (ProfileRef{}) || request.Workload.OutboundMode != "" ||
-		len(request.Workload.InternalConnections) != 0 {
-		return false
-	}
-	for _, container := range request.Workload.Containers {
-		if container.RunAsUser != 0 || len(container.WritablePaths) != 0 {
-			return false
-		}
-	}
-	return true
-}
-
 func (request CreateWorkloadRequest) ToCommand() provisioner.CreateWorkloadCommand {
 	containers, _ := request.normalizedContainers()
 	return provisioner.CreateWorkloadCommand{
-		RequestID:  request.RequestID,
-		InstanceID: request.InstanceID,
-		TeamID:     request.TeamID,
-		ChallengeRef: provisioner.ChallengeRef{
-			ChallengeID: request.ChallengeRef.ChallengeID,
-			Version:     request.ChallengeRef.Version,
-		},
+		RequestID:   request.RequestID,
+		InstanceID:  request.InstanceID,
+		TeamID:      request.TeamID,
 		RuntimeType: provisioner.RuntimeType(request.Target.RuntimeType),
 		TargetID:    request.Target.TargetID,
 		Containers:  containers,
@@ -392,23 +286,6 @@ func (request CreateWorkloadRequest) normalizedContainers() ([]provisioner.Workl
 }
 
 func (request CreateWorkloadRequest) validateIsolation(containers []provisioner.WorkloadContainer) error {
-	if strings.TrimSpace(request.ChallengeRef.ChallengeID) == "" || strings.TrimSpace(request.ChallengeRef.Version) == "" {
-		return fmt.Errorf("challenge_ref challenge_id and version are required")
-	}
-	if !validProfileRef(request.IsolationRef) {
-		return fmt.Errorf("isolation_ref name and version are required")
-	}
-	if !validProfileRef(request.WorkloadProfileRef) {
-		return fmt.Errorf("workload_profile_ref name and version are required")
-	}
-	if !validProfileRef(request.ResourceProfileRef) {
-		return fmt.Errorf("resource_profile_ref name and version are required")
-	}
-	if request.Workload.OutboundMode != string(isolation.OutboundNone) &&
-		request.Workload.OutboundMode != string(isolation.OutboundPublicInternet) {
-		return fmt.Errorf("outbound_mode must be NONE or PUBLIC_INTERNET")
-	}
-
 	portsByContainer := make(map[string]map[int]struct{}, len(containers))
 	for index, container := range containers {
 		runAsUser := int64(10001)
@@ -487,13 +364,9 @@ func (request CreateWorkloadRequest) toPolicyRequest(containers []provisioner.Wo
 		}
 	}
 	return isolation.Request{
-		ChallengeID:         request.ChallengeRef.ChallengeID,
-		IsolationRef:        isolation.ProfileRef{Name: request.IsolationRef.Name, Version: request.IsolationRef.Version},
-		WorkloadProfileRef:  isolation.ProfileRef{Name: request.WorkloadProfileRef.Name, Version: request.WorkloadProfileRef.Version},
-		ResourceRef:         isolation.ProfileRef{Name: request.ResourceProfileRef.Name, Version: request.ResourceProfileRef.Version},
+		WorkloadProfile:     isolation.WorkloadProfile(request.IsolationProfile),
 		Containers:          requirements,
 		InternalConnections: connections,
-		OutboundMode:        isolation.OutboundMode(request.Workload.OutboundMode),
 		ResourceLimits: isolation.ResourceLimits{
 			CPUMillicores:       request.Workload.ResourceLimits.CPUMillicores,
 			MemoryMiB:           request.Workload.ResourceLimits.MemoryMiB,
@@ -504,19 +377,13 @@ func (request CreateWorkloadRequest) toPolicyRequest(containers []provisioner.Wo
 
 func unresolvedPolicy(request isolation.Request) isolation.ResolvedPolicy {
 	return isolation.ResolvedPolicy{
-		ChallengeID:         request.ChallengeID,
-		IsolationRef:        request.IsolationRef,
-		WorkloadProfileRef:  request.WorkloadProfileRef,
-		ResourceRef:         request.ResourceRef,
+		IsolationRef:        isolation.ProfileRef{Name: "STANDARD", Version: "v1"},
+		WorkloadProfileRef:  isolation.ProfileRef{Name: string(request.WorkloadProfile), Version: "v1"},
 		Containers:          request.Containers,
 		InternalConnections: request.InternalConnections,
-		OutboundMode:        request.OutboundMode,
+		OutboundMode:        isolation.OutboundNone,
 		ResourceLimits:      request.ResourceLimits,
 	}
-}
-
-func validProfileRef(ref ProfileRef) bool {
-	return strings.TrimSpace(ref.Name) != "" && strings.TrimSpace(ref.Version) != ""
 }
 
 func nestedHTTPPath(first, second string) bool {

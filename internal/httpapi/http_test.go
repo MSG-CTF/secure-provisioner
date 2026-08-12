@@ -19,7 +19,7 @@ func TestCreateInstanceAcceptsSchedulerContract(t *testing.T) {
 	runtime := &recordingRuntimeUseCase{
 		operation: operations.Operation{
 			ID:          "operation-create-01",
-			RequestID:   "req-01",
+			RequestID:   "req-multi",
 			Type:        operations.OperationTypeCreate,
 			Status:      operations.OperationStatusQueued,
 			MaxAttempts: 3,
@@ -53,7 +53,7 @@ func TestCreateInstanceAcceptsSchedulerContract(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if result.OperationID != "operation-create-01" || result.RequestID != "req-01" ||
+	if result.OperationID != "operation-create-01" || result.RequestID != "req-multi" ||
 		result.Type != "CREATE" || result.Status != "QUEUED" || result.Created == nil || !*result.Created {
 		t.Fatalf("result = %#v", result)
 	}
@@ -79,7 +79,7 @@ func TestCreateInstanceDirectPathResolvesPolicyBeforeCreate(t *testing.T) {
 	}
 	if useCase.calls != 1 || !useCase.command.Policy.Baseline.RunAsNonRoot ||
 		!useCase.command.Policy.Baseline.ReadOnlyRootFilesystem ||
-		useCase.command.ResourceLimits.MemoryMiB != 256 {
+		useCase.command.ResourceLimits.MemoryMiB != 512 {
 		t.Fatalf("calls = %d; command = %#v", useCase.calls, useCase.command)
 	}
 }
@@ -87,7 +87,10 @@ func TestCreateInstanceDirectPathResolvesPolicyBeforeCreate(t *testing.T) {
 func TestCreateInstanceDirectPathMapsPolicyRejectionTo422(t *testing.T) {
 	useCase := &recordingCreateUseCase{}
 	createRequest := validIsolationCreateWorkloadRequest()
-	createRequest.Workload.OutboundMode = "PUBLIC_INTERNET"
+	createRequest.Workload.Containers[0].WritablePaths = []WritablePath{
+		{Path: "/tmp/a", SizeMiB: 800},
+		{Path: "/tmp/b", SizeMiB: 800},
+	}
 	requestBody, err := json.Marshal(createRequest)
 	if err != nil {
 		t.Fatal(err)
@@ -104,7 +107,7 @@ func TestCreateInstanceDirectPathMapsPolicyRejectionTo422(t *testing.T) {
 	assertErrorCode(t, response, "ISOLATION_POLICY_REJECTED")
 }
 
-func TestCreateInstanceAcceptsLegacyWireContractWithSafePolicyDefaults(t *testing.T) {
+func TestCreateInstanceAcceptsDeprecatedSingleContainerWireContractWithExplicitProfile(t *testing.T) {
 	runtime := &recordingRuntimeUseCase{
 		operation: operations.Operation{ID: "operation-legacy", RequestID: "req-legacy", Type: operations.OperationTypeCreate, Status: operations.OperationStatusQueued},
 		created:   true,
@@ -114,6 +117,7 @@ func TestCreateInstanceAcceptsLegacyWireContractWithSafePolicyDefaults(t *testin
 		"request_id":"req-legacy",
 		"instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001",
 		"team_id":1,
+		"isolation_profile":"WEB",
 		"target":{"runtime_type":"KUBERNETES","target_id":"cluster-main"},
 		"workload":{
 			"image":"registry.msgctf.local/challenges/web-01@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -129,55 +133,34 @@ func TestCreateInstanceAcceptsLegacyWireContractWithSafePolicyDefaults(t *testin
 		t.Fatalf("status = %d; calls = %d; body = %s", response.Code, runtime.createCalls, response.Body.String())
 	}
 	command := runtime.createCommand
-	if command.ChallengeRef != (provisioner.ChallengeRef{ChallengeID: "legacy", Version: "v1"}) ||
-		command.PolicyRequest.IsolationRef != (isolation.ProfileRef{Name: "STANDARD", Version: "v1"}) ||
-		command.PolicyRequest.WorkloadProfileRef != (isolation.ProfileRef{Name: "WEB", Version: "v1"}) ||
-		command.PolicyRequest.ResourceRef != (isolation.ProfileRef{Name: "SMALL_SINGLE", Version: "v1"}) ||
-		command.PolicyRequest.OutboundMode != isolation.OutboundNone ||
+	if command.PolicyRequest.WorkloadProfile != isolation.WorkloadProfileWeb ||
 		command.PolicyRequest.Containers[0].RunAsUser != 10001 ||
-		command.ResourceLimits != (provisioner.ResourceLimits{CPUMillicores: 100, MemoryMiB: 128, EphemeralStorageMiB: 128}) {
+		command.ResourceLimits != (provisioner.ResourceLimits{CPUMillicores: 500, MemoryMiB: 512, EphemeralStorageMiB: 1024}) {
 		t.Fatalf("legacy command = %#v", command)
 	}
 }
 
-func TestCreateInstanceRejectsExplicitEmptyLegacyPolicyFields(t *testing.T) {
+func TestCreateInstanceRejectsRemovedPolicyFieldsAndMissingProfile(t *testing.T) {
 	legacySingle := legacyWireRequestJSON()
-	legacyMulti := legacyMultiWireRequestJSON()
 	testCases := []struct {
 		name string
 		body string
 	}{
 		{
-			name: "empty isolation ref",
+			name: "removed isolation ref",
 			body: strings.Replace(legacySingle, `"team_id":1,`, `"team_id":1,"isolation_ref":{},`, 1),
 		},
 		{
-			name: "null isolation ref",
-			body: strings.Replace(legacySingle, `"team_id":1,`, `"team_id":1,"isolation_ref":null,`, 1),
+			name: "removed workload profile ref",
+			body: strings.Replace(legacySingle, `"team_id":1,`, `"team_id":1,"workload_profile_ref":{"name":"WEB","version":"v1"},`, 1),
 		},
 		{
-			name: "noncanonical empty isolation ref",
-			body: strings.Replace(legacySingle, `"team_id":1,`, `"team_id":1,"ISOLATION_REF":{},`, 1),
+			name: "removed outbound mode",
+			body: strings.Replace(legacySingle, `"workload":{`, `"workload":{"outbound_mode":"NONE",`, 1),
 		},
 		{
-			name: "empty outbound mode",
-			body: strings.Replace(legacySingle, `"workload":{`, `"workload":{"outbound_mode":"",`, 1),
-		},
-		{
-			name: "noncanonical workload with empty outbound mode",
-			body: strings.Replace(legacySingle, `"workload":{`, `"WORKLOAD":{"outbound_mode":"",`, 1),
-		},
-		{
-			name: "zero run as user",
-			body: strings.Replace(legacyMulti, `"expose":true`, `"expose":true,"run_as_user":0`, 1),
-		},
-		{
-			name: "empty writable paths",
-			body: strings.Replace(legacyMulti, `"expose":true`, `"expose":true,"writable_paths":[]`, 1),
-		},
-		{
-			name: "empty internal connections",
-			body: strings.Replace(legacySingle, `"workload":{`, `"workload":{"internal_connections":[],`, 1),
+			name: "missing isolation profile",
+			body: strings.Replace(legacySingle, `"isolation_profile":"WEB",`, "", 1),
 		},
 	}
 
@@ -249,11 +232,11 @@ func TestCreateInstanceRejectsDuplicateJSONKeysAtEveryObjectLevel(t *testing.T) 
 			body: strings.Replace(legacySingle, `"workload":{`, `"WORKLOAD":null,"workload":{`, 1),
 		},
 		{
-			name: "duplicate policy child",
+			name: "duplicate isolation profile",
 			body: strings.Replace(
 				validCreateRequestJSON(),
-				`"isolation_ref":{"name":"STANDARD","version":"v1"}`,
-				`"isolation_ref":{"name":"STANDARD","name":"STANDARD","version":"v1"}`,
+				`"isolation_profile":"WEB"`,
+				`"isolation_profile":"WEB","ISOLATION_PROFILE":"WEB"`,
 				1,
 			),
 		},
@@ -356,6 +339,7 @@ func TestCreateInstanceRejectsInvalidResourceValues(t *testing.T) {
 		"request_id":"req-01",
 		"instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001",
 		"team_id":1,
+		"isolation_profile":"WEB",
 		"target":{"runtime_type":"KUBERNETES","target_id":"cluster-main"},
 		"workload":{
 			"image":"registry.example.test/challenge@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -451,6 +435,7 @@ func legacyWireRequestJSON() string {
 		"request_id":"req-legacy",
 		"instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001",
 		"team_id":1,
+		"isolation_profile":"WEB",
 		"target":{"runtime_type":"KUBERNETES","target_id":"cluster-main"},
 		"workload":{
 			"image":"registry.msgctf.local/challenges/web-01@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -465,11 +450,12 @@ func legacyMultiWireRequestJSON() string {
 		"request_id":"req-legacy-multi",
 		"instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001",
 		"team_id":18,
+		"isolation_profile":"WEB",
 		"target":{"runtime_type":"KUBERNETES","target_id":"aws-dev"},
 		"workload":{
 			"containers":[
-				{"name":"web","image":"web:latest","ports":[8080],"expose":true},
-				{"name":"api","image":"api:latest","ports":[8080],"expose":false}
+				{"name":"web","image":"web:latest","ports":[8080],"expose":true,"run_as_user":10001},
+				{"name":"api","image":"api:latest","ports":[8080],"expose":false,"run_as_user":10002}
 			],
 			"resource_limits":{"cpu_millicores":501,"memory_mib":513,"ephemeral_storage_mib":1025}
 		}
