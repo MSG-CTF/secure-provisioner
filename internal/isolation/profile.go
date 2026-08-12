@@ -29,9 +29,24 @@ type WritablePath struct {
 type ContainerRequirement struct {
 	Name          string
 	Ports         []int
+	Expose        bool
 	RunAsUser     int64
 	WritablePaths []WritablePath
 }
+
+type EndpointProtocol string
+
+const (
+	EndpointProtocolHTTP EndpointProtocol = "HTTP"
+	EndpointProtocolTCP  EndpointProtocol = "TCP"
+)
+
+type ExposureRequirement string
+
+const (
+	ExposureAnySupported ExposureRequirement = "ANY_SUPPORTED"
+	ExposureNodePortOnly ExposureRequirement = "NODE_PORT_ONLY"
+)
 
 type Protocol string
 
@@ -54,6 +69,7 @@ const (
 type Request struct {
 	ChallengeID         string
 	IsolationRef        ProfileRef
+	WorkloadProfileRef  ProfileRef
 	ResourceRef         ProfileRef
 	Containers          []ContainerRequirement
 	InternalConnections []InternalConnection
@@ -64,8 +80,12 @@ type Request struct {
 type ResolvedPolicy struct {
 	ChallengeID         string
 	IsolationRef        ProfileRef
+	WorkloadProfileRef  ProfileRef
 	ResourceRef         ProfileRef
 	Baseline            Baseline
+	RuntimeClassName    string
+	EndpointProtocol    EndpointProtocol
+	ExposureRequirement ExposureRequirement
 	Containers          []ContainerRequirement
 	InternalConnections []InternalConnection
 	OutboundMode        OutboundMode

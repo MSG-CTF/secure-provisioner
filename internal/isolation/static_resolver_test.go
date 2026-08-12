@@ -2,6 +2,7 @@ package isolation_test
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
@@ -24,6 +25,36 @@ func TestStaticResolverResolvesStandardPolicyWithoutAllowingBaselineOverrides(t 
 	}
 }
 
+func TestStaticResolverComposesWebOnStandard(t *testing.T) {
+	request := validRequest()
+
+	got, err := isolation.NewStaticResolver().Resolve(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.WorkloadProfileRef != request.WorkloadProfileRef ||
+		got.RuntimeClassName != "" ||
+		got.EndpointProtocol != isolation.EndpointProtocolHTTP ||
+		got.ExposureRequirement != isolation.ExposureAnySupported {
+		t.Fatalf("resolved Web policy = %#v", got)
+	}
+}
+
+func TestStaticResolverComposesPwnOnStandard(t *testing.T) {
+	request := validPwnRequest()
+
+	got, err := isolation.NewStaticResolver().Resolve(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.WorkloadProfileRef != request.WorkloadProfileRef ||
+		got.RuntimeClassName != "gvisor" ||
+		got.EndpointProtocol != isolation.EndpointProtocolTCP ||
+		got.ExposureRequirement != isolation.ExposureNodePortOnly {
+		t.Fatalf("resolved Pwn policy = %#v", got)
+	}
+}
+
 func TestStaticResolverRejectsUnknownProfiles(t *testing.T) {
 	for _, testCase := range []struct {
 		name   string
@@ -31,6 +62,9 @@ func TestStaticResolverRejectsUnknownProfiles(t *testing.T) {
 	}{
 		{name: "isolation", mutate: func(request *isolation.Request) {
 			request.IsolationRef.Name = "UNRESTRICTED"
+		}},
+		{name: "workload", mutate: func(request *isolation.Request) {
+			request.WorkloadProfileRef.Name = "KERNEL"
 		}},
 		{name: "resource", mutate: func(request *isolation.Request) {
 			request.ResourceRef.Version = "v2"
@@ -57,12 +91,58 @@ func TestStaticResolverRejectsRootUID(t *testing.T) {
 }
 
 func TestStaticResolverRejectsReservedWritablePaths(t *testing.T) {
-	for _, path := range []string{"/proc", "/proc/self", "/sys", "/sys/kernel", "/var/run/secrets", "/var/run/secrets/kubernetes.io"} {
+	for _, path := range []string{"/proc", "/proc/self", "/sys", "/sys/kernel", "/dev", "/dev/shm", "/var/run/secrets", "/var/run/secrets/kubernetes.io"} {
 		t.Run(path, func(t *testing.T) {
 			request := validRequest()
 			request.Containers[0].WritablePaths = []isolation.WritablePath{{Path: path, SizeMiB: 1}}
 			assertRejected(t, request)
 		})
+	}
+}
+
+func TestStaticResolverRejectsWebWithoutExposedContainer(t *testing.T) {
+	request := validRequest()
+	for index := range request.Containers {
+		request.Containers[index].Expose = false
+	}
+	assertRejected(t, request)
+}
+
+func TestStaticResolverRejectsPwnWithoutExactlyOneExposedContainer(t *testing.T) {
+	for _, exposed := range []int{0, 2} {
+		t.Run(fmt.Sprintf("exposed-%d", exposed), func(t *testing.T) {
+			request := validPwnRequest()
+			request.ResourceRef = isolation.ProfileRef{Name: "SMALL_MULTI", Version: "v1"}
+			request.ResourceLimits = isolation.ResourceLimits{CPUMillicores: 200, MemoryMiB: 256, EphemeralStorageMiB: 256}
+			request.Containers = append(request.Containers, isolation.ContainerRequirement{
+				Name: "sidecar", Ports: []int{9000}, RunAsUser: 10002,
+			})
+			request.Containers[0].Expose = exposed > 0
+			request.Containers[1].Expose = exposed > 1
+			assertRejected(t, request)
+		})
+	}
+}
+
+func TestStaticResolverRejectsPwnWithMultipleExposedPorts(t *testing.T) {
+	request := validPwnRequest()
+	request.Containers[0].Ports = []int{31337, 31338}
+	assertRejected(t, request)
+}
+
+func TestStaticResolverRestrictsPwnWritablePathsToTmp(t *testing.T) {
+	for _, writablePath := range []string{"/var/tmp", "/tmp2"} {
+		t.Run(writablePath, func(t *testing.T) {
+			request := validPwnRequest()
+			request.Containers[0].WritablePaths = []isolation.WritablePath{{Path: writablePath, SizeMiB: 8}}
+			assertRejected(t, request)
+		})
+	}
+
+	request := validPwnRequest()
+	request.Containers[0].WritablePaths = []isolation.WritablePath{{Path: "/tmp/cache", SizeMiB: 8}}
+	if _, err := isolation.NewStaticResolver().Resolve(request); err != nil {
+		t.Fatalf("Resolve() rejected /tmp descendant: %v", err)
 	}
 }
 
@@ -123,11 +203,12 @@ func TestStaticResolverRejectsPublicInternet(t *testing.T) {
 
 func validRequest() isolation.Request {
 	return isolation.Request{
-		ChallengeID:  "web-chall2",
-		IsolationRef: isolation.ProfileRef{Name: "STANDARD", Version: "v1"},
-		ResourceRef:  isolation.ProfileRef{Name: "SMALL_MULTI", Version: "v1"},
+		ChallengeID:        "web-chall2",
+		IsolationRef:       isolation.ProfileRef{Name: "STANDARD", Version: "v1"},
+		WorkloadProfileRef: isolation.ProfileRef{Name: "WEB", Version: "v1"},
+		ResourceRef:        isolation.ProfileRef{Name: "SMALL_MULTI", Version: "v1"},
 		Containers: []isolation.ContainerRequirement{
-			{Name: "web", Ports: []int{8080}, RunAsUser: 101, WritablePaths: []isolation.WritablePath{{Path: "/tmp", SizeMiB: 64}}},
+			{Name: "web", Ports: []int{8080}, Expose: true, RunAsUser: 101, WritablePaths: []isolation.WritablePath{{Path: "/tmp", SizeMiB: 64}}},
 			{Name: "api", Ports: []int{8080}, RunAsUser: 10001},
 		},
 		InternalConnections: []isolation.InternalConnection{{
@@ -135,6 +216,21 @@ func validRequest() isolation.Request {
 		}},
 		OutboundMode:   isolation.OutboundNone,
 		ResourceLimits: isolation.ResourceLimits{CPUMillicores: 200, MemoryMiB: 256, EphemeralStorageMiB: 256},
+	}
+}
+
+func validPwnRequest() isolation.Request {
+	return isolation.Request{
+		ChallengeID:        "pwn-buffer-01",
+		IsolationRef:       isolation.ProfileRef{Name: "STANDARD", Version: "v1"},
+		WorkloadProfileRef: isolation.ProfileRef{Name: "PWN", Version: "v1"},
+		ResourceRef:        isolation.ProfileRef{Name: "SMALL_SINGLE", Version: "v1"},
+		Containers: []isolation.ContainerRequirement{{
+			Name: "challenge", Ports: []int{31337}, Expose: true, RunAsUser: 10001,
+			WritablePaths: []isolation.WritablePath{{Path: "/tmp", SizeMiB: 64}},
+		}},
+		OutboundMode:   isolation.OutboundNone,
+		ResourceLimits: isolation.ResourceLimits{CPUMillicores: 100, MemoryMiB: 128, EphemeralStorageMiB: 128},
 	}
 }
 

@@ -19,6 +19,10 @@ func (r *StaticResolver) Resolve(request Request) (ResolvedPolicy, error) {
 	if request.IsolationRef != (ProfileRef{Name: "STANDARD", Version: "v1"}) {
 		return ResolvedPolicy{}, rejected("unsupported isolation profile")
 	}
+	runtimeClassName, endpointProtocol, exposureRequirement, err := resolveWorkloadProfile(request.WorkloadProfileRef)
+	if err != nil {
+		return ResolvedPolicy{}, err
+	}
 
 	expectedLimits, err := resourceProfile(request.ResourceRef)
 	if err != nil {
@@ -36,14 +40,21 @@ func (r *StaticResolver) Resolve(request Request) (ResolvedPolicy, error) {
 	if err := validateContainers(request.Containers, request.ResourceLimits); err != nil {
 		return ResolvedPolicy{}, err
 	}
+	if err := validateWorkloadProfile(request.WorkloadProfileRef, request.Containers); err != nil {
+		return ResolvedPolicy{}, err
+	}
 	if err := validateInternalConnections(request.Containers, request.InternalConnections); err != nil {
 		return ResolvedPolicy{}, err
 	}
 
 	return ResolvedPolicy{
-		ChallengeID:  request.ChallengeID,
-		IsolationRef: request.IsolationRef,
-		ResourceRef:  request.ResourceRef,
+		ChallengeID:         request.ChallengeID,
+		IsolationRef:        request.IsolationRef,
+		WorkloadProfileRef:  request.WorkloadProfileRef,
+		ResourceRef:         request.ResourceRef,
+		RuntimeClassName:    runtimeClassName,
+		EndpointProtocol:    endpointProtocol,
+		ExposureRequirement: exposureRequirement,
 		Baseline: Baseline{
 			AutomountServiceAccountToken: false,
 			RunAsNonRoot:                 true,
@@ -58,6 +69,17 @@ func (r *StaticResolver) Resolve(request Request) (ResolvedPolicy, error) {
 		OutboundMode:        request.OutboundMode,
 		ResourceLimits:      request.ResourceLimits,
 	}, nil
+}
+
+func resolveWorkloadProfile(ref ProfileRef) (string, EndpointProtocol, ExposureRequirement, error) {
+	switch ref {
+	case ProfileRef{Name: "WEB", Version: "v1"}:
+		return "", EndpointProtocolHTTP, ExposureAnySupported, nil
+	case ProfileRef{Name: "PWN", Version: "v1"}:
+		return "gvisor", EndpointProtocolTCP, ExposureNodePortOnly, nil
+	default:
+		return "", "", "", rejected("unsupported workload profile")
+	}
 }
 
 func resourceProfile(ref ProfileRef) (ResourceLimits, error) {
@@ -122,6 +144,36 @@ func validateContainers(containers []ContainerRequirement, limits ResourceLimits
 	return nil
 }
 
+func validateWorkloadProfile(ref ProfileRef, containers []ContainerRequirement) error {
+	exposedContainers := 0
+	for _, container := range containers {
+		if container.Expose {
+			exposedContainers++
+			if ref == (ProfileRef{Name: "PWN", Version: "v1"}) && len(container.Ports) != 1 {
+				return rejected("Pwn workload must expose exactly one port")
+			}
+		}
+		if ref == (ProfileRef{Name: "PWN", Version: "v1"}) {
+			for _, writable := range container.WritablePaths {
+				if writable.Path != "/tmp" && !strings.HasPrefix(writable.Path, "/tmp/") {
+					return rejected("Pwn writable path must be under /tmp")
+				}
+			}
+		}
+	}
+
+	if ref == (ProfileRef{Name: "PWN", Version: "v1"}) {
+		if exposedContainers != 1 {
+			return rejected("Pwn workload must expose exactly one container")
+		}
+		return nil
+	}
+	if exposedContainers == 0 {
+		return rejected("Web workload must expose at least one container")
+	}
+	return nil
+}
+
 func validateInternalConnections(containers []ContainerRequirement, connections []InternalConnection) error {
 	portsByContainer := make(map[string]map[int]struct{}, len(containers))
 	for _, container := range containers {
@@ -153,7 +205,7 @@ func validWritablePath(value string) bool {
 	if value == "" || !strings.HasPrefix(value, "/") || path.Clean(value) != value || value == "/" {
 		return false
 	}
-	for _, reserved := range []string{"/proc", "/sys", "/var/run/secrets"} {
+	for _, reserved := range []string{"/proc", "/sys", "/dev", "/var/run/secrets"} {
 		if value == reserved || strings.HasPrefix(value, reserved+"/") {
 			return false
 		}
