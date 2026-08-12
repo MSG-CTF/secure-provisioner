@@ -2,12 +2,14 @@ package httpapi
 
 import (
 	"encoding/json"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
+	"sigs.k8s.io/yaml"
 )
 
 func TestCreateWorkloadRequestDecodesSimplifiedMultiContainerContract(t *testing.T) {
@@ -169,6 +171,23 @@ func TestCreateWorkloadRequestRejectsInvalidIsolationRequirements(t *testing.T) 
 		{name: "unsupported protocol", mutate: func(request *CreateWorkloadRequest) {
 			request.Workload.InternalConnections[0].Protocol = "UDP"
 		}},
+		{name: "reserved writable path", mutate: func(request *CreateWorkloadRequest) {
+			request.Workload.Containers[0].WritablePaths = []WritablePath{{Path: "/proc/self", SizeMiB: 8}}
+		}},
+		{name: "writable paths exceed ephemeral storage", mutate: func(request *CreateWorkloadRequest) {
+			request.Workload.Containers[0].WritablePaths = []WritablePath{
+				{Path: "/tmp/a", SizeMiB: 800},
+				{Path: "/tmp/b", SizeMiB: 800},
+			}
+		}},
+		{name: "Pwn exposes multiple containers", mutate: func(request *CreateWorkloadRequest) {
+			request.IsolationProfile = "PWN"
+			request.Workload.InternalConnections = nil
+			request.Workload.Containers[0].WritablePaths = nil
+			request.Workload.Containers[0].Ports = []int{31337}
+			request.Workload.Containers[1].Expose = true
+			request.Workload.Containers[1].Ports = []int{31338}
+		}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			request := validCreateWorkloadRequest()
@@ -242,6 +261,47 @@ func TestCreateWorkloadRequestRejectsDuplicateJSONKeysAtEveryObjectLevel(t *test
 		var request CreateWorkloadRequest
 		if err := json.Unmarshal([]byte(body), &request); err == nil {
 			t.Fatal("Unmarshal() error = nil")
+		}
+	}
+}
+
+func TestDocumentedCreateRequestExamplesDecodeAndValidate(t *testing.T) {
+	specification, err := os.ReadFile("../../docs/api/secure-provisioner.openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Paths map[string]struct {
+			Post struct {
+				RequestBody struct {
+					Content map[string]struct {
+						Examples map[string]struct {
+							Value any `json:"value"`
+						} `json:"examples"`
+					} `json:"content"`
+				} `json:"requestBody"`
+			} `json:"post"`
+		} `json:"paths"`
+	}
+	if err := yaml.Unmarshal(specification, &document); err != nil {
+		t.Fatal(err)
+	}
+	examples := document.Paths["/internal/v1/instances"].Post.RequestBody.Content["application/json"].Examples
+	for _, name := range []string{"MultiContainer", "Pwn", "DeprecatedSingleContainer", "ExplicitNullableRequirements"} {
+		example, found := examples[name]
+		if !found {
+			t.Fatalf("OpenAPI create example %q not found", name)
+		}
+		encoded, err := json.Marshal(example.Value)
+		if err != nil {
+			t.Fatalf("marshal %s: %v", name, err)
+		}
+		var request CreateWorkloadRequest
+		if err := json.Unmarshal(encoded, &request); err != nil {
+			t.Fatalf("decode %s: %v", name, err)
+		}
+		if err := request.Validate(); err != nil {
+			t.Fatalf("validate %s: %v", name, err)
 		}
 	}
 }

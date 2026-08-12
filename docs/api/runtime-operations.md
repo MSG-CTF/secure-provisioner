@@ -6,7 +6,7 @@
 - OpenAPI: `docs/api/secure-provisioner.openapi.yaml`
 - 설계 문서:
   `docs/superpowers/specs/2026-07-28-async-runtime-operations-status-design.md`
-  및 `docs/superpowers/specs/2026-07-30-multi-container-runtime-design.md`
+  및 `docs/superpowers/specs/2026-08-12-simple-isolation-profile-api-design.md`
 
 ## 공통 규칙
 
@@ -48,22 +48,7 @@ Content-Type: application/json
   "request_id": "runtime-create-018f3f1e",
   "instance_id": "018f3f1e-21b8-7a91-a30b-63b3400fd001",
   "team_id": 18,
-  "challenge_ref": {
-    "challenge_id": "web-chall2",
-    "version": "2026.08.1"
-  },
-  "isolation_ref": {
-    "name": "STANDARD",
-    "version": "v1"
-  },
-  "workload_profile_ref": {
-    "name": "WEB",
-    "version": "v1"
-  },
-  "resource_profile_ref": {
-    "name": "SMALL_MULTI",
-    "version": "v1"
-  },
+  "isolation_profile": "WEB",
   "target": {
     "runtime_type": "KUBERNETES",
     "target_id": "aws-k3s-001"
@@ -72,18 +57,18 @@ Content-Type: application/json
     "containers": [
       {
         "name": "web",
-        "image": "ghcr.io/msg-ctf/challenges/oob-test/web:latest",
+        "image": "ghcr.io/msg-ctf/challenges/oob-test/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "ports": [8080],
         "expose": true,
         "run_as_user": 101,
         "writable_paths": [
-          {"path": "/tmp", "size_mib": 64}
+          {"path": "/tmp/web", "size_mib": 64}
         ]
       },
       {
         "name": "api",
-        "image": "ghcr.io/msg-ctf/challenges/oob-test/web:latest",
-        "ports": [8080],
+        "image": "ghcr.io/msg-ctf/challenges/oob-test/api@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "ports": [9000],
         "expose": false,
         "run_as_user": 10001
       }
@@ -93,14 +78,13 @@ Content-Type: application/json
         "source_container": "web",
         "destination_container": "api",
         "protocol": "TCP",
-        "port": 8080
+        "port": 9000
       }
     ],
-    "outbound_mode": "NONE",
     "resource_limits": {
-      "cpu_millicores": 200,
-      "memory_mib": 256,
-      "ephemeral_storage_mib": 256
+      "cpu_millicores": 500,
+      "memory_mib": 512,
+      "ephemeral_storage_mib": 1024
     }
   }
 }
@@ -110,50 +94,42 @@ Content-Type: application/json
 한다. 각 컨테이너는 내부 포트를 여러 개 가질 수 있다. `expose: true`인
 컨테이너의 포트만 외부 접속점으로 공개되며, 적어도 하나는 공개돼야 한다.
 
-`challenge_ref`, `isolation_ref`, `workload_profile_ref`, `resource_profile_ref`, `outbound_mode`와 각
-명시적 컨테이너의 `run_as_user`는 마이그레이션 중인 정책 필드다. 이 중 하나라도
-보내면 전부 보내야 하며 일부만 보내거나 빈 객체/값을 명시하면 `400
-INVALID_REQUEST`다. `writable_paths`와 `internal_connections`는 명시적 정책
-요청 안에서 선택 사항이며, 위 예제는 non-root UID, 크기가 제한된 `/tmp`,
-`web -> api:8080/TCP`, 외부 송신 차단 `NONE`을 선언한다. API는 raw Pod spec,
-SecurityContext, ServiceAccount, RBAC, RuntimeClass, host namespace/hostPath 같은
-Kubernetes 보안 설정을 받지 않는다.
+`isolation_profile`은 필수이며 정확히 `WEB` 또는 `PWN`이어야 한다. 누락하거나
+소문자·알 수 없는 값을 보내면 `400 INVALID_REQUEST`다. Provisioner는 이를 각각
+`STANDARD@v1 + WEB@v1` 또는 `STANDARD@v1 + PWN@v1`으로 내부 합성한다. caller는
+baseline 버전, RuntimeClass 또는 Kubernetes 보안 설정을 직접 선택할 수 없다.
 
-`resource_limits`는 문제 런타임 전체의 합산값이며 `resource_profile_ref`의
-trusted profile과 정확히 일치해야 한다. MVP는 `SMALL_SINGLE@v1`을
-100m/128MiB/128MiB, `SMALL_MULTI@v1`을 200m/256MiB/256MiB로 해석한다.
-root UID(`run_as_user <= 0`), 잘못된 절대 경로·크기·중첩 writable path, 잘못된
-내부 연결과 지원하지 않는 outbound enum처럼 요청 자체가 유효하지 않으면 `400
-INVALID_REQUEST`다. 형식은 유효하지만 알려지지 않았거나 자원값과 일치하지 않는
-profile, `/proc`·`/sys`·`/dev`·`/var/run/secrets` 아래 writable path, writable 합계가
-ephemeral-storage 한도를 넘는 요청, 현재 승인하지 않는 `PUBLIC_INTERNET`은 trusted
-resolver가 `422 ISOLATION_POLICY_REJECTED`로 거절한다.
+`writable_paths`와 `internal_connections`는 선택 사항이다. 연결을 생략하면 같은
+Namespace 안의 컨테이너 사이라도 자동 허용하지 않는다. 위 예제는
+`web -> api:9000/TCP`만 허용한다. 모든 워크로드의 public internet egress는
+Provisioner 내부의 고정 `NONE` 정책으로 차단하며, 외부 API에는 이를 완화하는
+필드를 제공하지 않는다. cluster DNS와 명시적 내부 연결만 egress allowlist에 추가한다.
 
-`isolation_ref`는 모든 문제에서 `STANDARD@v1`로 고정한다. Web 문제는
-`workload_profile_ref: WEB@v1`을 추가해 Target의 기본 runtime을 사용하며
-`INGRESS_PATH`와 `NODE_PORT` Target을 모두 지원한다. 일반 Pwn 문제는 다음처럼
-`PWN@v1`을 추가한다.
+`resource_limits`는 문제 런타임 전체의 CPU·memory·ephemeral-storage 합산값이다.
+Scheduler가 문제별 수치를 결정하고 Provisioner는 양수 및 표현 가능 범위를 검증한 뒤
+Pod requests/limits, ResourceQuota, LimitRange에 그대로 강제한다. named resource
+profile과 비교하지 않는다. root UID, 잘못된 경로·크기·중첩 writable path, 존재하지
+않는 컨테이너나 포트를 가리키는 내부 연결은 거부한다.
+
+Web은 Target의 기본 runtime을 사용하고 `INGRESS_PATH`와 `NODE_PORT` Target을 모두
+지원하며 endpoint protocol은 `HTTP`다. 일반 Pwn 문제는 다음 계약을 사용한다.
 
 ```json
 {
   "request_id": "runtime-create-pwn-018f3f1e",
   "instance_id": "018f3f1e-21b8-7a91-a30b-63b3400fd009",
   "team_id": 18,
-  "challenge_ref": {"challenge_id": "pwn-buffer-01", "version": "2026.08.1"},
-  "isolation_ref": {"name": "STANDARD", "version": "v1"},
-  "workload_profile_ref": {"name": "PWN", "version": "v1"},
-  "resource_profile_ref": {"name": "SMALL_SINGLE", "version": "v1"},
+  "isolation_profile": "PWN",
   "target": {"runtime_type": "KUBERNETES", "target_id": "aws-k3s-pwn-001"},
   "workload": {
     "containers": [{
       "name": "challenge",
-      "image": "ghcr.io/msg-ctf/challenges/pwn-buffer-01:latest",
+      "image": "ghcr.io/msg-ctf/challenges/pwn-buffer-01@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
       "ports": [31337],
       "expose": true,
       "run_as_user": 10001,
       "writable_paths": [{"path": "/tmp", "size_mib": 64}]
     }],
-    "outbound_mode": "NONE",
     "resource_limits": {
       "cpu_millicores": 100,
       "memory_mib": 128,
@@ -165,20 +141,20 @@ resolver가 `422 ISOLATION_POLICY_REJECTED`로 거절한다.
 
 Pwn은 모든 Pod에서 `runtimeClassName: gvisor`를 강제하고, 외부 노출 컨테이너와
 TCP 포트를 각각 하나만 허용하며, writable path는 `/tmp` 또는 그 하위 경로만
-허용한다. Pwn 요청은 `NODE_PORT` Target에만 배치할 수 있다.
+허용한다. endpoint protocol은 `TCP`이며, Pwn 요청은 gVisor가 검증된
+`NODE_PORT` Target에만 배치할 수 있다.
 
 기존 단일 컨테이너 요청의 `image`와 `container_port`도 계속 허용한다. 이 형식은
-서버에서 이름 `challenge`, `expose: true`인 컨테이너 1개로 변환한다.
-`containers`와 기존 필드는 한 요청에서 함께 사용할 수 없다.
+서버에서 이름 `challenge`, `expose: true`, UID `10001`인 컨테이너 1개로 변환한다.
+이 호환 입력도 `isolation_profile`과 수치형 `resource_limits`를 반드시 보내야 하며,
+`containers`와 한 요청에서 함께 사용할 수 없다. 새 Scheduler는 `containers[]`를
+정식 계약으로 사용한다.
 
-정책 마이그레이션 필드를 **모두 생략한** 기존 요청도 계속 허용한다. 서버는
-`legacy@v1`, `STANDARD@v1`, `WEB@v1`, 컨테이너 수에 따른 `SMALL_SINGLE@v1` 또는
-`SMALL_MULTI@v1`, 각 컨테이너 UID `10001`, 빈 writable/internal connection,
-`outbound_mode: NONE`을 적용하고 profile의 자원값으로 정규화한다. 이는 wire
-호환을 위한 임시 기본값이지 caller가 baseline을 선택하거나 덮어쓰는 기능이 아니다.
-
-예제의 GHCR 주소는 로컬 통합 테스트용 입력일 뿐이며 코드에 고정되지 않는다.
-비공개 Package라면 K3s 노드에 GHCR pull credential을 별도로 설정해야 한다.
+Kubernetes PodSpec에는 pre-pull 여부와 관계없이 정확한 image identifier가 필요하므로
+`image`는 계속 전달한다. 모든 컨테이너는 `imagePullPolicy: IfNotPresent`를 사용한다.
+같은 digest가 노드에 있으면 캐시를 사용하고, 없으면 container runtime이 lazy pull한다.
+Pod egress 차단은 node의 image pull을 막지 않는다. 비공개 GHCR Package라면 K3s
+노드에 pull credential을 별도로 설정해야 한다.
 
 ### 응답
 
@@ -204,9 +180,9 @@ Retry-After: 2
 `created`는 `false`다.
 
 CREATE adapter가 성공한 뒤에만 Runtime Binding을 저장한다. Binding에는
-적용된 challenge ID/version, `STANDARD@v1` 같은 isolation profile identity,
-resource profile identity, resolver가 승인한 컨테이너 UID/port/writable path,
-내부 연결, outbound mode, 자원 합산값과 Kubernetes Namespace UID를 방어적으로
+적용된 `STANDARD@v1` baseline과 `WEB@v1` 또는 `PWN@v1` workload profile identity,
+resolver가 승인한 컨테이너 UID/port/writable path, 내부 연결, 고정 outbound mode,
+Scheduler가 전달한 자원 합산값과 Kubernetes Namespace UID를 방어적으로
 복사해 기록한다. Namespace UID는 내부 소유권 확인에만 사용하며 API 응답에는 노출하지 않는다. raw 요청,
 이미지 credential, baseline 보안 플래그 또는 Kubernetes 설정은 기록하지 않는다.
 CREATE adapter의 성공 결과는 Binding 저장보다 먼저 Operation 내부 checkpoint에
@@ -485,14 +461,14 @@ Ready EndpointSlice가 있을 때만 `true`다. `NODE_PORT`에서는 NodePort Se
   UID, read-only root filesystem, privilege escalation·privileged 금지, 모든 Linux
   capability drop, `RuntimeDefault` seccomp와 host namespace 비활성화를 적용한다.
   승인된 writable path만 크기가 제한된 `emptyDir`로 마운트한다.
-- ResourceQuota와 LimitRange는 승인된 resource profile의 CPU·memory·ephemeral-storage
+- ResourceQuota와 LimitRange는 Scheduler가 전달하고 Provisioner가 검증한 CPU·memory·ephemeral-storage
   합계와 namespaced object 수를 제한한다. `NODE_PORT`에서는 공개 컨테이너의 승인된
   포트 수만큼 `services.nodeports` quota를 허용하고 그 이상은 차단한다.
 - `default-deny-all`을 먼저 두고 DNS egress, 공개 컨테이너로 향하는 ingress,
   명시적으로 승인된 컨테이너 간 TCP 연결만 NetworkPolicy allowlist로 연다. 현재
   `INGRESS_PATH`의 공개 ingress source는 설정된 ingress controller로 제한한다.
   `NODE_PORT`는 외부 source를 허용하되 공개 컨테이너의 승인된 포트만 연다. 현재
-  `outbound_mode`는 `NONE`만 승인하므로 그 밖의 외부 egress는 열지 않는다.
+  outbound는 내부적으로 항상 `NONE`이므로 그 밖의 외부 egress는 열지 않는다.
 - Namespace와 모든 기존 리소스의 소유권을 먼저 검사한 뒤 ServiceAccount →
   ResourceQuota → LimitRange → NetworkPolicy 순으로 적용·read-back 검증한다. 이 보호
   리소스가 모두 확인된 뒤에만 Deployment → Service를 적용하고, `INGRESS_PATH`에서만

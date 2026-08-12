@@ -84,7 +84,7 @@ func TestCreateInstanceDirectPathResolvesPolicyBeforeCreate(t *testing.T) {
 	}
 }
 
-func TestCreateInstanceDirectPathMapsPolicyRejectionTo422(t *testing.T) {
+func TestCreateInstanceRejectsInvalidIsolationRequirementsBeforeCreate(t *testing.T) {
 	useCase := &recordingCreateUseCase{}
 	createRequest := validIsolationCreateWorkloadRequest()
 	createRequest.Workload.Containers[0].WritablePaths = []WritablePath{
@@ -101,10 +101,10 @@ func TestCreateInstanceDirectPathMapsPolicyRejectionTo422(t *testing.T) {
 
 	NewHandler(useCase).ServeHTTP(response, request)
 
-	if response.Code != http.StatusUnprocessableEntity || useCase.calls != 0 {
+	if response.Code != http.StatusBadRequest || useCase.calls != 0 {
 		t.Fatalf("status = %d; calls = %d; body = %s", response.Code, useCase.calls, response.Body.String())
 	}
-	assertErrorCode(t, response, "ISOLATION_POLICY_REJECTED")
+	assertErrorCode(t, response, "INVALID_REQUEST")
 }
 
 func TestCreateInstanceAcceptsDeprecatedSingleContainerWireContractWithExplicitProfile(t *testing.T) {

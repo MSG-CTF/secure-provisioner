@@ -202,6 +202,9 @@ func (request *CreateWorkloadRequest) Validate() error {
 	if err := request.validateIsolation(containers); err != nil {
 		return err
 	}
+	if _, err := isolation.NewStaticResolver().Resolve(request.toPolicyRequest(containers)); err != nil {
+		return fmt.Errorf("isolation profile requirements are invalid")
+	}
 	return nil
 }
 
