@@ -560,6 +560,17 @@ func TestBuildResourceSetRejectsNonCanonicalPwnExecutionPolicy(t *testing.T) {
 	}
 }
 
+func TestBuildResourceSetRejectsWebExecutionPolicyWithoutExposedContainer(t *testing.T) {
+	command := validCreateCommand("aws-dev")
+	command.Containers[0].Expose = false
+	command.Policy.Containers[0].Expose = false
+
+	_, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if code := runtimeErrorCode(t, err); code != "INVALID_CREATE_COMMAND" {
+		t.Fatalf("code = %q, want INVALID_CREATE_COMMAND", code)
+	}
+}
+
 func TestAdapterRejectsUnsafeResolvedPathBeforeAnyKubernetesAction(t *testing.T) {
 	command := validCreateCommand("aws-dev")
 	command.Policy.Containers[0].WritablePaths = []isolation.WritablePath{{Path: "/proc/self", SizeMiB: 1}}
