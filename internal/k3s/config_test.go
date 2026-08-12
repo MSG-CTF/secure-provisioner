@@ -21,7 +21,7 @@ func writeRegistryFile(t *testing.T, content string) string {
 	return path
 }
 
-const completeSecurityCapabilitiesJSON = `{"network_policy_enforced":true,"supplemental_groups_policy_strict":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"},"runtime_classes":["gvisor"]}`
+const completeSecurityCapabilitiesJSON = `{"network_policy_enforced":true,"supplemental_groups_policy_strict":true,"pod_pid_limit_enforced":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"},"runtime_classes":["gvisor"]}`
 
 func TestLoadClusterConfigsAcceptsCompleteIsolationCapability(t *testing.T) {
 	path := writeRegistryFile(t, `{"clusters":[{"target_id":"lab","provider":"AWS","region":"ap-northeast-2","architecture":"amd64","kubeconfig_path":"lab.yaml","public_gateway":"https://lab.example","enabled":true,"security_capabilities":`+completeSecurityCapabilitiesJSON+`}]}`)
@@ -36,6 +36,7 @@ func TestLoadClusterConfigsAcceptsCompleteIsolationCapability(t *testing.T) {
 	}
 	if !cluster.Config.SecurityCapabilities.NetworkPolicyEnforced ||
 		!cluster.Config.SecurityCapabilities.SupplementalGroupsPolicyStrict ||
+		!cluster.Config.SecurityCapabilities.PodPIDLimitEnforced ||
 		cluster.Config.SecurityCapabilities.NetworkPolicyProvider != "kube-router" ||
 		len(cluster.Config.SecurityCapabilities.RuntimeClasses) != 1 ||
 		cluster.Config.SecurityCapabilities.RuntimeClasses[0] != "gvisor" {
@@ -44,7 +45,7 @@ func TestLoadClusterConfigsAcceptsCompleteIsolationCapability(t *testing.T) {
 }
 
 func TestLoadClusterConfigsPreservesExplicitUnsupportedCapability(t *testing.T) {
-	capabilities := `{"network_policy_enforced":false,"supplemental_groups_policy_strict":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`
+	capabilities := `{"network_policy_enforced":false,"supplemental_groups_policy_strict":true,"pod_pid_limit_enforced":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`
 	path := writeRegistryFile(t, `{"clusters":[{"target_id":"lab","provider":"AWS","region":"ap-northeast-2","architecture":"amd64","kubeconfig_path":"lab.yaml","public_gateway":"https://lab.example","enabled":true,"security_capabilities":`+capabilities+`}]}`)
 	registry, err := LoadRegistry(path, &sequenceFactory{clients: []kubernetes.Interface{fake.NewSimpleClientset()}})
 	if err != nil {
@@ -60,7 +61,7 @@ func TestLoadClusterConfigsPreservesExplicitUnsupportedCapability(t *testing.T) 
 }
 
 func TestLoadClusterConfigsPreservesExplicitUnsupportedStrictSupplementalGroupsCapability(t *testing.T) {
-	capabilities := `{"network_policy_enforced":true,"supplemental_groups_policy_strict":false,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`
+	capabilities := `{"network_policy_enforced":true,"supplemental_groups_policy_strict":false,"pod_pid_limit_enforced":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`
 	path := writeRegistryFile(t, `{"clusters":[{"target_id":"lab","provider":"AWS","region":"ap-northeast-2","architecture":"amd64","kubeconfig_path":"lab.yaml","public_gateway":"https://lab.example","enabled":true,"security_capabilities":`+capabilities+`}]}`)
 	registry, err := LoadRegistry(path, &sequenceFactory{clients: []kubernetes.Interface{fake.NewSimpleClientset()}})
 	if err != nil {
@@ -80,6 +81,27 @@ func TestLoadClusterConfigsPreservesExplicitUnsupportedStrictSupplementalGroupsC
 	}
 }
 
+func TestLoadClusterConfigsPreservesExplicitUnsupportedPodPIDLimitCapability(t *testing.T) {
+	capabilities := `{"network_policy_enforced":true,"supplemental_groups_policy_strict":true,"pod_pid_limit_enforced":false,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`
+	path := writeRegistryFile(t, `{"clusters":[{"target_id":"lab","provider":"AWS","region":"ap-northeast-2","architecture":"amd64","kubeconfig_path":"lab.yaml","public_gateway":"https://lab.example","enabled":true,"security_capabilities":`+capabilities+`}]}`)
+	registry, err := LoadRegistry(path, &sequenceFactory{clients: []kubernetes.Interface{fake.NewSimpleClientset()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cluster, err := registry.Lookup("lab")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cluster.Config.SecurityCapabilities.PodPIDLimitEnforced {
+		t.Fatal("explicit false Pod PID limit declaration was not preserved")
+	}
+	err = cluster.Supports(isolation.ResolvedPolicy{})
+	var runtimeErr *RuntimeError
+	if !errors.As(err, &runtimeErr) || runtimeErr.Code() != "TARGET_CAPABILITY_MISMATCH" || runtimeErr.Retryable() {
+		t.Fatalf("Cluster.Supports() error = %#v, want non-retryable TARGET_CAPABILITY_MISMATCH", err)
+	}
+}
+
 func TestLoadClusterConfigsRejectsIncompleteIsolationCapability(t *testing.T) {
 	for _, test := range []struct {
 		name         string
@@ -87,17 +109,19 @@ func TestLoadClusterConfigsRejectsIncompleteIsolationCapability(t *testing.T) {
 	}{
 		{name: "missing", capabilities: ""},
 		{name: "null", capabilities: `,"security_capabilities":null`},
-		{name: "missing enforcement declaration", capabilities: `,"security_capabilities":{"supplemental_groups_policy_strict":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`},
-		{name: "missing strict supplemental groups declaration", capabilities: `,"security_capabilities":{"network_policy_enforced":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`},
-		{name: "null strict supplemental groups declaration", capabilities: `,"security_capabilities":{"network_policy_enforced":true,"supplemental_groups_policy_strict":null,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`},
-		{name: "missing provider", capabilities: `,"security_capabilities":{"network_policy_enforced":true,"supplemental_groups_policy_strict":true,"dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`},
-		{name: "missing DNS namespace", capabilities: `,"security_capabilities":{"network_policy_enforced":true,"supplemental_groups_policy_strict":true,"network_policy_provider":"kube-router","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`},
-		{name: "missing ingress namespace", capabilities: `,"security_capabilities":{"network_policy_enforced":true,"supplemental_groups_policy_strict":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`},
-		{name: "empty DNS selector", capabilities: `,"security_capabilities":{"network_policy_enforced":true,"supplemental_groups_policy_strict":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`},
-		{name: "empty ingress selector", capabilities: `,"security_capabilities":{"network_policy_enforced":true,"supplemental_groups_policy_strict":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{}}`},
-		{name: "invalid DNS selector key", capabilities: `,"security_capabilities":{"network_policy_enforced":true,"supplemental_groups_policy_strict":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"invalid key":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`},
-		{name: "invalid ingress selector value", capabilities: `,"security_capabilities":{"network_policy_enforced":true,"supplemental_groups_policy_strict":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"invalid$value"}}`},
-		{name: "malformed selector", capabilities: `,"security_capabilities":{"network_policy_enforced":true,"supplemental_groups_policy_strict":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":["kube-dns"],"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`},
+		{name: "missing enforcement declaration", capabilities: `,"security_capabilities":{"supplemental_groups_policy_strict":true,"pod_pid_limit_enforced":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`},
+		{name: "missing strict supplemental groups declaration", capabilities: `,"security_capabilities":{"network_policy_enforced":true,"pod_pid_limit_enforced":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`},
+		{name: "null strict supplemental groups declaration", capabilities: `,"security_capabilities":{"network_policy_enforced":true,"supplemental_groups_policy_strict":null,"pod_pid_limit_enforced":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`},
+		{name: "missing Pod PID limit declaration", capabilities: `,"security_capabilities":{"network_policy_enforced":true,"supplemental_groups_policy_strict":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`},
+		{name: "null Pod PID limit declaration", capabilities: `,"security_capabilities":{"network_policy_enforced":true,"supplemental_groups_policy_strict":true,"pod_pid_limit_enforced":null,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`},
+		{name: "missing provider", capabilities: `,"security_capabilities":{"network_policy_enforced":true,"supplemental_groups_policy_strict":true,"pod_pid_limit_enforced":true,"dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`},
+		{name: "missing DNS namespace", capabilities: `,"security_capabilities":{"network_policy_enforced":true,"supplemental_groups_policy_strict":true,"pod_pid_limit_enforced":true,"network_policy_provider":"kube-router","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`},
+		{name: "missing ingress namespace", capabilities: `,"security_capabilities":{"network_policy_enforced":true,"supplemental_groups_policy_strict":true,"pod_pid_limit_enforced":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`},
+		{name: "empty DNS selector", capabilities: `,"security_capabilities":{"network_policy_enforced":true,"supplemental_groups_policy_strict":true,"pod_pid_limit_enforced":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`},
+		{name: "empty ingress selector", capabilities: `,"security_capabilities":{"network_policy_enforced":true,"supplemental_groups_policy_strict":true,"pod_pid_limit_enforced":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{}}`},
+		{name: "invalid DNS selector key", capabilities: `,"security_capabilities":{"network_policy_enforced":true,"supplemental_groups_policy_strict":true,"pod_pid_limit_enforced":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"invalid key":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`},
+		{name: "invalid ingress selector value", capabilities: `,"security_capabilities":{"network_policy_enforced":true,"supplemental_groups_policy_strict":true,"pod_pid_limit_enforced":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"invalid$value"}}`},
+		{name: "malformed selector", capabilities: `,"security_capabilities":{"network_policy_enforced":true,"supplemental_groups_policy_strict":true,"pod_pid_limit_enforced":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":["kube-dns"],"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			cluster := `{"target_id":"lab","provider":"AWS","region":"ap-northeast-2","architecture":"amd64","kubeconfig_path":"lab.yaml","public_gateway":"https://lab.example","enabled":true` + test.capabilities + `}`

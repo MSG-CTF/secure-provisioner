@@ -32,6 +32,7 @@ type registryClusterConfig struct {
 type registrySecurityCapabilities struct {
 	NetworkPolicyEnforced          *bool             `json:"network_policy_enforced"`
 	SupplementalGroupsPolicyStrict *bool             `json:"supplemental_groups_policy_strict"`
+	PodPIDLimitEnforced            *bool             `json:"pod_pid_limit_enforced"`
 	NetworkPolicyProvider          string            `json:"network_policy_provider"`
 	DNSNamespace                   string            `json:"dns_namespace"`
 	DNSPodSelector                 map[string]string `json:"dns_pod_selector"`
@@ -158,7 +159,8 @@ func (c registryClusterConfig) clusterConfig() (ClusterConfig, bool) {
 	}
 	if *c.Enabled && (c.SecurityCapabilities == nil ||
 		c.SecurityCapabilities.NetworkPolicyEnforced == nil ||
-		c.SecurityCapabilities.SupplementalGroupsPolicyStrict == nil) {
+		c.SecurityCapabilities.SupplementalGroupsPolicyStrict == nil ||
+		c.SecurityCapabilities.PodPIDLimitEnforced == nil) {
 		return ClusterConfig{}, false
 	}
 	capabilities := SecurityCapabilities{}
@@ -193,6 +195,9 @@ func (c registrySecurityCapabilities) clusterCapabilities() SecurityCapabilities
 	}
 	if c.SupplementalGroupsPolicyStrict != nil {
 		capabilities.SupplementalGroupsPolicyStrict = *c.SupplementalGroupsPolicyStrict
+	}
+	if c.PodPIDLimitEnforced != nil {
+		capabilities.PodPIDLimitEnforced = *c.PodPIDLimitEnforced
 	}
 	return capabilities
 }

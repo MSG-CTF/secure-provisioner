@@ -22,12 +22,12 @@ CTF 문제 인스턴스의 K3s 워크로드 생성·삭제와 상태 조회를 �
 API 계약은 [런타임 API 명세](docs/api/runtime-operations.md)와
 [OpenAPI](docs/api/secure-provisioner.openapi.yaml)에 정리되어 있습니다.
 
-새 Scheduler 요청은 `challenge_ref`, `isolation_ref`, `resource_profile_ref`,
+새 Scheduler 요청은 `challenge_ref`, `isolation_ref`, `workload_profile_ref`, `resource_profile_ref`,
 `outbound_mode`와 각 명시적 컨테이너의 `run_as_user`를 all-or-none으로 보냅니다.
 [다중 컨테이너 예제](examples/requests/create-multi-container.json)는 non-root
 `web`/`api`, 크기가 제한된 `/tmp`, `web -> api:8080/TCP`, outbound `NONE`을
 보여줍니다. raw Kubernetes/보안 설정은 API 계약이 아닙니다. 정책 필드를 모두
-생략한 기존 요청은 임시 호환 경로에서 `legacy@v1`, `STANDARD@v1`, 컨테이너
+생략한 기존 요청은 임시 호환 경로에서 `legacy@v1`, `STANDARD@v1`, `WEB@v1`, 컨테이너
 수에 맞는 `SMALL_SINGLE@v1`/`SMALL_MULTI@v1`, UID `10001`, outbound `NONE`으로
 정규화됩니다. 일부 정책 필드만 보내는 요청은 호환 요청으로 간주하지 않습니다.
 
@@ -63,6 +63,7 @@ Registry 예시:
       "security_capabilities": {
         "network_policy_enforced": true,
         "supplemental_groups_policy_strict": true,
+        "pod_pid_limit_enforced": true,
         "network_policy_provider": "kube-router",
         "dns_namespace": "kube-system",
         "dns_pod_selector": {"k8s-app": "kube-dns"},
@@ -84,6 +85,7 @@ Registry 예시:
       "security_capabilities": {
         "network_policy_enforced": true,
         "supplemental_groups_policy_strict": true,
+        "pod_pid_limit_enforced": true,
         "network_policy_provider": "kube-router",
         "dns_namespace": "kube-system",
         "dns_pod_selector": {"k8s-app": "kube-dns"},
@@ -105,14 +107,19 @@ Registry 예시:
 Pwn workload는 `NODE_PORT` Target에만 배치되며 `runtime_classes`에 `gvisor`가
 선언돼야 합니다. Web-only Target은 `runtime_classes`를 생략할 수 있습니다.
 
-활성화된 target은 `network_policy_enforced`와
-`supplemental_groups_policy_strict`를 모두 명시해야 합니다. 필드가 없거나
+활성화된 target은 `network_policy_enforced`,
+`supplemental_groups_policy_strict`, `pod_pid_limit_enforced`를 모두 명시해야 합니다. 필드가 없거나
 `null`이면 Registry 설정이 유효하지 않습니다. 명시적인 `false`는 진단을 위해
 로드되지만 workload 생성은 Kubernetes 작업 전에 재시도하지 않는
 `TARGET_CAPABILITY_MISMATCH`로 거절됩니다.
 기존 활성화 Registry도 새 Provisioner를 rollout하기 전에 이 필드를 추가해야
 합니다. 실제 Node/CRI 지원을 확인하지 않은 target은 `true`로 선언하거나
 승인하지 말고 `false`로 유지하거나 비활성화해야 합니다.
+
+`pod_pid_limit_enforced: true`는 모든 K3s 노드에 kubelet
+`pod-max-pids=<positive-value>`(또는 `PodPidsLimit`)가 설정되고 fork 제한이
+검증된 경우에만 선언합니다. PID 제한은 Pod manifest 필드가 아니므로
+Broker/K3s bootstrap이 노드 설정을 담당합니다.
 
 PowerShell 실행 예시:
 

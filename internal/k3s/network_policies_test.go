@@ -355,6 +355,7 @@ func networkPolicyCluster(targetID string) Cluster {
 	cluster.Config.SecurityCapabilities = SecurityCapabilities{
 		NetworkPolicyEnforced:          true,
 		SupplementalGroupsPolicyStrict: true,
+		PodPIDLimitEnforced:            true,
 		NetworkPolicyProvider:          "kube-router",
 		DNSNamespace:                   "kube-system",
 		DNSPodSelector:                 map[string]string{"k8s-app": "kube-dns"},

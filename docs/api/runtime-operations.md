@@ -660,19 +660,26 @@ Scheduler가 처리한 비동기 Operation의 최종 실패는 서로 다른 계
 MVP profile ref는 `name`과 `version`만 사용한다. immutable digest 또는 Catalog
 assignment authority가 아직 아니므로 이 ref만으로 production-grade policy
 attestation을 주장하지 않는다. Target Registry의 `security_capabilities`도
-NetworkPolicy provider, DNS/Ingress selector, Strict supplemental-groups와 설치된
+NetworkPolicy provider, DNS/Ingress selector, Strict supplemental-groups, Pod PID 제한과 설치된
 `runtime_classes` 지원을
 운영자가 선언한 값이며 런타임 검증 증명이 아니다. Provisioner는 Pod에
 `supplementalGroupsPolicy: Strict`를 지정하고 `supplementalGroups`와 `fsGroup`은
 지정하지 않는다. 실제 Node의 `status.features.supplementalGroupsPolicy`와 CRI 지원
 attestation은 Task 12 / issue `#11`에서 완료해야 한다. 기존 활성화 Registry는 새
-Provisioner rollout 전에 `supplemental_groups_policy_strict`를 추가해야 하며, 지원을
+Provisioner rollout 전에 `supplemental_groups_policy_strict`와 `pod_pid_limit_enforced`를
+추가해야 하며, 지원을
 확인하지 않은 target을 capable로 선언하거나 승인하면 안 된다. 이 기능이 alpha였던
 Kubernetes v1.31-v1.32에서는 지원하지 않는 Node가 Strict 요청을 거절하지 않고
 `Merge`로 조용히 fallback할 수 있다. Kubernetes v1.33 이상은 지원하지 않는 Node의
 Strict Pod를 거절하므로 workload는 fail-closed로 실패한다. 이 동작만으로 특정 K3s 버전의
 지원을 보장하지 않는다. 실제 NetworkPolicy 격리 효과는 `#11`, resident-node 및
 metadata host boundary attestation은 `#32`에서 완료해야 production 경계를 충족한다.
+
+Kubernetes는 PodSpec에 개별 PID limit를 두지 않는다. Broker/K3s bootstrap은 모든
+노드의 kubelet에 `pod-max-pids=<positive-value>` 또는 `PodPidsLimit`를 설정하고
+fork probe를 통과한 후에만 `pod_pid_limit_enforced: true`를 선언한다. 누락하면
+Registry 설정이 거절되고, 명시적 `false`면 Kubernetes 작업 전에
+`TARGET_CAPABILITY_MISMATCH`로 생성이 거절된다.
 
 Pwn Target은 Registry에 다음 조건을 선언해야 한다. Provisioner는 gVisor를 설치하지
 않으며, Broker/K3s bootstrap이 `RuntimeClass/gvisor`를 설치하고 검증한 뒤에만 이 값을
@@ -683,6 +690,7 @@ Pwn Target은 Registry에 다음 조건을 선언해야 한다. Provisioner는 g
   "public_gateway": "http://203.0.113.10",
   "exposure_mode": "NODE_PORT",
   "security_capabilities": {
+    "pod_pid_limit_enforced": true,
     "runtime_classes": ["gvisor"]
   }
 }

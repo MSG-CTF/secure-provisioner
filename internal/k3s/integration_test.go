@@ -135,6 +135,7 @@ func TestK3sIntegrationCreateReadyAndCleanup(t *testing.T) {
 		SecurityCapabilities: SecurityCapabilities{
 			NetworkPolicyEnforced:          true,
 			SupplementalGroupsPolicyStrict: true,
+			PodPIDLimitEnforced:            true,
 			NetworkPolicyProvider:          "kube-router",
 			DNSNamespace:                   "kube-system",
 			DNSPodSelector:                 map[string]string{"k8s-app": "kube-dns"},
@@ -237,6 +238,7 @@ func TestK3sIntegrationCreateMultiContainerReadyAndDelete(t *testing.T) {
 		SecurityCapabilities: SecurityCapabilities{
 			NetworkPolicyEnforced:          true,
 			SupplementalGroupsPolicyStrict: true,
+			PodPIDLimitEnforced:            true,
 			NetworkPolicyProvider:          "kube-router",
 			DNSNamespace:                   "kube-system",
 			DNSPodSelector:                 map[string]string{"k8s-app": "kube-dns"},

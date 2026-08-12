@@ -685,6 +685,9 @@ func TestAdapterRejectsTargetWithoutRequiredIsolationCapability(t *testing.T) {
 		{name: "strict supplemental groups policy", mutate: func(capabilities *SecurityCapabilities) {
 			capabilities.SupplementalGroupsPolicyStrict = false
 		}},
+		{name: "Pod PID limit", mutate: func(capabilities *SecurityCapabilities) {
+			capabilities.PodPIDLimitEnforced = false
+		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			command := validCreateCommand("aws-dev")

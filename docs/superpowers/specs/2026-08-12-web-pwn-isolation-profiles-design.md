@@ -154,15 +154,21 @@ Pwn 프로파일은 다음 정책을 공통 기준에 추가한다.
 
 ## Target Registry와 capability
 
-`security_capabilities`에 설치되어 운영자가 검증한 RuntimeClass 목록을 추가한다.
+`security_capabilities`에 노드의 Pod PID 제한 검증 여부와 설치되어 운영자가
+검증한 RuntimeClass 목록을 추가한다.
 
 ```json
 {
+  "pod_pid_limit_enforced": true,
   "runtime_classes": ["gvisor"]
 }
 ```
 
-Web 요청은 기존 NetworkPolicy와 SupplementalGroupsPolicy capability를 요구한다. Pwn 요청은 여기에 다음 조건을 추가로 요구한다.
+Web/Pwn 공통으로 NetworkPolicy, SupplementalGroupsPolicy, kubelet Pod PID limit
+capability를 요구한다. PID 제한은 PodSpec에 넣을 수 없으므로 Broker/K3s
+bootstrap이 모든 노드에 `pod-max-pids` 또는 `PodPidsLimit`를 설정하고
+검증한 후에만 capability를 선언한다. Pwn 요청은 여기에 다음 조건을
+추가로 요구한다.
 
 - `runtime_classes`에 정확히 `gvisor`가 존재
 - Target의 `exposure_mode`가 `NODE_PORT`

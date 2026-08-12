@@ -39,6 +39,7 @@ type ClusterConfig struct {
 type SecurityCapabilities struct {
 	NetworkPolicyEnforced          bool              `json:"network_policy_enforced"`
 	SupplementalGroupsPolicyStrict bool              `json:"supplemental_groups_policy_strict"`
+	PodPIDLimitEnforced            bool              `json:"pod_pid_limit_enforced"`
 	NetworkPolicyProvider          string            `json:"network_policy_provider"`
 	DNSNamespace                   string            `json:"dns_namespace"`
 	DNSPodSelector                 map[string]string `json:"dns_pod_selector"`
@@ -57,6 +58,7 @@ func (c Cluster) Supports(policy isolation.ResolvedPolicy) error {
 	capabilities := c.Config.SecurityCapabilities
 	if !capabilities.NetworkPolicyEnforced ||
 		!capabilities.SupplementalGroupsPolicyStrict ||
+		!capabilities.PodPIDLimitEnforced ||
 		!validSecurityCapabilities(capabilities) {
 		return newRuntimeError("TARGET_CAPABILITY_MISMATCH", false, nil)
 	}

@@ -223,11 +223,14 @@ Expected: API and operation tests pass.
 
 **Interfaces:**
 - Consumes: Task 1 `RuntimeClassName` and `ExposureRequirement`.
-- Produces: `SecurityCapabilities.RuntimeClasses []string` and policy-aware `Cluster.Supports`.
+- Produces: `SecurityCapabilities.RuntimeClasses []string`, fail-closed
+  `PodPIDLimitEnforced`, and policy-aware `Cluster.Supports`.
 
 - [ ] **Step 1: Write failing capability tests**
 
-Extend the complete registry JSON fixture with `"runtime_classes":["gvisor"]`. Test defensive copying, duplicate/empty/invalid RuntimeClass names, and unknown-field rejection. Add:
+Extend the complete registry JSON fixture with `"pod_pid_limit_enforced":true` and
+`"runtime_classes":["gvisor"]`. Test missing/null/explicit-false PID capability,
+defensive copying, duplicate/empty/invalid RuntimeClass names, and unknown-field rejection. Add:
 
 ```go
 func TestClusterSupportsPwnOnlyWithGVisorAndNodePort(t *testing.T) {
@@ -252,7 +255,13 @@ Expected: missing capability fields or failed assertions.
 
 - [ ] **Step 3: Implement registry capability handling**
 
-Add `RuntimeClasses []string` with `json:"runtime_classes,omitempty"` to registry and cluster capability structs. Copy the slice in `clusterCapabilities` and `copySecurityCapabilities`. Validate every entry with `validation.IsDNS1123Label`, reject duplicates, and permit an empty list for Web-only targets.
+Add required `PodPIDLimitEnforced` (pointer in decoded registry config, boolean in the
+domain config) and `RuntimeClasses []string` with `json:"runtime_classes,omitempty"` to
+registry and cluster capability structs. A missing PID declaration makes the registry
+invalid; explicit false remains loadable but `Cluster.Supports` rejects all workload
+creation before Kubernetes calls. Copy the runtime slice in `clusterCapabilities` and
+`copySecurityCapabilities`. Validate every entry with `validation.IsDNS1123Label`, reject
+duplicates, and permit an empty list for Web-only targets.
 
 - [ ] **Step 4: Make `Cluster.Supports` policy-aware**
 
@@ -385,7 +394,10 @@ Expected: failure until fixtures and the full composed flow are connected.
 
 - [ ] **Step 3: Complete fixtures and API documentation**
 
-Document a modern Web request, a Pwn request, Target `runtime_classes`, `HTTP` and `TCP` endpoint responses, the Pwn gVisor/NodePort requirement, and the fact that only fully legacy payloads normalize to Web.
+Document a modern Web request, a Pwn request, required Target
+`pod_pid_limit_enforced`, Target `runtime_classes`, `HTTP` and `TCP` endpoint responses,
+the Pwn gVisor/NodePort requirement, and the fact that only fully legacy payloads
+normalize to Web.
 
 - [ ] **Step 4: Run formatting and complete verification**
 
