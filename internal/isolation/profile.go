@@ -5,6 +5,13 @@ type ProfileRef struct {
 	Version string
 }
 
+type WorkloadProfile string
+
+const (
+	WorkloadProfileWeb WorkloadProfile = "WEB"
+	WorkloadProfilePwn WorkloadProfile = "PWN"
+)
+
 type Baseline struct {
 	AutomountServiceAccountToken bool
 	RunAsNonRoot                 bool
@@ -62,26 +69,19 @@ type InternalConnection struct {
 type OutboundMode string
 
 const (
-	OutboundNone           OutboundMode = "NONE"
-	OutboundPublicInternet OutboundMode = "PUBLIC_INTERNET"
+	OutboundNone OutboundMode = "NONE"
 )
 
 type Request struct {
-	ChallengeID         string
-	IsolationRef        ProfileRef
-	WorkloadProfileRef  ProfileRef
-	ResourceRef         ProfileRef
+	WorkloadProfile     WorkloadProfile
 	Containers          []ContainerRequirement
 	InternalConnections []InternalConnection
-	OutboundMode        OutboundMode
 	ResourceLimits      ResourceLimits
 }
 
 type ResolvedPolicy struct {
-	ChallengeID         string
 	IsolationRef        ProfileRef
 	WorkloadProfileRef  ProfileRef
-	ResourceRef         ProfileRef
 	Baseline            Baseline
 	RuntimeClassName    string
 	EndpointProtocol    EndpointProtocol

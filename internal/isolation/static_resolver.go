@@ -16,31 +16,22 @@ func (r *StaticResolver) Resolve(request Request) (ResolvedPolicy, error) {
 	if r == nil {
 		return ResolvedPolicy{}, rejected("resolver is required")
 	}
-	if request.IsolationRef != (ProfileRef{Name: "STANDARD", Version: "v1"}) {
-		return ResolvedPolicy{}, rejected("unsupported isolation profile")
-	}
-	runtimeClassName, endpointProtocol, exposureRequirement, err := resolveWorkloadProfile(request.WorkloadProfileRef)
+	workloadProfileRef, err := workloadProfileRef(request.WorkloadProfile)
 	if err != nil {
 		return ResolvedPolicy{}, err
 	}
-
-	expectedLimits, err := resourceProfile(request.ResourceRef)
+	runtimeClassName, endpointProtocol, exposureRequirement, err := resolveWorkloadProfile(workloadProfileRef)
 	if err != nil {
 		return ResolvedPolicy{}, err
 	}
-	if request.ResourceLimits != expectedLimits {
-		return ResolvedPolicy{}, rejected("resource limits do not match resource profile")
-	}
-	if strings.TrimSpace(request.ChallengeID) == "" {
-		return ResolvedPolicy{}, rejected("challenge ID is required")
-	}
-	if request.OutboundMode != OutboundNone {
-		return ResolvedPolicy{}, rejected("outbound mode is not allowed")
+	if request.ResourceLimits.CPUMillicores <= 0 || request.ResourceLimits.MemoryMiB <= 0 ||
+		request.ResourceLimits.EphemeralStorageMiB <= 0 {
+		return ResolvedPolicy{}, rejected("resource limits must be positive")
 	}
 	if err := validateContainers(request.Containers, request.ResourceLimits); err != nil {
 		return ResolvedPolicy{}, err
 	}
-	if err := validateWorkloadProfile(request.WorkloadProfileRef, request.Containers); err != nil {
+	if err := validateWorkloadProfile(workloadProfileRef, request.Containers); err != nil {
 		return ResolvedPolicy{}, err
 	}
 	if err := validateInternalConnections(request.Containers, request.InternalConnections); err != nil {
@@ -48,10 +39,8 @@ func (r *StaticResolver) Resolve(request Request) (ResolvedPolicy, error) {
 	}
 
 	return ResolvedPolicy{
-		ChallengeID:         request.ChallengeID,
-		IsolationRef:        request.IsolationRef,
-		WorkloadProfileRef:  request.WorkloadProfileRef,
-		ResourceRef:         request.ResourceRef,
+		IsolationRef:        ProfileRef{Name: "STANDARD", Version: "v1"},
+		WorkloadProfileRef:  workloadProfileRef,
 		RuntimeClassName:    runtimeClassName,
 		EndpointProtocol:    endpointProtocol,
 		ExposureRequirement: exposureRequirement,
@@ -66,9 +55,18 @@ func (r *StaticResolver) Resolve(request Request) (ResolvedPolicy, error) {
 		},
 		Containers:          cloneContainerRequirements(request.Containers),
 		InternalConnections: append([]InternalConnection(nil), request.InternalConnections...),
-		OutboundMode:        request.OutboundMode,
+		OutboundMode:        OutboundNone,
 		ResourceLimits:      request.ResourceLimits,
 	}, nil
+}
+
+func workloadProfileRef(profile WorkloadProfile) (ProfileRef, error) {
+	switch profile {
+	case WorkloadProfileWeb, WorkloadProfilePwn:
+		return ProfileRef{Name: string(profile), Version: "v1"}, nil
+	default:
+		return ProfileRef{}, rejected("unsupported workload profile")
+	}
 }
 
 func resolveWorkloadProfile(ref ProfileRef) (string, EndpointProtocol, ExposureRequirement, error) {
@@ -79,17 +77,6 @@ func resolveWorkloadProfile(ref ProfileRef) (string, EndpointProtocol, ExposureR
 		return "gvisor", EndpointProtocolTCP, ExposureNodePortOnly, nil
 	default:
 		return "", "", "", rejected("unsupported workload profile")
-	}
-}
-
-func resourceProfile(ref ProfileRef) (ResourceLimits, error) {
-	switch ref {
-	case ProfileRef{Name: "SMALL_SINGLE", Version: "v1"}:
-		return ResourceLimits{CPUMillicores: 100, MemoryMiB: 128, EphemeralStorageMiB: 128}, nil
-	case ProfileRef{Name: "SMALL_MULTI", Version: "v1"}:
-		return ResourceLimits{CPUMillicores: 200, MemoryMiB: 256, EphemeralStorageMiB: 256}, nil
-	default:
-		return ResourceLimits{}, rejected("unsupported resource profile")
 	}
 }
 
