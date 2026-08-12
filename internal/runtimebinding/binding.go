@@ -31,10 +31,8 @@ type Binding struct {
 	Namespace             string
 	NamespaceUID          string
 	RuntimeWorkloadID     string
-	ChallengeID           string
-	ChallengeVersion      string
 	IsolationProfile      string
-	ResourceProfile       string
+	WorkloadProfile       string
 	ContainerRequirements []isolation.ContainerRequirement
 	InternalConnections   []isolation.InternalConnection
 	OutboundMode          isolation.OutboundMode
@@ -73,10 +71,8 @@ func samePlacement(first, second Binding) bool {
 		first.Namespace == second.Namespace &&
 		first.NamespaceUID == second.NamespaceUID &&
 		first.RuntimeWorkloadID == second.RuntimeWorkloadID &&
-		first.ChallengeID == second.ChallengeID &&
-		first.ChallengeVersion == second.ChallengeVersion &&
 		first.IsolationProfile == second.IsolationProfile &&
-		first.ResourceProfile == second.ResourceProfile &&
+		first.WorkloadProfile == second.WorkloadProfile &&
 		reflect.DeepEqual(first.ContainerRequirements, second.ContainerRequirements) &&
 		reflect.DeepEqual(first.InternalConnections, second.InternalConnections) &&
 		first.OutboundMode == second.OutboundMode &&

@@ -200,10 +200,8 @@ func validBinding(now time.Time) Binding {
 		Namespace:         "ctf-018f3f1e21b87a91a30b63b3400fd001",
 		NamespaceUID:      "namespace-uid-01",
 		RuntimeWorkloadID: "aws-dev/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge",
-		ChallengeID:       "web-chall2",
-		ChallengeVersion:  "2026.08.1",
 		IsolationProfile:  "STANDARD@v1",
-		ResourceProfile:   "SMALL_MULTI@v1",
+		WorkloadProfile:   "WEB@v1",
 		ContainerRequirements: []isolation.ContainerRequirement{
 			{Name: "web", Ports: []int{8080}, RunAsUser: 101, WritablePaths: []isolation.WritablePath{{Path: "/tmp", SizeMiB: 64}}},
 			{Name: "api", Ports: []int{8080}, RunAsUser: 10001},

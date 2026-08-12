@@ -125,7 +125,6 @@ func sameCreateCommand(first, second provisioner.CreateWorkloadCommand) bool {
 	if first.RequestID != second.RequestID ||
 		first.InstanceID != second.InstanceID ||
 		first.TeamID != second.TeamID ||
-		first.ChallengeRef != second.ChallengeRef ||
 		first.RuntimeType != second.RuntimeType ||
 		first.TargetID != second.TargetID ||
 		first.ResourceLimits != second.ResourceLimits ||
