@@ -72,6 +72,41 @@ paths:
                       cpu_millicores: 200
                       memory_mib: 256
                       ephemeral_storage_mib: 256
+              Pwn:
+                value:
+                  request_id: runtime-create-pwn-018f3f1e
+                  instance_id: 018f3f1e-21b8-7a91-a30b-63b3400fd009
+                  team_id: 18
+                  challenge_ref:
+                    challenge_id: pwn-buffer-01
+                    version: 2026.08.1
+                  isolation_ref:
+                    name: STANDARD
+                    version: v1
+                  workload_profile_ref:
+                    name: PWN
+                    version: v1
+                  resource_profile_ref:
+                    name: SMALL_SINGLE
+                    version: v1
+                  target:
+                    runtime_type: KUBERNETES
+                    target_id: aws-k3s-pwn-001
+                  workload:
+                    containers:
+                      - name: challenge
+                        image: ghcr.io/msg-ctf/challenges/pwn-buffer-01:latest
+                        ports: [31337]
+                        expose: true
+                        run_as_user: 10001
+                        writable_paths:
+                          - path: /tmp
+                            size_mib: 64
+                    outbound_mode: NONE
+                    resource_limits:
+                      cpu_millicores: 100
+                      memory_mib: 128
+                      ephemeral_storage_mib: 128
               LegacyMultiContainer:
                 summary: Legacy migration request with policy fields omitted
                 value:

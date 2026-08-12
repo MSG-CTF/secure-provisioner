@@ -56,6 +56,10 @@ Content-Type: application/json
     "name": "STANDARD",
     "version": "v1"
   },
+  "workload_profile_ref": {
+    "name": "WEB",
+    "version": "v1"
+  },
   "resource_profile_ref": {
     "name": "SMALL_MULTI",
     "version": "v1"
@@ -106,7 +110,7 @@ Content-Type: application/json
 한다. 각 컨테이너는 내부 포트를 여러 개 가질 수 있다. `expose: true`인
 컨테이너의 포트만 외부 접속점으로 공개되며, 적어도 하나는 공개돼야 한다.
 
-`challenge_ref`, `isolation_ref`, `resource_profile_ref`, `outbound_mode`와 각
+`challenge_ref`, `isolation_ref`, `workload_profile_ref`, `resource_profile_ref`, `outbound_mode`와 각
 명시적 컨테이너의 `run_as_user`는 마이그레이션 중인 정책 필드다. 이 중 하나라도
 보내면 전부 보내야 하며 일부만 보내거나 빈 객체/값을 명시하면 `400
 INVALID_REQUEST`다. `writable_paths`와 `internal_connections`는 명시적 정책
@@ -125,12 +129,50 @@ profile, `/proc`·`/sys`·`/var/run/secrets` 아래 writable path, writable 합�
 ephemeral-storage 한도를 넘는 요청, 현재 승인하지 않는 `PUBLIC_INTERNET`은 trusted
 resolver가 `422 ISOLATION_POLICY_REJECTED`로 거절한다.
 
+`isolation_ref`는 모든 문제에서 `STANDARD@v1`로 고정한다. Web 문제는
+`workload_profile_ref: WEB@v1`을 추가해 Target의 기본 runtime을 사용하며
+`INGRESS_PATH`와 `NODE_PORT` Target을 모두 지원한다. 일반 Pwn 문제는 다음처럼
+`PWN@v1`을 추가한다.
+
+```json
+{
+  "request_id": "runtime-create-pwn-018f3f1e",
+  "instance_id": "018f3f1e-21b8-7a91-a30b-63b3400fd009",
+  "team_id": 18,
+  "challenge_ref": {"challenge_id": "pwn-buffer-01", "version": "2026.08.1"},
+  "isolation_ref": {"name": "STANDARD", "version": "v1"},
+  "workload_profile_ref": {"name": "PWN", "version": "v1"},
+  "resource_profile_ref": {"name": "SMALL_SINGLE", "version": "v1"},
+  "target": {"runtime_type": "KUBERNETES", "target_id": "aws-k3s-pwn-001"},
+  "workload": {
+    "containers": [{
+      "name": "challenge",
+      "image": "ghcr.io/msg-ctf/challenges/pwn-buffer-01:latest",
+      "ports": [31337],
+      "expose": true,
+      "run_as_user": 10001,
+      "writable_paths": [{"path": "/tmp", "size_mib": 64}]
+    }],
+    "outbound_mode": "NONE",
+    "resource_limits": {
+      "cpu_millicores": 100,
+      "memory_mib": 128,
+      "ephemeral_storage_mib": 128
+    }
+  }
+}
+```
+
+Pwn은 모든 Pod에서 `runtimeClassName: gvisor`를 강제하고, 외부 노출 컨테이너와
+TCP 포트를 각각 하나만 허용하며, writable path는 `/tmp` 또는 그 하위 경로만
+허용한다. Pwn 요청은 `NODE_PORT` Target에만 배치할 수 있다.
+
 기존 단일 컨테이너 요청의 `image`와 `container_port`도 계속 허용한다. 이 형식은
 서버에서 이름 `challenge`, `expose: true`인 컨테이너 1개로 변환한다.
 `containers`와 기존 필드는 한 요청에서 함께 사용할 수 없다.
 
 정책 마이그레이션 필드를 **모두 생략한** 기존 요청도 계속 허용한다. 서버는
-`legacy@v1`, `STANDARD@v1`, 컨테이너 수에 따른 `SMALL_SINGLE@v1` 또는
+`legacy@v1`, `STANDARD@v1`, `WEB@v1`, 컨테이너 수에 따른 `SMALL_SINGLE@v1` 또는
 `SMALL_MULTI@v1`, 각 컨테이너 UID `10001`, 빈 writable/internal connection,
 `outbound_mode: NONE`을 적용하고 profile의 자원값으로 정규화한다. 이는 wire
 호환을 위한 임시 기본값이지 caller가 baseline을 선택하거나 덮어쓰는 기능이 아니다.
@@ -270,6 +312,7 @@ Retry-After: 2
       {
         "container_name": "web",
         "port": 8080,
+        "protocol": "HTTP",
         "service_url": "http://203.0.113.10:31042"
       }
     ]
@@ -286,6 +329,19 @@ NodePort를 자동 할당하며 주소는 `http://<target 공인 IP>:<NodePort>`
 `INGRESS_PATH` 노출 모드도 지원하며, 이때 주소는
 `<public_gateway>/instances/{instance_id}` 형식이다. `exposure_mode`를 생략한
 기존 Registry 설정은 `INGRESS_PATH`로 해석된다.
+
+Pwn 성공 결과는 endpoint의 `protocol`이 `TCP`이고 주소가
+`tcp://<target 공인 IP>:<NodePort>` 형식이다. Scheduler와 프론트엔드는 URL 문자열을
+추측하지 않고 `protocol`을 기준으로 Web과 Pwn 접속 방식을 구분한다.
+
+```json
+{
+  "container_name": "challenge",
+  "port": 31337,
+  "protocol": "TCP",
+  "service_url": "tcp://203.0.113.10:31042"
+}
+```
 
 ### 삭제 성공
 
@@ -423,6 +479,8 @@ Ready EndpointSlice가 있을 때만 `true`다. `NODE_PORT`에서는 NodePort Se
   LimitRange, NetworkPolicy와 컨테이너별 Deployment·Service를 둔다.
 - `NODE_PORT`에서는 공개 컨테이너의 Service만 NodePort로 만들고 Ingress는 만들지
   않는다. `INGRESS_PATH`에서는 Service는 ClusterIP이며 공개용 Ingress 1개를 둔다.
+- `STANDARD@v1`은 모든 문제에 적용한다. `WEB@v1`은 Target 기본 runtime을 사용하고,
+  `PWN@v1`은 운영자가 검증한 `gvisor` RuntimeClass와 `NODE_PORT`를 요구한다.
 - ServiceAccount와 Pod 양쪽에서 token 자동 마운트를 끄고, Pod·컨테이너에는 non-root
   UID, read-only root filesystem, privilege escalation·privileged 금지, 모든 Linux
   capability drop, `RuntimeDefault` seccomp와 host namespace 비활성화를 적용한다.
@@ -445,9 +503,10 @@ Ready EndpointSlice가 있을 때만 `true`다. `NODE_PORT`에서는 NodePort Se
   Namespace 전체를 삭제한다.
 - 삭제가 반복됐는데 Namespace가 이미 없으면 성공으로 처리한다.
 
-이 baseline은 Provisioner가 생성한 리소스에 적용하는 방어 계층이다. 별도 Admission
-강제와 sandbox RuntimeClass 선택은 아직 없으므로 Provisioner 밖에서 만든 Pod까지
-cluster-wide로 강제하지 않으며, 고위험 workload의 커널 격리를 증명하지 않는다.
+이 baseline은 Provisioner가 생성한 리소스에 적용하는 방어 계층이다. Pwn Pod에는
+gVisor RuntimeClass를 선택하지만 별도 Admission 강제는 없으므로 Provisioner 밖에서
+만든 Pod까지 cluster-wide로 강제하지 않으며, 고위험 workload의 커널 격리를
+증명하지 않는다.
 또한 NetworkPolicy 객체의 생성·read-back과 Registry capability 선언은 dataplane의
 실제 enforcement 증명이 아니다. 표준 NetworkPolicy만으로 resident node에서 오거나
 resident node·metadata endpoint로 향하는 트래픽의 차단도 보장하지 않는다. 실제 K3s
@@ -601,7 +660,8 @@ Scheduler가 처리한 비동기 Operation의 최종 실패는 서로 다른 계
 MVP profile ref는 `name`과 `version`만 사용한다. immutable digest 또는 Catalog
 assignment authority가 아직 아니므로 이 ref만으로 production-grade policy
 attestation을 주장하지 않는다. Target Registry의 `security_capabilities`도
-NetworkPolicy provider, DNS/Ingress selector와 Strict supplemental-groups 지원을
+NetworkPolicy provider, DNS/Ingress selector, Strict supplemental-groups와 설치된
+`runtime_classes` 지원을
 운영자가 선언한 값이며 런타임 검증 증명이 아니다. Provisioner는 Pod에
 `supplementalGroupsPolicy: Strict`를 지정하고 `supplementalGroups`와 `fsGroup`은
 지정하지 않는다. 실제 Node의 `status.features.supplementalGroupsPolicy`와 CRI 지원
@@ -613,3 +673,17 @@ Kubernetes v1.31-v1.32에서는 지원하지 않는 Node가 Strict 요청을 거
 Strict Pod를 거절하므로 workload는 fail-closed로 실패한다. 이 동작만으로 특정 K3s 버전의
 지원을 보장하지 않는다. 실제 NetworkPolicy 격리 효과는 `#11`, resident-node 및
 metadata host boundary attestation은 `#32`에서 완료해야 production 경계를 충족한다.
+
+Pwn Target은 Registry에 다음 조건을 선언해야 한다. Provisioner는 gVisor를 설치하지
+않으며, Broker/K3s bootstrap이 `RuntimeClass/gvisor`를 설치하고 검증한 뒤에만 이 값을
+기록한다.
+
+```json
+{
+  "public_gateway": "http://203.0.113.10",
+  "exposure_mode": "NODE_PORT",
+  "security_capabilities": {
+    "runtime_classes": ["gvisor"]
+  }
+}
+```

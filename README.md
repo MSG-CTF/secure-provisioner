@@ -67,7 +67,8 @@ Registry 예시:
         "dns_namespace": "kube-system",
         "dns_pod_selector": {"k8s-app": "kube-dns"},
         "ingress_namespace": "kube-system",
-        "ingress_pod_selector": {"app.kubernetes.io/name": "traefik"}
+        "ingress_pod_selector": {"app.kubernetes.io/name": "traefik"},
+        "runtime_classes": ["gvisor"]
       },
       "enabled": true
     },
@@ -100,6 +101,9 @@ Registry 예시:
 `NODE_PORT`는 공개 Service의 Kubernetes 할당 포트를 공인 IP와 조합하고,
 `INGRESS_PATH`는 기존 Ingress 경로를 사용합니다. `exposure_mode`를 생략하면
 `INGRESS_PATH`로 동작합니다.
+
+Pwn workload는 `NODE_PORT` Target에만 배치되며 `runtime_classes`에 `gvisor`가
+선언돼야 합니다. Web-only Target은 `runtime_classes`를 생략할 수 있습니다.
 
 활성화된 target은 `network_policy_enforced`와
 `supplemental_groups_policy_strict`를 모두 명시해야 합니다. 필드가 없거나

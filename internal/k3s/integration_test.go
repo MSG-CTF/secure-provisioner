@@ -17,6 +17,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 func TestIntegrationCreateCommandUsesCanonicalResolvedPolicy(t *testing.T) {
@@ -25,6 +26,7 @@ func TestIntegrationCreateCommandUsesCanonicalResolvedPolicy(t *testing.T) {
 		"018f3f1e-21b8-7a91-a30b-63b3400fd001",
 		"request-01",
 		[]provisioner.WorkloadContainer{{Name: "challenge", Image: "registry.example.invalid/challenge:latest", Ports: []int{8080}, Expose: true}},
+		isolation.ProfileRef{Name: "WEB", Version: "v1"},
 		isolation.ProfileRef{Name: "SMALL_SINGLE", Version: "v1"},
 	)
 	if err != nil {
@@ -36,6 +38,81 @@ func TestIntegrationCreateCommandUsesCanonicalResolvedPolicy(t *testing.T) {
 	}
 	if _, err := BuildResourceSet(validCluster("aws-dev"), command); err != nil {
 		t.Fatalf("BuildResourceSet() rejected integration fixture: %v", err)
+	}
+}
+
+func TestIntegrationPwnResolvesGVisorAndReturnsTCPEndpoint(t *testing.T) {
+	command, err := integrationCreateCommand(
+		"aws-pwn",
+		"018f3f1e-21b8-7a91-a30b-63b3400fd009",
+		"request-pwn-01",
+		[]provisioner.WorkloadContainer{{
+			Name: "challenge", Image: "registry.example.invalid/pwn:latest", Ports: []int{31337}, Expose: true,
+		}},
+		isolation.ProfileRef{Name: "PWN", Version: "v1"},
+		isolation.ProfileRef{Name: "SMALL_SINGLE", Version: "v1"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cluster := nodePortGVisorCluster(command.TargetID)
+	client := readyIntegrationClient(t, cluster, command)
+	installNodePortAllocator(t, client, 31042)
+	config := validClusterConfig(command.TargetID, ProviderAWS, "pwn-kubeconfig")
+	config.PublicGateway = cluster.Config.PublicGateway
+	config.ExposureMode = ExposureModeNodePort
+	config.SecurityCapabilities.RuntimeClasses = []string{"gvisor"}
+	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{config}, client))
+
+	result, err := adapter.CreateWorkload(context.Background(), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Endpoints) != 1 || result.Endpoints[0].Protocol != isolation.EndpointProtocolTCP ||
+		result.Endpoints[0].ServiceURL != "tcp://203.0.113.10:31042" {
+		t.Fatalf("Pwn endpoints = %#v", result.Endpoints)
+	}
+	resources, err := BuildResourceSet(cluster, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeClassName := resources.Deployments[0].Spec.Template.Spec.RuntimeClassName
+	if runtimeClassName == nil || *runtimeClassName != "gvisor" {
+		t.Fatalf("Pwn RuntimeClassName = %#v", runtimeClassName)
+	}
+}
+
+func readyIntegrationClient(t *testing.T, cluster Cluster, command provisioner.CreateWorkloadCommand) *fake.Clientset {
+	t.Helper()
+	resources, err := BuildResourceSet(cluster, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pod := readyPod(
+		resources.Namespace.Name,
+		resources.ExpectedSpecHash,
+		"ready-pwn-pod",
+		"10.0.0.9",
+		resources.Deployment.Spec.Template.Labels,
+	)
+	client := fake.NewSimpleClientset(pod, readyEndpointSlice(resources.Namespace.Name, pod))
+	installNamespaceCreateMetadata(t, client, "test-pwn-namespace-uid", "1")
+	installDeploymentController(client, true)
+	return client
+}
+
+func TestIntegrationPwnRejectsUnsupportedTargetWithoutCreatingNamespace(t *testing.T) {
+	command := validPwnCreateCommand("web-only")
+	cluster := validCluster("web-only")
+	client := fake.NewSimpleClientset()
+	cluster.Client = client
+
+	_, err := BuildResourceSet(cluster, command)
+	if code := runtimeErrorCode(t, err); code != "TARGET_CAPABILITY_MISMATCH" {
+		t.Fatalf("code = %q, want TARGET_CAPABILITY_MISMATCH", code)
+	}
+	if len(client.Actions()) != 0 {
+		t.Fatalf("Kubernetes actions = %#v, want none", client.Actions())
 	}
 }
 
@@ -95,6 +172,7 @@ func TestK3sIntegrationCreateReadyAndCleanup(t *testing.T) {
 		[]provisioner.WorkloadContainer{{
 			Name: "challenge", Image: image, Ports: []int{port}, Expose: true,
 		}},
+		isolation.ProfileRef{Name: "WEB", Version: "v1"},
 		isolation.ProfileRef{Name: "SMALL_SINGLE", Version: "v1"},
 	)
 	if err != nil {
@@ -197,6 +275,7 @@ func TestK3sIntegrationCreateMultiContainerReadyAndDelete(t *testing.T) {
 			{Name: "web", Image: image, Ports: []int{port}, Expose: true},
 			{Name: "internal", Image: image, Ports: []int{port}, Expose: false},
 		},
+		isolation.ProfileRef{Name: "WEB", Version: "v1"},
 		isolation.ProfileRef{Name: "SMALL_MULTI", Version: "v1"},
 	)
 	if err != nil {
@@ -257,6 +336,7 @@ func integrationCreateCommand(
 	instanceID string,
 	requestID string,
 	containers []provisioner.WorkloadContainer,
+	workloadProfileRef isolation.ProfileRef,
 	resourceRef isolation.ProfileRef,
 ) (provisioner.CreateWorkloadCommand, error) {
 	var limits isolation.ResourceLimits
@@ -273,16 +353,18 @@ func integrationCreateCommand(
 		requirements[index] = isolation.ContainerRequirement{
 			Name:      container.Name,
 			Ports:     append([]int(nil), container.Ports...),
+			Expose:    container.Expose,
 			RunAsUser: int64(10001 + index),
 		}
 	}
 	policyRequest := isolation.Request{
-		ChallengeID:    "k3s-integration",
-		IsolationRef:   isolation.ProfileRef{Name: "STANDARD", Version: "v1"},
-		ResourceRef:    resourceRef,
-		Containers:     requirements,
-		OutboundMode:   isolation.OutboundNone,
-		ResourceLimits: limits,
+		ChallengeID:        "k3s-integration",
+		IsolationRef:       isolation.ProfileRef{Name: "STANDARD", Version: "v1"},
+		WorkloadProfileRef: workloadProfileRef,
+		ResourceRef:        resourceRef,
+		Containers:         requirements,
+		OutboundMode:       isolation.OutboundNone,
+		ResourceLimits:     limits,
 	}
 	policy, err := isolation.NewStaticResolver().Resolve(policyRequest)
 	if err != nil {
