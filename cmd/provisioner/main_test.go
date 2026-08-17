@@ -131,6 +131,16 @@ func TestNewApplicationQueuesCreateThroughRuntimeService(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 
 	app.handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated status = %d, want %d; body = %s", response.Code, http.StatusUnauthorized, response.Body.String())
+	}
+
+	response = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer "+validCurrentServiceToken)
+
+	app.handler.ServeHTTP(response, request)
 
 	if response.Code != http.StatusAccepted || response.Header().Get("Location") == "" {
 		t.Fatalf("status = %d, headers = %#v, body = %s", response.Code, response.Header(), response.Body.String())

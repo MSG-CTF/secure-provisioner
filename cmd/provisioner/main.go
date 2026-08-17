@@ -189,7 +189,7 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 		return nil, err
 	}
 	return &application{
-		handler:   httpapi.NewHandlerWithRuntime(service, service),
+		handler:   httpapi.NewHandlerWithRuntime(service, service, config.ServiceAuth),
 		runWorker: service.Run,
 	}, nil
 }

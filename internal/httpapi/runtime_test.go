@@ -55,7 +55,7 @@ func TestRuntimeStatusReturnsContainerResourcesWithoutClusterSecrets(t *testing.
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/internal/v1/instances/"+runtimeInstanceID+"/runtime-status", nil)
 
-	NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+	newTestHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
@@ -106,7 +106,7 @@ func TestRuntimeStatusMapsMissingBindingToNotFound(t *testing.T) {
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/internal/v1/instances/"+runtimeInstanceID+"/runtime-status", nil)
 
-	NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+	newTestHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
 
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
@@ -130,7 +130,7 @@ func TestRuntimeStatusMapsStableK3sErrors(t *testing.T) {
 			response := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodGet, "/internal/v1/instances/"+runtimeInstanceID+"/runtime-status", nil)
 
-			NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+			newTestHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
 
 			if response.Code != test.wantStatus {
 				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
@@ -156,7 +156,7 @@ func TestDeleteInstanceQueuesBoundRuntimeOperation(t *testing.T) {
 	request := httptest.NewRequest(http.MethodDelete, "/internal/v1/instances/"+runtimeInstanceID, strings.NewReader(validDeleteRequestJSON()))
 	request.Header.Set("Content-Type", "application/json")
 
-	NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+	newTestHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
 
 	if response.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
@@ -192,7 +192,7 @@ func TestDeleteInstanceRejectsPathBodyMismatch(t *testing.T) {
 	request := httptest.NewRequest(http.MethodDelete, "/internal/v1/instances/028f3f1e-21b8-7a91-a30b-63b3400fd002", strings.NewReader(validDeleteRequestJSON()))
 	request.Header.Set("Content-Type", "application/json")
 
-	NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+	newTestHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
 
 	if response.Code != http.StatusConflict {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
@@ -209,7 +209,7 @@ func TestDeleteInstanceMapsBindingConflictWithoutLeakingDetails(t *testing.T) {
 	request := httptest.NewRequest(http.MethodDelete, "/internal/v1/instances/"+runtimeInstanceID, strings.NewReader(validDeleteRequestJSON()))
 	request.Header.Set("Content-Type", "application/json")
 
-	NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+	newTestHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
 
 	if response.Code != http.StatusConflict {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
@@ -237,7 +237,7 @@ func TestDeleteInstanceMapsQueueErrorsWithoutLeakingDetails(t *testing.T) {
 			request := httptest.NewRequest(http.MethodDelete, "/internal/v1/instances/"+runtimeInstanceID, strings.NewReader(validDeleteRequestJSON()))
 			request.Header.Set("Content-Type", "application/json")
 
-			NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+			newTestHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
 
 			if response.Code != test.wantStatus {
 				t.Fatalf("status = %d, want %d; body = %s", response.Code, test.wantStatus, response.Body.String())
@@ -265,7 +265,7 @@ func TestGetOperationReturnsProgress(t *testing.T) {
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/internal/v1/operations/operation-delete-01", nil)
 
-	NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+	newTestHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
@@ -339,7 +339,7 @@ func TestGetOperationReturnsCreateAndDeleteResults(t *testing.T) {
 			response := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodGet, "/internal/v1/operations/"+test.operation.ID, nil)
 
-			NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+			newTestHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
 
 			body := response.Body.Bytes()
 			if strings.Contains(string(body), "namespace_uid") {
@@ -378,7 +378,7 @@ func TestGetOperationDoesNotExposeRetryingCreateCheckpoint(t *testing.T) {
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/internal/v1/operations/operation-create-01", nil)
 
-	NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+	newTestHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
 
 	body := response.Body.String()
 	if response.Code != http.StatusOK || strings.Contains(body, "namespace_uid") ||
@@ -403,7 +403,7 @@ func TestGetOperationMapsLookupErrorsWithoutLeakingDetails(t *testing.T) {
 			response := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodGet, "/internal/v1/operations/operation-01", nil)
 
-			NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+			newTestHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
 
 			if response.Code != test.wantStatus {
 				t.Fatalf("status = %d, want %d; body = %s", response.Code, test.wantStatus, response.Body.String())
@@ -425,18 +425,21 @@ type recordingRuntimeUseCase struct {
 	status           k3s.RuntimeStatus
 	statusErr        error
 	statusInstanceID string
+	statusCalls      int
 	operation        operations.Operation
 	created          bool
 	deleteErr        error
 	deleteCommand    provisioner.DeleteWorkloadCommand
 	deleteCalls      int
 	operationErr     error
+	operationCalls   int
 	createErr        error
 	createCommand    provisioner.CreateWorkloadCommand
 	createCalls      int
 }
 
 func (useCase *recordingRuntimeUseCase) GetRuntimeStatus(_ context.Context, instanceID string) (k3s.RuntimeStatus, error) {
+	useCase.statusCalls++
 	useCase.statusInstanceID = instanceID
 	return useCase.status, useCase.statusErr
 }
@@ -454,6 +457,7 @@ func (useCase *recordingRuntimeUseCase) EnqueueCreate(command provisioner.Create
 }
 
 func (useCase *recordingRuntimeUseCase) GetOperation(string) (operations.Operation, error) {
+	useCase.operationCalls++
 	return useCase.operation, useCase.operationErr
 }
 

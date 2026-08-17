@@ -15,6 +15,22 @@ import (
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 )
 
+func newTestHandler(createWorkload provisioner.CreateWorkloadUseCase) http.Handler {
+	return withTestServiceAuthentication(NewHandler(createWorkload, ServiceAuthConfig{CurrentToken: testCurrentServiceToken}))
+}
+
+func newTestHandlerWithRuntime(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase) http.Handler {
+	return withTestServiceAuthentication(NewHandlerWithRuntime(createWorkload, runtime, ServiceAuthConfig{CurrentToken: testCurrentServiceToken}))
+}
+
+func withTestServiceAuthentication(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		request = request.Clone(request.Context())
+		request.Header.Set("Authorization", "Bearer "+testCurrentServiceToken)
+		next.ServeHTTP(writer, request)
+	})
+}
+
 func TestCreateInstanceAcceptsSchedulerContract(t *testing.T) {
 	runtime := &recordingRuntimeUseCase{
 		operation: operations.Operation{
@@ -26,7 +42,7 @@ func TestCreateInstanceAcceptsSchedulerContract(t *testing.T) {
 		},
 		created: true,
 	}
-	handler := NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime)
+	handler := newTestHandlerWithRuntime(&recordingCreateUseCase{}, runtime)
 
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(validCreateRequestJSON()))
@@ -72,7 +88,7 @@ func TestCreateInstanceDirectPathResolvesPolicyBeforeCreate(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(string(requestBody)))
 	request.Header.Set("Content-Type", "application/json")
 
-	NewHandler(useCase).ServeHTTP(response, request)
+	newTestHandler(useCase).ServeHTTP(response, request)
 
 	if response.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusCreated, response.Body.String())
@@ -96,7 +112,7 @@ func TestCreateInstanceDirectPathMapsPolicyRejectionTo422(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(string(requestBody)))
 	request.Header.Set("Content-Type", "application/json")
 
-	NewHandler(useCase).ServeHTTP(response, request)
+	newTestHandler(useCase).ServeHTTP(response, request)
 
 	if response.Code != http.StatusUnprocessableEntity || useCase.calls != 0 {
 		t.Fatalf("status = %d; calls = %d; body = %s", response.Code, useCase.calls, response.Body.String())
@@ -123,7 +139,7 @@ func TestCreateInstanceAcceptsLegacyWireContractWithSafePolicyDefaults(t *testin
 	}`))
 	request.Header.Set("Content-Type", "application/json")
 
-	NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+	newTestHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
 
 	if response.Code != http.StatusAccepted || runtime.createCalls != 1 {
 		t.Fatalf("status = %d; calls = %d; body = %s", response.Code, runtime.createCalls, response.Body.String())
@@ -187,7 +203,7 @@ func TestCreateInstanceRejectsExplicitEmptyLegacyPolicyFields(t *testing.T) {
 			request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(testCase.body))
 			request.Header.Set("Content-Type", "application/json")
 
-			NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+			newTestHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
 
 			if response.Code != http.StatusBadRequest || runtime.createCalls != 0 {
 				t.Fatalf("status = %d; calls = %d; body = %s", response.Code, runtime.createCalls, response.Body.String())
@@ -209,7 +225,7 @@ func TestCreateInstanceStillRejectsRawContainerSecuritySettings(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 
-	NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+	newTestHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
 
 	if response.Code != http.StatusBadRequest || runtime.createCalls != 0 {
 		t.Fatalf("status = %d; calls = %d; body = %s", response.Code, runtime.createCalls, response.Body.String())
@@ -224,7 +240,7 @@ func TestCreateInstanceRejectsCallerControlledRuntimeGroup(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 
-	NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+	newTestHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
 
 	if response.Code != http.StatusBadRequest || runtime.createCalls != 0 {
 		t.Fatalf("status = %d; calls = %d; body = %s", response.Code, runtime.createCalls, response.Body.String())
@@ -273,7 +289,7 @@ func TestCreateInstanceRejectsDuplicateJSONKeysAtEveryObjectLevel(t *testing.T) 
 			request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(testCase.body))
 			request.Header.Set("Content-Type", "application/json")
 
-			NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+			newTestHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
 
 			if response.Code != http.StatusBadRequest || runtime.createCalls != 0 {
 				t.Fatalf("status = %d; calls = %d; body = %s", response.Code, runtime.createCalls, response.Body.String())
@@ -299,7 +315,7 @@ func TestCreateInstanceIncludesFalseCreatedForIdempotentReplay(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(validCreateRequestJSON()))
 	request.Header.Set("Content-Type", "application/json")
 
-	NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+	newTestHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
 
 	var payload OperationResponse
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
@@ -329,7 +345,7 @@ func TestCreateInstanceRejectsInvalidJSONContracts(t *testing.T) {
 			request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(test.body))
 			request.Header.Set("Content-Type", "application/json")
 
-			NewHandlerWithRuntime(useCase, runtime).ServeHTTP(response, request)
+			newTestHandlerWithRuntime(useCase, runtime).ServeHTTP(response, request)
 
 			if response.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusBadRequest, response.Body.String())
@@ -366,7 +382,7 @@ func TestCreateInstanceRejectsInvalidResourceValues(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json; charset=utf-8")
 
-	NewHandlerWithRuntime(useCase, runtime).ServeHTTP(response, request)
+	newTestHandlerWithRuntime(useCase, runtime).ServeHTTP(response, request)
 
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusBadRequest, response.Body.String())
@@ -384,7 +400,7 @@ func TestCreateInstanceRejectsRequestIDConflict(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(validCreateRequestJSON()))
 	request.Header.Set("Content-Type", "application/json")
 
-	NewHandlerWithRuntime(useCase, runtime).ServeHTTP(response, request)
+	newTestHandlerWithRuntime(useCase, runtime).ServeHTTP(response, request)
 
 	if response.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusConflict, response.Body.String())
@@ -398,7 +414,7 @@ func TestCreateInstanceMapsQueueFailureWithoutLeakingStoreDetails(t *testing.T) 
 	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(validCreateRequestJSON()))
 	request.Header.Set("Content-Type", "application/json")
 
-	NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+	newTestHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
 
 	if response.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusBadGateway, response.Body.String())
@@ -412,7 +428,7 @@ func TestCreateRejectsIsolationPolicy(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(validCreateRequestJSON()))
 	request.Header.Set("Content-Type", "application/json")
 
-	NewHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
+	newTestHandlerWithRuntime(&recordingCreateUseCase{}, runtime).ServeHTTP(response, request)
 
 	if response.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusUnprocessableEntity, response.Body.String())
@@ -427,7 +443,7 @@ func TestCreateInstanceRequiresJSONContentType(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(validCreateRequestJSON()))
 	request.Header.Set("Content-Type", "text/plain")
 
-	NewHandlerWithRuntime(useCase, runtime).ServeHTTP(response, request)
+	newTestHandlerWithRuntime(useCase, runtime).ServeHTTP(response, request)
 
 	if response.Code != http.StatusUnsupportedMediaType {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusUnsupportedMediaType, response.Body.String())
