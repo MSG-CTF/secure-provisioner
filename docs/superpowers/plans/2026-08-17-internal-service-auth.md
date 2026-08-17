@@ -310,7 +310,11 @@ git commit -m "Docs: 내부 API 인증 계약 명시" -m "- OpenAPI Bearer schem
 Run:
 
 ```powershell
-gofmt -w cmd/provisioner/*.go internal/httpapi/*.go
+$goFiles = @(
+  Get-ChildItem -File cmd/provisioner/*.go
+  Get-ChildItem -File internal/httpapi/*.go
+)
+gofmt -w $goFiles.FullName
 git diff --check
 go vet ./...
 go build ./cmd/provisioner
@@ -331,12 +335,15 @@ Expected: 모든 package PASS.
 
 - [ ] **Step 3: 설계 요구사항과 mutation 자체 리뷰**
 
-다음 잘못된 변경을 각 테스트가 잡는지 확인한다.
+다음 잘못된 변경 중 외부에서 관찰 가능한 것은 source/change detector가 아닌 행동 테스트가
+잡는지 확인한다. `ConstantTimeCompare`를 문자열 비교로 바꾸는 mutation은 HTTP 동작만으로
+신뢰성 있게 관찰할 수 없으므로 자동 행동 테스트 대상이 아니라 작은 비교 경계
+(`serviceAuthenticator.authenticate`)의 보안 자체 리뷰로 확인한다.
 
 - 인증 wrapper 제거
 - body 제한과 auth 순서 뒤집기
 - previous token 비교 제거
-- `ConstantTimeCompare` 대신 문자열 비교
+- `ConstantTimeCompare` 대신 문자열 비교(비교 경계 보안 자체 리뷰)
 - 여러 Authorization header 허용
 - config 누락에서 기본 token 사용
 - 파일 전체 whitespace trim

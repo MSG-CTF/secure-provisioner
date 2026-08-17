@@ -98,6 +98,9 @@ func TestServiceAuthenticationRejectsBeforeReadingRequestBody(t *testing.T) {
 	if body.readCalls != 0 {
 		t.Fatalf("request body Read() calls = %d, want 0", body.readCalls)
 	}
+	if request.Body != body {
+		t.Fatalf("request body = %T, want original sentinel body", request.Body)
+	}
 }
 
 func TestAllInternalRoutesRequireServiceAuthentication(t *testing.T) {
