@@ -46,6 +46,22 @@ API 계약은 [런타임 API 명세](docs/api/runtime-operations.md)와
 | `PROVISIONER_ROLLBACK_TIMEOUT` | `30s` | 생성 실패 rollback 제한 시간 |
 | `PROVISIONER_DELETE_TIMEOUT` | `1m` | Namespace 삭제 완료 제한 시간 |
 | `PROVISIONER_WORKER_SHUTDOWN_TIMEOUT` | rollback + `10s` | 종료 시 Worker cleanup 대기 시간 |
+| `PROVISIONER_SERVICE_TOKEN` | 없음 | 현재 Service Bearer token; `PROVISIONER_SERVICE_TOKEN_FILE`와 정확히 하나를 설정 |
+| `PROVISIONER_SERVICE_TOKEN_FILE` | 없음 | 현재 token을 담은 절대 경로 Secret 파일; `PROVISIONER_SERVICE_TOKEN`와 정확히 하나를 설정 |
+| `PROVISIONER_PREVIOUS_SERVICE_TOKEN` | 없음 | 교체 기간에만 허용하는 이전 Service Bearer token; 선택 사항 |
+| `PROVISIONER_PREVIOUS_SERVICE_TOKEN_FILE` | 없음 | 이전 token을 담은 절대 경로 Secret 파일; 이전 token 값 변수와 동시에 설정하지 않음 |
+
+현재 token은 반드시 설정해야 하며 Base64URL 형식의 43~128자여야 합니다. 이전 token은
+선택 사항이지만 설정하면 현재 token과 달라야 합니다. 운영 환경에서는 token 값을 환경에
+직접 넣는 대신 Secret 파일을 우선 사용하고, 파일 경로는 절대 경로로 지정합니다. Secret
+파일의 마지막 LF 또는 CRLF 한 개만 제거해 읽습니다. 값 변수와 해당 파일 변수를 함께
+설정하면 Provisioner는 시작을 거부합니다. token 값을 로그, 명령 기록 또는 문서에
+출력하지 마세요.
+
+내부 API는 Scheduler만 접근할 수 있는 네트워크에 두고, 운영 요청은 HTTPS로 전송해야
+합니다. Provisioner 자체 HTTP listener 앞에 TLS 종료 프록시를 두는 경우에도 Scheduler와
+프록시 사이의 인증·접근 제어를 유지해야 합니다. 기본 `127.0.0.1:8080` HTTP 주소는 로컬
+개발용입니다.
 
 Registry 예시:
 
@@ -114,8 +130,13 @@ PowerShell 실행 예시:
 
 ```powershell
 $env:PROVISIONER_CLUSTER_REGISTRY = "C:\secure\clusters.json"
+$env:PROVISIONER_SERVICE_TOKEN = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" # 43-character local test token only
 go run ./cmd/provisioner
 ```
+
+운영에서는 위의 local test token 대신 Secret 파일을 제공합니다. 예를 들어 현재 token을
+`C:\secure\secrets\provisioner-service-token`에 저장한 뒤, 값 변수는 비워 둔 상태에서
+`PROVISIONER_SERVICE_TOKEN_FILE`만 설정합니다.
 
 ## 비동기 흐름
 

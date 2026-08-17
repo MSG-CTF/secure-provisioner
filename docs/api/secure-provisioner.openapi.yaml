@@ -14,7 +14,8 @@ servers:
         default: 127.0.0.1
       port:
         default: "8080"
-security: []
+security:
+  - ServiceBearerAuth: []
 paths:
   /internal/v1/instances:
     post:
@@ -131,6 +132,8 @@ paths:
       responses:
         "202":
           $ref: "#/components/responses/OperationAccepted"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "400":
           description: Request validation failed
           content:
@@ -206,6 +209,8 @@ paths:
       responses:
         "202":
           $ref: "#/components/responses/OperationAccepted"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "400":
           description: Request validation failed
           content:
@@ -345,6 +350,8 @@ paths:
                     attempt: 3
                     max_attempts: 3
                     last_error_code: TARGET_TEMPORARILY_UNAVAILABLE
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "404":
           description: Operation was not found
           content:
@@ -382,6 +389,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RuntimeStatusResponse"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "404":
           description: Instance runtime binding was not found
           content:
@@ -451,6 +460,10 @@ paths:
                       code: TARGET_TOPOLOGY_INVALID
                       message: runtime target must contain exactly one node
 components:
+  securitySchemes:
+    ServiceBearerAuth:
+      type: http
+      scheme: bearer
   parameters:
     InstanceID:
       name: instance_id
@@ -478,6 +491,24 @@ components:
         minimum: 1
         example: 2
   responses:
+    Unauthenticated:
+      description: Service bearer authentication failed
+      headers:
+        WWW-Authenticate:
+          description: Bearer authentication challenge
+          schema:
+            type: string
+          example: 'Bearer realm="secure-provisioner"'
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            Unauthenticated:
+              value:
+                error:
+                  code: UNAUTHENTICATED
+                  message: service authentication failed
     OperationAccepted:
       description: Operation 접수 성공
       headers:

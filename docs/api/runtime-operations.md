@@ -18,8 +18,41 @@
 - JSON 필드는 `snake_case`를 사용한다.
 - 시간은 UTC RFC 3339 형식을 사용한다.
 - 로컬 기본 주소는 `http://127.0.0.1:8080`이다.
-- 현재 코드에는 애플리케이션 인증이 연결되지 않았으므로 OpenAPI에는
-  `security: []`로 명시한다. 운영 인증은 별도 보안 계약이 필요하다.
+- 모든 `/internal/v1/*` 요청은 Scheduler가 다음 header를 한 번만 보내야 한다.
+  `Authorization: Bearer <service_token>`
+- token이 없거나 malformed이거나 유효하지 않으면 어떤 endpoint든 같은 `401` envelope와
+  `WWW-Authenticate: Bearer realm="secure-provisioner"` header를 반환한다. 이 경우
+  request body나 Operation은 처리하지 않는다.
+- 운영 전송은 HTTPS를 사용한다. 로컬 loopback 개발에서만 기본 HTTP 주소를 사용한다.
+
+### Service 인증 실패 응답
+
+```http
+HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Bearer realm="secure-provisioner"
+Content-Type: application/json
+```
+
+```json
+{
+  "error": {
+    "code": "UNAUTHENTICATED",
+    "message": "service authentication failed"
+  }
+}
+```
+
+### Service token 교체
+
+1. 새 token을 Secret 관리 시스템에서 만들고, 현재 token은 `PROVISIONER_PREVIOUS_SERVICE_TOKEN_FILE`,
+   새 token은 `PROVISIONER_SERVICE_TOKEN_FILE`로 Provisioner에 설정한다. 두 파일은 절대 경로여야
+   하며 두 token은 달라야 한다.
+2. Provisioner를 재시작해 현재·이전 token을 모두 허용하는 상태로 만든다. token 값은 로그에
+   출력하거나 배포 명령에 기록하지 않는다.
+3. Scheduler Secret을 새 token으로 교체하고, 모든 Scheduler 요청이
+   `Authorization: Bearer <service_token>` header로 새 token을 보내는지 확인한다.
+4. 이전 token을 더 이상 쓰지 않는 것을 확인한 뒤 `PROVISIONER_PREVIOUS_SERVICE_TOKEN_FILE`을
+   제거하고 Provisioner를 다시 시작한다. 마지막으로 이전 Secret을 폐기한다.
 
 ## Operation 상태
 
@@ -38,6 +71,7 @@
 
 ```http
 POST /internal/v1/instances
+Authorization: Bearer <service_token>
 Content-Type: application/json
 ```
 
@@ -186,6 +220,7 @@ Binding은 변경하지 않고 그대로 보존한다.
 
 ```http
 DELETE /internal/v1/instances/{instance_id}
+Authorization: Bearer <service_token>
 Content-Type: application/json
 ```
 
@@ -231,6 +266,7 @@ Retry-After: 2
 
 ```http
 GET /internal/v1/operations/{operation_id}
+Authorization: Bearer <service_token>
 ```
 
 ### 처리 중
@@ -322,6 +358,7 @@ NodePort를 자동 할당하며 주소는 `http://<target 공인 IP>:<NodePort>`
 
 ```http
 GET /internal/v1/instances/{instance_id}/runtime-status
+Authorization: Bearer <service_token>
 ```
 
 ### 응답
