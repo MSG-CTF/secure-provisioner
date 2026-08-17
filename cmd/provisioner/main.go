@@ -24,6 +24,7 @@ import (
 type appConfig struct {
 	Address               string
 	RegistryPath          string
+	ServiceAuth           httpapi.ServiceAuthConfig
 	WorkerConcurrency     int
 	MaxAttempts           int
 	ReadyTimeout          time.Duration
@@ -76,8 +77,11 @@ func loadConfig(getenv func(string) string) (appConfig, error) {
 	if config.RegistryPath == "" {
 		return appConfig{}, errors.New("PROVISIONER_CLUSTER_REGISTRY is required")
 	}
-
 	var err error
+	if config.ServiceAuth, err = loadServiceAuthConfig(getenv); err != nil {
+		return appConfig{}, err
+	}
+
 	if config.WorkerConcurrency, err = positiveIntSetting(getenv, "PROVISIONER_WORKER_CONCURRENCY", config.WorkerConcurrency); err != nil {
 		return appConfig{}, err
 	}
