@@ -45,7 +45,8 @@ type openAPIResponse struct {
 }
 
 type openAPIHeader struct {
-	Schema openAPISchema `yaml:"schema"`
+	Schema  openAPISchema `yaml:"schema"`
+	Example string        `json:"example" yaml:"example"`
 }
 
 type openAPISchema struct {
@@ -86,8 +87,12 @@ func TestOpenAPIRequiresServiceBearerAuthentication(t *testing.T) {
 	if !ok {
 		t.Fatal("components.responses.Unauthenticated is missing")
 	}
-	if _, ok := unauthenticated.Headers["WWW-Authenticate"]; !ok {
+	wwwAuthenticate, ok := unauthenticated.Headers["WWW-Authenticate"]
+	if !ok {
 		t.Fatal("Unauthenticated response has no WWW-Authenticate header")
+	}
+	if wwwAuthenticate.Example != `Bearer realm="secure-provisioner"` {
+		t.Fatalf("WWW-Authenticate example = %q, want %q", wwwAuthenticate.Example, `Bearer realm="secure-provisioner"`)
 	}
 	example, ok := unauthenticated.Content["application/json"].Examples["Unauthenticated"]
 	if !ok || example.Value.Error.Code != "UNAUTHENTICATED" || example.Value.Error.Message != "service authentication failed" {
