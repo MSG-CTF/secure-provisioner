@@ -24,6 +24,7 @@ import (
 type appConfig struct {
 	Address               string
 	RegistryPath          string
+	ServiceAuth           httpapi.ServiceAuthConfig
 	WorkerConcurrency     int
 	MaxAttempts           int
 	ReadyTimeout          time.Duration
@@ -78,6 +79,9 @@ func loadConfig(getenv func(string) string) (appConfig, error) {
 	}
 
 	var err error
+	if config.ServiceAuth, err = loadServiceAuthConfig(getenv); err != nil {
+		return appConfig{}, err
+	}
 	if config.WorkerConcurrency, err = positiveIntSetting(getenv, "PROVISIONER_WORKER_CONCURRENCY", config.WorkerConcurrency); err != nil {
 		return appConfig{}, err
 	}
@@ -185,7 +189,7 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 		return nil, err
 	}
 	return &application{
-		handler:   httpapi.NewHandlerWithRuntime(service, service),
+		handler:   httpapi.NewHandlerWithRuntime(service, service, config.ServiceAuth),
 		runWorker: service.Run,
 	}, nil
 }

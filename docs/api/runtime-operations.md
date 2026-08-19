@@ -18,8 +18,12 @@
 - JSON 필드는 `snake_case`를 사용한다.
 - 시간은 UTC RFC 3339 형식을 사용한다.
 - 로컬 기본 주소는 `http://127.0.0.1:8080`이다.
-- 현재 코드에는 애플리케이션 인증이 연결되지 않았으므로 OpenAPI에는
-  `security: []`로 명시한다. 운영 인증은 별도 보안 계약이 필요하다.
+- 모든 `/internal/v1/*` 요청은 `Authorization: Bearer <service_token>` Header를
+  정확히 한 번 보내야 한다.
+- token이 없거나 형식이 잘못됐거나 유효하지 않으면 body나 Operation을 처리하지
+  않고 `401 UNAUTHENTICATED`와 `WWW-Authenticate: Bearer realm="secure-provisioner"`를 반환한다.
+- 운영 전송은 HTTPS를 사용한다. 현재 token과 선택적인 이전 token을 함께 허용해
+  Scheduler token을 무중단 교체할 수 있다.
 
 ## Operation 상태
 
@@ -38,6 +42,7 @@
 
 ```http
 POST /internal/v1/instances
+Authorization: Bearer <service_token>
 Content-Type: application/json
 ```
 
@@ -204,6 +209,7 @@ Binding은 변경하지 않고 그대로 보존한다.
 
 ```http
 DELETE /internal/v1/instances/{instance_id}
+Authorization: Bearer <service_token>
 Content-Type: application/json
 ```
 
@@ -249,6 +255,7 @@ Retry-After: 2
 
 ```http
 GET /internal/v1/operations/{operation_id}
+Authorization: Bearer <service_token>
 ```
 
 ### 처리 중
@@ -354,6 +361,7 @@ Pwn 성공 결과는 endpoint의 `protocol`이 `TCP`이고 주소가
 
 ```http
 GET /internal/v1/instances/{instance_id}/runtime-status
+Authorization: Bearer <service_token>
 ```
 
 ### 응답

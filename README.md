@@ -44,6 +44,16 @@ raw Kubernetes/보안 설정과 제거된 과거 profile 참조 필드는 API �
 | `PROVISIONER_ROLLBACK_TIMEOUT` | `30s` | 생성 실패 rollback 제한 시간 |
 | `PROVISIONER_DELETE_TIMEOUT` | `1m` | Namespace 삭제 완료 제한 시간 |
 | `PROVISIONER_WORKER_SHUTDOWN_TIMEOUT` | rollback + `10s` | 종료 시 Worker cleanup 대기 시간 |
+| `PROVISIONER_SERVICE_TOKEN` | 없음 | 현재 Service Bearer token; token 파일 변수와 정확히 하나를 설정 |
+| `PROVISIONER_SERVICE_TOKEN_FILE` | 없음 | 현재 token을 담은 절대 경로 Secret 파일 |
+| `PROVISIONER_PREVIOUS_SERVICE_TOKEN` | 없음 | 교체 기간에 허용하는 이전 token; 선택 사항 |
+| `PROVISIONER_PREVIOUS_SERVICE_TOKEN_FILE` | 없음 | 이전 token을 담은 절대 경로 Secret 파일 |
+
+현재 token은 필수이며 Base64URL 문자로 구성된 43~128자여야 합니다. 운영에서는
+값을 직접 환경 변수에 넣기보다 절대 경로의 Secret 파일을 사용합니다. 현재·이전
+token은 서로 달라야 하며 값 변수와 대응하는 파일 변수를 동시에 설정하면 시작을
+거부합니다. 모든 내부 API 요청은 HTTPS 환경에서 `Authorization: Bearer <token>`을
+한 번만 보내야 합니다.
 
 Registry 예시:
 
@@ -123,6 +133,7 @@ PowerShell 실행 예시:
 
 ```powershell
 $env:PROVISIONER_CLUSTER_REGISTRY = "C:\secure\clusters.json"
+$env:PROVISIONER_SERVICE_TOKEN = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" # 로컬 테스트 전용
 go run ./cmd/provisioner
 ```
 
