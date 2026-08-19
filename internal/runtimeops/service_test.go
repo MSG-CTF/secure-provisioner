@@ -505,8 +505,8 @@ func TestServiceRestoresCreatedBindingWhenDeleteQueueFails(t *testing.T) {
 	bindings := runtimebinding.NewMemoryStore()
 	binding := savedBinding(t, bindings)
 	store := &failingDeleteOperationStore{
-		Store: operations.NewMemoryStore(nil),
-		err:   errors.New("queue unavailable"),
+		LegacyStore: operations.NewMemoryStore(nil),
+		err:         errors.New("queue unavailable"),
 	}
 	service := newTestServiceWithOperationStore(t, &recordingCreate{}, &recordingStatus{}, &recordingDelete{}, bindings, store)
 
@@ -772,7 +772,7 @@ func (retryableTestError) Retryable() bool {
 }
 
 type failingDeleteOperationStore struct {
-	operations.Store
+	operations.LegacyStore
 	err error
 }
 

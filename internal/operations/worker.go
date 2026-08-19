@@ -28,6 +28,7 @@ type WorkerConfig struct {
 
 type Worker struct {
 	store         Store
+	legacyStore   LegacyStore
 	executor      RuntimeExecutor
 	concurrency   int
 	backoff       BackoffFunc
@@ -50,15 +51,23 @@ func NewWorker(store Store, executor RuntimeExecutor, config WorkerConfig) (*Wor
 		config.Sleep = sleepContext
 	}
 	var leaseStore LeaseStore
+	var legacyStore LegacyStore
 	if config.WorkerID != "" {
 		var ok bool
 		leaseStore, ok = store.(LeaseStore)
 		if !ok || config.PollInterval <= 0 || config.LeaseDuration <= 0 || config.RenewInterval <= 0 || config.RenewInterval >= config.LeaseDuration {
 			return nil, ErrInvalidWorkerConfig
 		}
+	} else {
+		var ok bool
+		legacyStore, ok = store.(LegacyStore)
+		if !ok {
+			return nil, ErrInvalidWorkerConfig
+		}
 	}
 	return &Worker{
 		store:         store,
+		legacyStore:   legacyStore,
 		executor:      executor,
 		concurrency:   config.Concurrency,
 		backoff:       config.Backoff,
@@ -102,7 +111,7 @@ func (w *Worker) Run(ctx context.Context) error {
 				if workCtx.Err() != nil {
 					return
 				}
-				operation, err := w.store.Next(workCtx)
+				operation, err := w.legacyStore.Next(workCtx)
 				if err != nil {
 					if isContextError(err) {
 						return
@@ -254,42 +263,42 @@ func (w *Worker) executeLeased(ctx context.Context, claimed ClaimedOperation) (O
 
 func (w *Worker) process(ctx context.Context, operation Operation) error {
 	if ctx.Err() != nil {
-		return w.store.Requeue(operation.ID)
+		return w.legacyStore.Requeue(operation.ID)
 	}
-	running, err := w.store.MarkRunning(operation.ID)
+	running, err := w.legacyStore.MarkRunning(operation.ID)
 	if err != nil {
 		return err
 	}
 	result, err := w.execute(ctx, running)
 	if err == nil {
-		_, err = w.store.MarkSucceeded(running.ID, result)
+		_, err = w.legacyStore.MarkSucceeded(running.ID, result)
 		if errors.Is(err, ErrInvalidOperationResult) {
-			_, err = w.store.MarkFailed(running.ID, invalidOperationResultErrorCode)
+			_, err = w.legacyStore.MarkFailed(running.ID, invalidOperationResultErrorCode)
 		}
 		return err
 	}
 	if errors.Is(err, ErrInvalidOperationResult) {
-		_, err = w.store.MarkFailed(running.ID, invalidOperationResultErrorCode)
+		_, err = w.legacyStore.MarkFailed(running.ID, invalidOperationResultErrorCode)
 		return err
 	}
 	if ctx.Err() != nil && isContextError(err) {
-		return w.store.Requeue(running.ID)
+		return w.legacyStore.Requeue(running.ID)
 	}
 	code, retryable := ClassifyExecutionError(err)
 	if !retryable || running.Attempt >= running.MaxAttempts {
-		_, markErr := w.store.MarkFailed(running.ID, code)
+		_, markErr := w.legacyStore.MarkFailed(running.ID, code)
 		return markErr
 	}
-	if _, err := w.store.MarkRetrying(running.ID, code); err != nil {
+	if _, err := w.legacyStore.MarkRetrying(running.ID, code); err != nil {
 		return err
 	}
 	if err := w.sleep(ctx, w.backoff(running.Attempt)); err != nil {
 		if ctx.Err() != nil && isContextError(err) {
-			return w.store.Requeue(running.ID)
+			return w.legacyStore.Requeue(running.ID)
 		}
 		return err
 	}
-	return w.store.Requeue(running.ID)
+	return w.legacyStore.Requeue(running.ID)
 }
 
 func (w *Worker) execute(ctx context.Context, running Operation) (OperationResult, error) {
@@ -306,7 +315,7 @@ func (w *Worker) execute(ctx context.Context, running Operation) (OperationResul
 		if !operationResultMatchesType(OperationTypeCreate, result) {
 			return OperationResult{}, ErrInvalidOperationResult
 		}
-		checkpointed, err = w.store.CheckpointCreateResult(running.ID, *result.Create)
+		checkpointed, err = w.legacyStore.CheckpointCreateResult(running.ID, *result.Create)
 		if err != nil {
 			return OperationResult{}, err
 		}

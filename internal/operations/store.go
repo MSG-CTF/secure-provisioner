@@ -20,9 +20,13 @@ var (
 type Store interface {
 	EnqueueCreate(provisioner.CreateWorkloadCommand, int) (Operation, bool, error)
 	EnqueueDelete(provisioner.DeleteWorkloadCommand, int) (Operation, bool, error)
-	Next(context.Context) (Operation, error)
 	Get(string) (Operation, error)
 	GetByRequestID(string) (Operation, error)
+}
+
+type LegacyStore interface {
+	Store
+	Next(context.Context) (Operation, error)
 	MarkRunning(string) (Operation, error)
 	CheckpointCreateResult(string, provisioner.CreateWorkloadResult) (Operation, error)
 	MarkRetrying(string, string) (Operation, error)
@@ -32,6 +36,7 @@ type Store interface {
 }
 
 type LeaseStore interface {
+	Store
 	Claim(context.Context, ClaimOptions) (ClaimedOperation, bool, error)
 	RenewLease(context.Context, ClaimedOperation, time.Time) (ClaimedOperation, error)
 	CheckpointLeaseCreateResult(ClaimedOperation, provisioner.CreateWorkloadResult, time.Time) (ClaimedOperation, error)

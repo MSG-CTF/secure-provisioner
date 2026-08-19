@@ -271,7 +271,7 @@ func TestWorkerCancellationAfterNextRequeuesClaimedOperation(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	store := &cancellingNextStore{Store: memoryStore, cancel: cancel}
+	store := &cancellingNextStore{LegacyStore: memoryStore, cancel: cancel}
 	worker, err := NewWorker(store, &scriptedExecutor{}, WorkerConfig{Concurrency: 1})
 	if err != nil {
 		t.Fatal(err)
@@ -441,7 +441,7 @@ func TestWorkerRequeuesCheckpointOnCancellationAndResumesWithoutExecute(t *testi
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	store := &checkpointCancelingStore{Store: memoryStore, cancel: cancel}
+	store := &checkpointCancelingStore{LegacyStore: memoryStore, cancel: cancel}
 	executor := &checkpointFinalizingExecutor{}
 	worker, err := NewWorker(store, executor, WorkerConfig{Concurrency: 1, Backoff: noBackoff, Sleep: sleepWithContext})
 	if err != nil {
@@ -846,17 +846,17 @@ func (contextErrorStore) MarkFailed(string, string) (Operation, error) {
 }
 
 type cancellingNextStore struct {
-	Store
+	LegacyStore
 	cancel context.CancelFunc
 }
 
 type checkpointCancelingStore struct {
-	Store
+	LegacyStore
 	cancel context.CancelFunc
 }
 
 func (s *checkpointCancelingStore) CheckpointCreateResult(id string, result provisioner.CreateWorkloadResult) (Operation, error) {
-	operation, err := s.Store.CheckpointCreateResult(id, result)
+	operation, err := s.LegacyStore.CheckpointCreateResult(id, result)
 	if err == nil {
 		s.cancel()
 	}
@@ -864,7 +864,7 @@ func (s *checkpointCancelingStore) CheckpointCreateResult(id string, result prov
 }
 
 func (s *cancellingNextStore) Next(ctx context.Context) (Operation, error) {
-	operation, err := s.Store.Next(ctx)
+	operation, err := s.LegacyStore.Next(ctx)
 	if err == nil {
 		s.cancel()
 	}
