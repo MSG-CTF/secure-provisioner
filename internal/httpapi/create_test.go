@@ -134,8 +134,8 @@ func TestCreateWorkloadRequestAcceptsNullableOptionalIsolationRequirements(t *te
 		"target":{"runtime_type":"KUBERNETES","target_id":"aws-dev"},
 		"workload":{
 			"containers":[
-				{"name":"web","image":"web:latest","ports":[8080],"expose":true,"run_as_user":101,"writable_paths":null},
-				{"name":"api","image":"api:latest","ports":[9000],"expose":null,"run_as_user":10001}
+				{"name":"web","image":"web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","ports":[8080],"expose":true,"run_as_user":101,"writable_paths":null},
+				{"name":"api","image":"api@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","ports":[9000],"expose":null,"run_as_user":10001}
 			],
 			"internal_connections":null,
 			"resource_limits":{"cpu_millicores":200,"memory_mib":256,"ephemeral_storage_mib":256}
@@ -251,6 +251,32 @@ func TestCreateWorkloadRequestRejectsInvalidContainerSet(t *testing.T) {
 	}
 }
 
+func TestCreateWorkloadRequestRequiresImmutableSHA256Images(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		image string
+		valid bool
+	}{
+		{name: "digest", image: "ghcr.io/msg-ctf/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", valid: true},
+		{name: "latest", image: "ghcr.io/msg-ctf/web:latest"},
+		{name: "tag only", image: "ghcr.io/msg-ctf/web:v1"},
+		{name: "uppercase digest", image: "ghcr.io/msg-ctf/web@sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
+		{name: "short digest", image: "ghcr.io/msg-ctf/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := validCreateWorkloadRequest()
+			request.Workload.Containers[0].Image = test.image
+			err := request.Validate()
+			if test.valid && err != nil {
+				t.Fatal(err)
+			}
+			if !test.valid && err == nil {
+				t.Fatal("mutable image accepted")
+			}
+		})
+	}
+}
+
 func TestCreateWorkloadRequestRejectsDuplicateJSONKeysAtEveryObjectLevel(t *testing.T) {
 	for _, body := range []string{
 		strings.Replace(validCreateRequestJSON(), `"workload":{`, `"workload":null,"workload":{`, 1),
@@ -317,6 +343,42 @@ func TestMaintainedMultiContainerRequestExampleDecodesAndValidates(t *testing.T)
 	}
 	if err := request.Validate(); err != nil {
 		t.Fatalf("validate maintained request example: %v", err)
+	}
+}
+
+func TestCanonicalMVPRequestFixturesDecodeAndValidate(t *testing.T) {
+	for _, name := range []string{"create-web-digest.json", "create-pwn-digest.json"} {
+		encoded, err := os.ReadFile("../../examples/requests/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var request CreateWorkloadRequest
+		if err := json.Unmarshal(encoded, &request); err != nil {
+			t.Fatalf("decode %s: %v", name, err)
+		}
+		if err := request.Validate(); err != nil {
+			t.Fatalf("validate %s: %v", name, err)
+		}
+		if request.IsolationProfile != "WEB" && request.IsolationProfile != "PWN" {
+			t.Fatalf("profile = %q", request.IsolationProfile)
+		}
+		if !strings.Contains(request.Workload.Containers[0].Image, "@sha256:") {
+			t.Fatalf("%s image is not digest pinned", name)
+		}
+	}
+	encoded, err := os.ReadFile("../../examples/requests/delete-ttl.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request DeleteWorkloadRequest
+	if err := json.Unmarshal(encoded, &request); err != nil {
+		t.Fatal(err)
+	}
+	if err := request.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if request.Reason != DeleteReasonTTLExpired {
+		t.Fatalf("delete_reason = %q", request.Reason)
 	}
 }
 

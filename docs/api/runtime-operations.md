@@ -157,6 +157,8 @@ TCP 포트를 각각 하나만 허용하며, writable path는 `/tmp` 또는 그 
 
 Kubernetes PodSpec에는 pre-pull 여부와 관계없이 정확한 image identifier가 필요하므로
 `image`는 계속 전달한다. 모든 컨테이너는 `imagePullPolicy: IfNotPresent`를 사용한다.
+tag-only 및 `latest`는 거부하며 모든 image는 lowercase 64자리 `@sha256:<digest>`로
+고정해야 한다.
 같은 digest가 노드에 있으면 캐시를 사용하고, 없으면 container runtime이 lazy pull한다.
 Pod egress 차단은 node의 image pull을 막지 않는다. 비공개 GHCR Package라면 K3s
 노드에 pull credential을 별도로 설정해야 한다.

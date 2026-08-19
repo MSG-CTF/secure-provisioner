@@ -194,14 +194,14 @@ go vet ./...
 npx --yes @redocly/cli lint docs/api/secure-provisioner.openapi.yaml
 ```
 
-현재 Operation Store와 Runtime Binding Store는 인메모리 구현입니다.
-CREATE 성공 결과 checkpoint는 같은 프로세스 안의 재시도에서는 CREATE 재호출을
-막지만, 프로세스를 재시작하면 checkpoint, 진행 중 작업과 바인딩이 복구되지 않으므로
-운영 전 영속 Store가 필요합니다. 실제 비공개 문제 이미지의 Registry 인증·pull
-통합 검증은 별도 단계입니다.
+기본 `memory` 모드는 로컬 개발용입니다. `postgres` 모드는 Operation lease,
+CREATE checkpoint, Runtime Binding 및 DELETE 접수를 영속화하며 DELETE 접수와
+Binding 상태 전환을 한 트랜잭션으로 처리합니다. 실제 비공개 문제 이미지의 Registry
+인증·pull 통합 검증은 별도 단계입니다.
 
-MVP profile ref는 `name`/`version`뿐이며 immutable digest나 Catalog assignment
-authority가 아닙니다. Registry의 `security_capabilities`도 target capability의
+MVP profile ref는 `name`/`version`뿐이며 Catalog assignment authority가 아닙니다.
+이미지는 반드시 lowercase SHA-256 digest로 고정해 전달합니다. Registry의
+`security_capabilities`도 target capability의
 선언값이지 실제 enforcement attestation이 아닙니다. Provisioner는 Pod에
 `supplementalGroupsPolicy: Strict`를 지정하고 `supplementalGroups`와 `fsGroup`은
 지정하지 않지만, 실제 Node의 `status.features.supplementalGroupsPolicy`와 CRI 지원을

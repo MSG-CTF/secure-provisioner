@@ -1,0 +1,18 @@
+{
+  "request_id": "runtime-create-pwn-001",
+  "instance_id": "22222222-2222-4222-8222-222222222222",
+  "team_id": 18,
+  "isolation_profile": "PWN",
+  "target": {"runtime_type": "KUBERNETES", "target_id": "aws-k3s-001"},
+  "workload": {
+    "containers": [{
+      "name": "challenge",
+      "image": "ghcr.io/msg-ctf/challenges/pwn@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ports": [31337],
+      "expose": true,
+      "run_as_user": 10001,
+      "writable_paths": [{"path": "/tmp", "size_mib": 64}]
+    }],
+    "resource_limits": {"cpu_millicores": 500, "memory_mib": 512, "ephemeral_storage_mib": 1024}
+  }
+}

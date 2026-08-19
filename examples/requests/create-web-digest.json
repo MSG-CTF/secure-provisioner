@@ -1,0 +1,18 @@
+{
+  "request_id": "runtime-create-web-001",
+  "instance_id": "11111111-1111-4111-8111-111111111111",
+  "team_id": 18,
+  "isolation_profile": "WEB",
+  "target": {"runtime_type": "KUBERNETES", "target_id": "aws-k3s-001"},
+  "workload": {
+    "containers": [{
+      "name": "web",
+      "image": "ghcr.io/msg-ctf/challenges/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ports": [8080],
+      "expose": true,
+      "run_as_user": 10001,
+      "writable_paths": [{"path": "/tmp", "size_mib": 64}]
+    }],
+    "resource_limits": {"cpu_millicores": 500, "memory_mib": 512, "ephemeral_storage_mib": 1024}
+  }
+}

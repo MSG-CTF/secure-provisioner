@@ -11,7 +11,7 @@
     "containers": [
       {
         "name": "web",
-        "image": "ghcr.io/msg-ctf/challenges/oob-test/web:latest",
+        "image": "ghcr.io/msg-ctf/challenges/oob-test/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "ports": [
           8080
         ],
@@ -26,7 +26,7 @@
       },
       {
         "name": "api",
-        "image": "ghcr.io/msg-ctf/challenges/oob-test/web:latest",
+        "image": "ghcr.io/msg-ctf/challenges/oob-test/api@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "ports": [
           8080
         ],

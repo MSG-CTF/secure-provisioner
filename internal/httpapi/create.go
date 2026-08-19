@@ -237,6 +237,9 @@ func (request CreateWorkloadRequest) normalizedContainers() ([]provisioner.Workl
 		if strings.TrimSpace(request.Workload.Image) == "" {
 			return nil, fmt.Errorf("image is required")
 		}
+		if !validImmutableImageReference(request.Workload.Image) {
+			return nil, fmt.Errorf("image must be pinned to a lowercase sha256 digest")
+		}
 		if !validPort(request.Workload.ContainerPort) {
 			return nil, fmt.Errorf("container_port must be between 1 and 65535")
 		}
@@ -262,6 +265,9 @@ func (request CreateWorkloadRequest) normalizedContainers() ([]provisioner.Workl
 		if strings.TrimSpace(container.Image) == "" {
 			return nil, fmt.Errorf("container image is required")
 		}
+		if !validImmutableImageReference(container.Image) {
+			return nil, fmt.Errorf("container image must be pinned to a lowercase sha256 digest")
+		}
 		if len(container.Ports) == 0 {
 			return nil, fmt.Errorf("container ports must not be empty")
 		}
@@ -286,6 +292,26 @@ func (request CreateWorkloadRequest) normalizedContainers() ([]provisioner.Workl
 		return nil, fmt.Errorf("at least one container must be exposed")
 	}
 	return containers, nil
+}
+
+func validImmutableImageReference(value string) bool {
+	name, digest, found := strings.Cut(value, "@sha256:")
+	if !found || name == "" || len(digest) != 64 || strings.Contains(name, "@") {
+		return false
+	}
+	if name != strings.ToLower(name) || strings.ContainsAny(name, " \t\r\n") {
+		return false
+	}
+	lastSlash := strings.LastIndex(name, "/")
+	if strings.Contains(name[lastSlash+1:], ":") {
+		return false
+	}
+	for _, character := range digest {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func (request CreateWorkloadRequest) validateIsolation(containers []provisioner.WorkloadContainer) error {
