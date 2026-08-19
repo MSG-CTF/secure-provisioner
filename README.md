@@ -194,6 +194,11 @@ go vet ./...
 npx --yes @redocly/cli lint docs/api/secure-provisioner.openapi.yaml
 ```
 
+로컬 PostgreSQL 부하·재시작 검증은 `./scripts/test-postgres-runtime.ps1`, 인증된
+CREATE→조회→TTL DELETE 상호작용 검증은 `./scripts/test-mvp-interaction.ps1`로
+실행합니다. 실제 AWS/GCP K3s 테스트는 `K3S_INTEGRATION_*` 환경 변수를 명시적으로
+설정한 경우에만 별도로 실행합니다.
+
 기본 `memory` 모드는 로컬 개발용입니다. `postgres` 모드는 Operation lease,
 CREATE checkpoint, Runtime Binding 및 DELETE 접수를 영속화하며 DELETE 접수와
 Binding 상태 전환을 한 트랜잭션으로 처리합니다. 실제 비공개 문제 이미지의 Registry
