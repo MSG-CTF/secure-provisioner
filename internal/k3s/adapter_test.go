@@ -787,6 +787,24 @@ func TestAdapterReturnsKubernetesAllocatedNodePortURL(t *testing.T) {
 	}
 }
 
+func TestSameServiceSpecAcceptsKubernetesDefaultedExternalTrafficPolicyForNodePort(t *testing.T) {
+	command := validMultiCreateCommand("aws-dev")
+	cluster := validCluster("aws-dev")
+	cluster.Config.ExposureMode = ExposureModeNodePort
+	resources, err := BuildResourceSet(cluster, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	desired := resources.Services[0].DeepCopy()
+	desired.Spec.ExternalTrafficPolicy = ""
+	actual := desired.DeepCopy()
+	actual.Spec.ExternalTrafficPolicy = corev1.ServiceExternalTrafficPolicyCluster
+
+	if !sameServiceSpec(actual, desired) {
+		t.Fatal("sameServiceSpec() = false, want Kubernetes-defaulted NodePort Service accepted")
+	}
+}
+
 func TestAdapterNodePortEndpointFailureDoesNotDeleteReplacementNamespace(t *testing.T) {
 	command := validMultiCreateCommand("aws-dev")
 	resources, err := BuildResourceSet(validCluster("aws-dev"), command)

@@ -320,6 +320,23 @@ func TestBuildResourceSetUsesNodePortOnlyForExposedContainers(t *testing.T) {
 	}
 }
 
+func TestBuildResourceSetSetsClusterExternalTrafficPolicyOnlyOnNodePortServices(t *testing.T) {
+	command := validMultiCreateCommand("aws-dev")
+	cluster := validCluster("aws-dev")
+	cluster.Config.ExposureMode = ExposureModeNodePort
+
+	resources, err := BuildResourceSet(cluster, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resources.Services[0].Spec.ExternalTrafficPolicy; got != corev1.ServiceExternalTrafficPolicyCluster {
+		t.Fatalf("NodePort ExternalTrafficPolicy = %q, want Cluster", got)
+	}
+	if got := resources.Services[1].Spec.ExternalTrafficPolicy; got != "" {
+		t.Fatalf("ClusterIP ExternalTrafficPolicy = %q, want unset", got)
+	}
+}
+
 func TestBuildNodePortEndpointsUsesKubernetesAllocationsInServiceOrder(t *testing.T) {
 	command := validMultiCreateCommand("aws-dev")
 	cluster := validCluster("aws-dev")

@@ -195,6 +195,7 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 		}
 		if container.Expose && cluster.Config.ExposureMode == ExposureModeNodePort {
 			service.Spec.Type = corev1.ServiceTypeNodePort
+			service.Spec.ExternalTrafficPolicy = corev1.ServiceExternalTrafficPolicyCluster
 		}
 		resources.Deployments = append(resources.Deployments, deployment)
 		resources.Services = append(resources.Services, service)

@@ -858,6 +858,9 @@ func normalizeServiceAPIDefaults(service *corev1.Service) {
 		value := corev1.ServiceInternalTrafficPolicyCluster
 		service.Spec.InternalTrafficPolicy = &value
 	}
+	if service.Spec.Type == corev1.ServiceTypeNodePort && service.Spec.ExternalTrafficPolicy == "" {
+		service.Spec.ExternalTrafficPolicy = corev1.ServiceExternalTrafficPolicyCluster
+	}
 	for index := range service.Spec.Ports {
 		if service.Spec.Ports[index].Protocol == "" {
 			service.Spec.Ports[index].Protocol = corev1.ProtocolTCP
