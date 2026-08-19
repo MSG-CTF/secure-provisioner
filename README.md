@@ -44,6 +44,12 @@ raw Kubernetes/보안 설정과 제거된 과거 profile 참조 필드는 API �
 | `PROVISIONER_ROLLBACK_TIMEOUT` | `30s` | 생성 실패 rollback 제한 시간 |
 | `PROVISIONER_DELETE_TIMEOUT` | `1m` | Namespace 삭제 완료 제한 시간 |
 | `PROVISIONER_WORKER_SHUTDOWN_TIMEOUT` | rollback + `10s` | 종료 시 Worker cleanup 대기 시간 |
+| `PROVISIONER_STORE_MODE` | `memory` | `memory` 또는 운영용 `postgres` |
+| `PROVISIONER_DATABASE_URL` | 없음 | PostgreSQL DSN; postgres 모드에서 필수 |
+| `PROVISIONER_WORKERS` | `10` | lease worker 수 |
+| `PROVISIONER_LEASE_DURATION` | `3m` | 작업 lease 유효 시간 |
+| `PROVISIONER_LEASE_RENEW_INTERVAL` | `1m` | lease 갱신 간격; lease 시간보다 짧아야 함 |
+| `PROVISIONER_RETRY_BASE_DELAY` | `1s` | 재시도 지수 backoff 기준 시간 |
 | `PROVISIONER_SERVICE_TOKEN` | 없음 | 현재 Service Bearer token; token 파일 변수와 정확히 하나를 설정 |
 | `PROVISIONER_SERVICE_TOKEN_FILE` | 없음 | 현재 token을 담은 절대 경로 Secret 파일 |
 | `PROVISIONER_PREVIOUS_SERVICE_TOKEN` | 없음 | 교체 기간에 허용하는 이전 token; 선택 사항 |

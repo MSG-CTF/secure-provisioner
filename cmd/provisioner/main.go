@@ -19,12 +19,14 @@ import (
 	"github.com/MSG-CTF/secure-provisioner/internal/operations"
 	"github.com/MSG-CTF/secure-provisioner/internal/runtimebinding"
 	"github.com/MSG-CTF/secure-provisioner/internal/runtimeops"
+	"github.com/MSG-CTF/secure-provisioner/internal/runtimepg"
 )
 
 type appConfig struct {
 	Address               string
 	RegistryPath          string
 	ServiceAuth           httpapi.ServiceAuthConfig
+	RuntimeStore          runtimeStoreConfig
 	WorkerConcurrency     int
 	MaxAttempts           int
 	ReadyTimeout          time.Duration
@@ -37,6 +39,7 @@ type appConfig struct {
 type application struct {
 	handler   http.Handler
 	runWorker func(context.Context) error
+	close     func() error
 }
 
 func main() {
@@ -67,8 +70,8 @@ func loadConfig(getenv func(string) string) (appConfig, error) {
 	config := appConfig{
 		Address:           valueOrDefault(getenv("PROVISIONER_ADDR"), "127.0.0.1:8080"),
 		RegistryPath:      strings.TrimSpace(getenv("PROVISIONER_CLUSTER_REGISTRY")),
-		WorkerConcurrency: 4,
-		MaxAttempts:       3,
+		WorkerConcurrency: 10,
+		MaxAttempts:       4,
 		ReadyTimeout:      2 * time.Minute,
 		PollInterval:      time.Second,
 		RollbackTimeout:   30 * time.Second,
@@ -82,9 +85,10 @@ func loadConfig(getenv func(string) string) (appConfig, error) {
 	if config.ServiceAuth, err = loadServiceAuthConfig(getenv); err != nil {
 		return appConfig{}, err
 	}
-	if config.WorkerConcurrency, err = positiveIntSetting(getenv, "PROVISIONER_WORKER_CONCURRENCY", config.WorkerConcurrency); err != nil {
+	if config.RuntimeStore, err = loadRuntimeStoreConfig(getenv); err != nil {
 		return appConfig{}, err
 	}
+	config.WorkerConcurrency = config.RuntimeStore.Workers
 	if config.MaxAttempts, err = positiveIntSetting(getenv, "PROVISIONER_MAX_ATTEMPTS", config.MaxAttempts); err != nil {
 		return appConfig{}, err
 	}
@@ -169,28 +173,53 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 	if err != nil {
 		return nil, err
 	}
+	var bindingStore runtimebinding.Store = runtimebinding.NewMemoryStore()
+	var operationStore operations.Store = operations.NewMemoryStore(nil)
+	var deleteCoordinator runtimeops.DeleteCoordinator
+	var closeStore func() error
+	if config.RuntimeStore.Mode == "postgres" {
+		database, openErr := runtimepg.Open(context.Background(), config.RuntimeStore.DatabaseURL)
+		if openErr != nil {
+			return nil, openErr
+		}
+		bindingStore = database.Bindings()
+		operationStore = database.Operations()
+		deleteCoordinator = database.DeleteCoordinator()
+		closeStore = database.Close
+	}
 	service, err := runtimeops.NewService(
 		createAdapter,
 		statusReader,
 		deleteAdapter,
-		runtimebinding.NewMemoryStore(),
-		operations.NewMemoryStore(nil),
+		bindingStore,
+		operationStore,
 		isolation.NewStaticResolver(),
 		runtimeops.Config{
-			MaxAttempts:    config.MaxAttempts,
-			CleanupTimeout: config.RollbackTimeout,
+			MaxAttempts:       config.MaxAttempts,
+			CleanupTimeout:    config.RollbackTimeout,
+			DeleteCoordinator: deleteCoordinator,
 			Worker: operations.WorkerConfig{
 				Concurrency: config.WorkerConcurrency,
-				Backoff:     operationBackoff,
+				Backoff: func(attempt int) time.Duration {
+					return config.RuntimeStore.RetryBaseDelay * time.Duration(1<<min(max(attempt-1, 0), 5))
+				},
+				WorkerID:      "provisioner",
+				PollInterval:  config.RuntimeStore.PollInterval,
+				LeaseDuration: config.RuntimeStore.LeaseDuration,
+				RenewInterval: config.RuntimeStore.RenewInterval,
 			},
 		},
 	)
 	if err != nil {
+		if closeStore != nil {
+			_ = closeStore()
+		}
 		return nil, err
 	}
 	return &application{
 		handler:   httpapi.NewHandlerWithRuntime(service, service, config.ServiceAuth),
 		runWorker: service.Run,
+		close:     closeStore,
 	}, nil
 }
 
@@ -256,6 +285,11 @@ func runApplication(ctx context.Context, config appConfig, app *application, log
 			}
 		case <-workerShutdownCtx.Done():
 			runErr = errors.Join(runErr, errors.New("runtime worker shutdown timed out"))
+		}
+	}
+	if app.close != nil {
+		if err := app.close(); err != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("close runtime store: %w", err))
 		}
 	}
 	return runErr

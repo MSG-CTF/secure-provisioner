@@ -30,7 +30,7 @@ func TestLoadConfigRequiresRegistryAndUsesSafeDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if config.Address != "127.0.0.1:8080" || config.RegistryPath != "clusters.json" ||
-		config.WorkerConcurrency != 4 || config.MaxAttempts != 3 ||
+		config.WorkerConcurrency != 10 || config.MaxAttempts != 4 ||
 		config.ReadyTimeout != 2*time.Minute || config.PollInterval != time.Second ||
 		config.RollbackTimeout != 30*time.Second || config.DeleteTimeout != time.Minute ||
 		config.WorkerShutdownTimeout != 40*time.Second ||
@@ -44,7 +44,7 @@ func TestLoadConfigParsesRuntimeSettingsAndRejectsInvalidValues(t *testing.T) {
 		"PROVISIONER_ADDR":                    "0.0.0.0:9090",
 		"PROVISIONER_CLUSTER_REGISTRY":        "clusters.json",
 		"PROVISIONER_SERVICE_TOKEN":           validCurrentServiceToken,
-		"PROVISIONER_WORKER_CONCURRENCY":      "2",
+		"PROVISIONER_WORKERS":                 "2",
 		"PROVISIONER_MAX_ATTEMPTS":            "5",
 		"PROVISIONER_READY_TIMEOUT":           "90s",
 		"PROVISIONER_POLL_INTERVAL":           "250ms",
@@ -63,7 +63,7 @@ func TestLoadConfigParsesRuntimeSettingsAndRejectsInvalidValues(t *testing.T) {
 	}
 
 	for _, key := range []string{
-		"PROVISIONER_WORKER_CONCURRENCY",
+		"PROVISIONER_WORKERS",
 		"PROVISIONER_MAX_ATTEMPTS",
 		"PROVISIONER_READY_TIMEOUT",
 		"PROVISIONER_POLL_INTERVAL",
