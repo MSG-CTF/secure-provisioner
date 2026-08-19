@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
@@ -44,6 +45,7 @@ type Operation struct {
 	MaxAttempts      int
 	Result           OperationResult
 	LastErrorCode    string
+	NextRetryAt      time.Time
 }
 
 func validCreateWorkloadResult(result provisioner.CreateWorkloadResult) bool {

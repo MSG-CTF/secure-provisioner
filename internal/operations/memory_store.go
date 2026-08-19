@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"sync"
+	"time"
 
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 )
@@ -16,6 +17,7 @@ type MemoryStore struct {
 	queue        []string
 	notification chan struct{}
 	idGenerator  IDGenerator
+	leases       map[string]Lease
 }
 
 func NewMemoryStore(idGenerator IDGenerator) *MemoryStore {
@@ -27,7 +29,148 @@ func NewMemoryStore(idGenerator IDGenerator) *MemoryStore {
 		requestIDs:   make(map[string]string),
 		notification: make(chan struct{}, 1),
 		idGenerator:  idGenerator,
+		leases:       make(map[string]Lease),
 	}
+}
+
+func (s *MemoryStore) Claim(ctx context.Context, options ClaimOptions) (ClaimedOperation, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return ClaimedOperation{}, false, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, id := range s.queue {
+		operation, ok := s.operations[id]
+		if !ok {
+			continue
+		}
+		lease := s.leases[id]
+		eligible := operation.Status == OperationStatusQueued ||
+			(operation.Status == OperationStatusRetrying && !operation.NextRetryAt.After(options.Now)) ||
+			(operation.Status == OperationStatusRunning && !lease.Until.After(options.Now))
+		if !eligible {
+			continue
+		}
+		operation.Status = OperationStatusRunning
+		operation.Attempt++
+		lease.Owner = options.WorkerID
+		lease.Version++
+		lease.Until = options.Now.Add(options.LeaseDuration)
+		s.leases[id] = lease
+		return ClaimedOperation{Operation: copyOperation(*operation), Lease: lease}, true, nil
+	}
+	return ClaimedOperation{}, false, nil
+}
+
+func (s *MemoryStore) RenewLease(ctx context.Context, claimed ClaimedOperation, until time.Time) (ClaimedOperation, error) {
+	if err := ctx.Err(); err != nil {
+		return ClaimedOperation{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	operation, err := s.find(claimed.Operation.ID)
+	if err != nil {
+		return ClaimedOperation{}, err
+	}
+	lease := s.leases[operation.ID]
+	if operation.Status != OperationStatusRunning || !sameLease(lease, claimed.Lease) {
+		return ClaimedOperation{}, ErrLeaseLost
+	}
+	lease.Until = until
+	s.leases[operation.ID] = lease
+	return ClaimedOperation{Operation: copyOperation(*operation), Lease: lease}, nil
+}
+
+func (s *MemoryStore) ReleaseLease(claimed ClaimedOperation, _ time.Time) error {
+	s.mu.Lock()
+	operation, err := s.find(claimed.Operation.ID)
+	if err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	if !sameLease(s.leases[operation.ID], claimed.Lease) {
+		s.mu.Unlock()
+		return ErrLeaseLost
+	}
+	if operation.Status == OperationStatusRunning && operation.Attempt > 0 {
+		operation.Attempt--
+	}
+	operation.Status = OperationStatusQueued
+	operation.NextRetryAt = time.Time{}
+	delete(s.leases, operation.ID)
+	s.mu.Unlock()
+	s.notify()
+	return nil
+}
+
+func (s *MemoryStore) CheckpointLeaseCreateResult(claimed ClaimedOperation, result provisioner.CreateWorkloadResult, _ time.Time) (ClaimedOperation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	operation, err := s.find(claimed.Operation.ID)
+	if err != nil {
+		return ClaimedOperation{}, err
+	}
+	if !sameLease(s.leases[operation.ID], claimed.Lease) {
+		return ClaimedOperation{}, ErrLeaseLost
+	}
+	if err := checkpointCreateResult(operation, result); err != nil {
+		return ClaimedOperation{}, err
+	}
+	return ClaimedOperation{Operation: copyOperation(*operation), Lease: claimed.Lease}, nil
+}
+
+func (s *MemoryStore) MarkLeaseRetrying(claimed ClaimedOperation, errorCode string, nextRetryAt, _ time.Time) (Operation, error) {
+	s.mu.Lock()
+	operation, err := s.find(claimed.Operation.ID)
+	if err != nil {
+		s.mu.Unlock()
+		return Operation{}, err
+	}
+	if !sameLease(s.leases[operation.ID], claimed.Lease) {
+		s.mu.Unlock()
+		return Operation{}, ErrLeaseLost
+	}
+	operation.Status = OperationStatusRetrying
+	operation.LastErrorCode = normalizeStableErrorCode(errorCode)
+	operation.NextRetryAt = nextRetryAt
+	delete(s.leases, operation.ID)
+	result := copyOperation(*operation)
+	s.mu.Unlock()
+	s.notify()
+	return result, nil
+}
+
+func (s *MemoryStore) MarkLeaseFailed(claimed ClaimedOperation, errorCode string, _ time.Time) (Operation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	operation, err := s.find(claimed.Operation.ID)
+	if err != nil {
+		return Operation{}, err
+	}
+	if !sameLease(s.leases[operation.ID], claimed.Lease) {
+		return Operation{}, ErrLeaseLost
+	}
+	operation.Status = OperationStatusFailed
+	operation.LastErrorCode = normalizeStableErrorCode(errorCode)
+	delete(s.leases, operation.ID)
+	return copyOperation(*operation), nil
+}
+
+func (s *MemoryStore) MarkLeaseSucceeded(claimed ClaimedOperation, result OperationResult, _ time.Time) (Operation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	operation, err := s.find(claimed.Operation.ID)
+	if err != nil {
+		return Operation{}, err
+	}
+	if !sameLease(s.leases[operation.ID], claimed.Lease) {
+		return Operation{}, ErrLeaseLost
+	}
+	return s.markSucceededLocked(operation, result)
+}
+
+func sameLease(actual, claimed Lease) bool {
+	return actual.Owner == claimed.Owner && actual.Version == claimed.Version
 }
 
 func (s *MemoryStore) EnqueueCreate(command provisioner.CreateWorkloadCommand, maxAttempts int) (Operation, bool, error) {
@@ -127,21 +270,28 @@ func (s *MemoryStore) CheckpointCreateResult(id string, result provisioner.Creat
 	if err != nil {
 		return Operation{}, err
 	}
+	if err := checkpointCreateResult(operation, result); err != nil {
+		return Operation{}, err
+	}
+	return copyOperation(*operation), nil
+}
+
+func checkpointCreateResult(operation *Operation, result provisioner.CreateWorkloadResult) error {
 	if operation.Status != OperationStatusRunning || operation.Type != OperationTypeCreate || operation.CreateCommand == nil {
-		return Operation{}, ErrInvalidTransition
+		return ErrInvalidTransition
 	}
 	if !validCreateWorkloadResult(result) {
-		return Operation{}, ErrInvalidOperationResult
+		return ErrInvalidOperationResult
 	}
 	if operation.CreateCheckpoint != nil {
 		if !sameCreateWorkloadResult(*operation.CreateCheckpoint, result) {
-			return Operation{}, ErrCreateCheckpointConflict
+			return ErrCreateCheckpointConflict
 		}
-		return copyOperation(*operation), nil
+		return nil
 	}
 	checkpoint := copyCreateWorkloadResult(result)
 	operation.CreateCheckpoint = &checkpoint
-	return copyOperation(*operation), nil
+	return nil
 }
 
 func (s *MemoryStore) MarkRetrying(id, errorCode string) (Operation, error) {
@@ -192,6 +342,10 @@ func (s *MemoryStore) MarkSucceeded(id string, result OperationResult) (Operatio
 	if err != nil {
 		return Operation{}, err
 	}
+	return s.markSucceededLocked(operation, result)
+}
+
+func (s *MemoryStore) markSucceededLocked(operation *Operation, result OperationResult) (Operation, error) {
 	if operation.Status != OperationStatusRunning {
 		return Operation{}, ErrInvalidTransition
 	}
@@ -211,6 +365,7 @@ func (s *MemoryStore) MarkSucceeded(id string, result OperationResult) (Operatio
 	}
 	operation.Status = OperationStatusSucceeded
 	operation.Result = copyOperationResult(result)
+	delete(s.leases, operation.ID)
 	return copyOperation(*operation), nil
 }
 

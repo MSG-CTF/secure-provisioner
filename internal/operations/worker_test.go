@@ -350,6 +350,37 @@ func TestWorkerCancellationStopsAllWorkers(t *testing.T) {
 	}
 }
 
+func TestWorkerCancelsExecutorWhenLeaseRenewalFails(t *testing.T) {
+	base := NewMemoryStore(sequenceIDs("op-1"))
+	if _, _, err := base.EnqueueDelete(validDeleteCommand("request-1"), 4); err != nil {
+		t.Fatal(err)
+	}
+	renewErr := errors.New("renew lease failed")
+	store := &failingRenewLeaseStore{MemoryStore: base, err: renewErr}
+	executor := newCancellationExecutor()
+	worker, err := NewWorker(store, executor, WorkerConfig{
+		Concurrency:   1,
+		WorkerID:      "worker-a",
+		PollInterval:  time.Millisecond,
+		LeaseDuration: time.Minute,
+		RenewInterval: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() { result <- worker.Run(context.Background()) }()
+	executor.waitForStarted(t, 1)
+	select {
+	case err := <-result:
+		if !errors.Is(err, renewErr) {
+			t.Fatalf("Run() error = %v, want %v", err, renewErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("worker did not stop after lease renewal failure")
+	}
+}
+
 func TestWorkerTreatsNextContextErrorAsNormalShutdown(t *testing.T) {
 	worker, err := NewWorker(contextErrorStore{}, &scriptedExecutor{}, WorkerConfig{Concurrency: 1})
 	if err != nil {
@@ -762,6 +793,15 @@ func (e *cancellationExecutor) waitForStarted(t *testing.T, want int) {
 }
 
 type contextErrorStore struct{}
+
+type failingRenewLeaseStore struct {
+	*MemoryStore
+	err error
+}
+
+func (store *failingRenewLeaseStore) RenewLease(context.Context, ClaimedOperation, time.Time) (ClaimedOperation, error) {
+	return ClaimedOperation{}, store.err
+}
 
 func (contextErrorStore) EnqueueCreate(provisioner.CreateWorkloadCommand, int) (Operation, bool, error) {
 	return Operation{}, false, errors.New("not implemented")

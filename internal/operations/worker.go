@@ -3,6 +3,7 @@ package operations
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -16,17 +17,26 @@ type BackoffFunc func(attempt int) time.Duration
 type SleepFunc func(context.Context, time.Duration) error
 
 type WorkerConfig struct {
-	Concurrency int
-	Backoff     BackoffFunc
-	Sleep       SleepFunc
+	Concurrency   int
+	Backoff       BackoffFunc
+	Sleep         SleepFunc
+	PollInterval  time.Duration
+	LeaseDuration time.Duration
+	RenewInterval time.Duration
+	WorkerID      string
 }
 
 type Worker struct {
-	store       Store
-	executor    RuntimeExecutor
-	concurrency int
-	backoff     BackoffFunc
-	sleep       SleepFunc
+	store         Store
+	executor      RuntimeExecutor
+	concurrency   int
+	backoff       BackoffFunc
+	sleep         SleepFunc
+	leaseStore    LeaseStore
+	pollInterval  time.Duration
+	leaseDuration time.Duration
+	renewInterval time.Duration
+	workerID      string
 }
 
 func NewWorker(store Store, executor RuntimeExecutor, config WorkerConfig) (*Worker, error) {
@@ -39,18 +49,34 @@ func NewWorker(store Store, executor RuntimeExecutor, config WorkerConfig) (*Wor
 	if config.Sleep == nil {
 		config.Sleep = sleepContext
 	}
+	var leaseStore LeaseStore
+	if config.WorkerID != "" {
+		var ok bool
+		leaseStore, ok = store.(LeaseStore)
+		if !ok || config.PollInterval <= 0 || config.LeaseDuration <= 0 || config.RenewInterval <= 0 || config.RenewInterval >= config.LeaseDuration {
+			return nil, ErrInvalidWorkerConfig
+		}
+	}
 	return &Worker{
-		store:       store,
-		executor:    executor,
-		concurrency: config.Concurrency,
-		backoff:     config.Backoff,
-		sleep:       config.Sleep,
+		store:         store,
+		executor:      executor,
+		concurrency:   config.Concurrency,
+		backoff:       config.Backoff,
+		sleep:         config.Sleep,
+		leaseStore:    leaseStore,
+		pollInterval:  config.PollInterval,
+		leaseDuration: config.LeaseDuration,
+		renewInterval: config.RenewInterval,
+		workerID:      config.WorkerID,
 	}, nil
 }
 
 func (w *Worker) Run(ctx context.Context) error {
 	if ctx == nil {
 		return ErrInvalidWorkerConfig
+	}
+	if w.leaseStore != nil {
+		return w.runLeased(ctx)
 	}
 	workCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -96,6 +122,134 @@ func (w *Worker) Run(ctx context.Context) error {
 	}
 	workers.Wait()
 	return firstErr
+}
+
+func (w *Worker) runLeased(ctx context.Context) error {
+	workCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var workers sync.WaitGroup
+	var errorOnce sync.Once
+	var firstErr error
+	recordError := func(err error) {
+		if err == nil {
+			return
+		}
+		errorOnce.Do(func() { firstErr = err; cancel() })
+	}
+	for index := range w.concurrency {
+		workers.Add(1)
+		go func(workerIndex int) {
+			defer workers.Done()
+			workerID := fmt.Sprintf("%s-%d", w.workerID, workerIndex+1)
+			for workCtx.Err() == nil {
+				claimed, ok, err := w.leaseStore.Claim(workCtx, ClaimOptions{WorkerID: workerID, Now: time.Now().UTC(), LeaseDuration: w.leaseDuration})
+				if err != nil {
+					if !isContextError(err) {
+						recordError(err)
+					}
+					return
+				}
+				if !ok {
+					if err := sleepContext(workCtx, w.pollInterval); err != nil {
+						return
+					}
+					continue
+				}
+				if err := w.processLeased(workCtx, claimed); err != nil {
+					recordError(err)
+					return
+				}
+			}
+		}(index)
+	}
+	workers.Wait()
+	return firstErr
+}
+
+func (w *Worker) processLeased(ctx context.Context, claimed ClaimedOperation) error {
+	executeCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stopRenewal := make(chan struct{})
+	renewalDone := make(chan error, 1)
+	go func() { renewalDone <- w.renewLease(executeCtx, claimed, stopRenewal, cancel) }()
+	result, executeErr := w.executeLeased(executeCtx, claimed)
+	close(stopRenewal)
+	if renewalErr := <-renewalDone; renewalErr != nil {
+		_ = w.leaseStore.ReleaseLease(claimed, time.Now().UTC())
+		return renewalErr
+	}
+	now := time.Now().UTC()
+	if executeErr == nil {
+		_, err := w.leaseStore.MarkLeaseSucceeded(claimed, result, now)
+		if errors.Is(err, ErrInvalidOperationResult) {
+			_, err = w.leaseStore.MarkLeaseFailed(claimed, invalidOperationResultErrorCode, now)
+		}
+		return err
+	}
+	if errors.Is(executeErr, ErrInvalidOperationResult) {
+		_, err := w.leaseStore.MarkLeaseFailed(claimed, invalidOperationResultErrorCode, now)
+		return err
+	}
+	if ctx.Err() != nil && isContextError(executeErr) {
+		return w.leaseStore.ReleaseLease(claimed, now)
+	}
+	code, retryable := ClassifyExecutionError(executeErr)
+	if !retryable || claimed.Operation.Attempt >= claimed.Operation.MaxAttempts {
+		_, err := w.leaseStore.MarkLeaseFailed(claimed, code, now)
+		return err
+	}
+	_, err := w.leaseStore.MarkLeaseRetrying(claimed, code, now.Add(w.backoff(claimed.Operation.Attempt)), now)
+	return err
+}
+
+func (w *Worker) renewLease(ctx context.Context, claimed ClaimedOperation, stop <-chan struct{}, cancel context.CancelFunc) error {
+	ticker := time.NewTicker(w.renewInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-stop:
+			return nil
+		case now := <-ticker.C:
+			if _, err := w.leaseStore.RenewLease(ctx, claimed, now.UTC().Add(w.leaseDuration)); err != nil {
+				cancel()
+				return err
+			}
+		}
+	}
+}
+
+func (w *Worker) executeLeased(ctx context.Context, claimed ClaimedOperation) (OperationResult, error) {
+	operation := claimed.Operation
+	if operation.Type != OperationTypeCreate {
+		return w.executor.Execute(ctx, operation)
+	}
+	if operation.CreateCheckpoint == nil {
+		result, err := w.executor.Execute(ctx, operation)
+		if err != nil {
+			return OperationResult{}, err
+		}
+		if !operationResultMatchesType(OperationTypeCreate, result) {
+			return OperationResult{}, ErrInvalidOperationResult
+		}
+		updated, err := w.leaseStore.CheckpointLeaseCreateResult(claimed, *result.Create, time.Now().UTC())
+		if err != nil {
+			return OperationResult{}, err
+		}
+		operation = updated.Operation
+	}
+	if operation.CreateCheckpoint == nil {
+		return OperationResult{}, ErrInvalidOperationResult
+	}
+	createResult := copyCreateWorkloadResult(*operation.CreateCheckpoint)
+	result := OperationResult{Create: &createResult}
+	if finalizer, ok := w.executor.(CreateResultFinalizer); ok {
+		if err := finalizer.FinalizeCreate(ctx, operation, copyCreateWorkloadResult(createResult)); err != nil {
+			return result, err
+		}
+	}
+	return result, ctx.Err()
 }
 
 func (w *Worker) process(ctx context.Context, operation Operation) error {
