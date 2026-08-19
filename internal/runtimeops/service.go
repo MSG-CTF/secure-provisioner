@@ -29,24 +29,30 @@ type DeleteAdapter interface {
 	DeleteWorkload(context.Context, provisioner.DeleteWorkloadCommand, runtimebinding.Binding) error
 }
 
+type DeleteCoordinator interface {
+	BeginDelete(provisioner.DeleteWorkloadCommand, int, time.Time) (operations.Operation, bool, error)
+}
+
 type Config struct {
-	MaxAttempts    int
-	CleanupTimeout time.Duration
-	Worker         operations.WorkerConfig
+	MaxAttempts       int
+	CleanupTimeout    time.Duration
+	Worker            operations.WorkerConfig
+	DeleteCoordinator DeleteCoordinator
 }
 
 type Service struct {
-	create          CreateAdapter
-	status          StatusSource
-	delete          DeleteAdapter
-	bindings        runtimebinding.Store
-	operations      operations.Store
-	resolver        isolation.Resolver
-	worker          *operations.Worker
-	maxAttempts     int
-	now             func() time.Time
-	enqueueMu       sync.Mutex
-	createdBindings *createdBindingRecorder
+	create            CreateAdapter
+	status            StatusSource
+	delete            DeleteAdapter
+	bindings          runtimebinding.Store
+	operations        operations.Store
+	resolver          isolation.Resolver
+	worker            *operations.Worker
+	maxAttempts       int
+	now               func() time.Time
+	enqueueMu         sync.Mutex
+	createdBindings   *createdBindingRecorder
+	deleteCoordinator DeleteCoordinator
 }
 
 func NewService(
@@ -85,16 +91,17 @@ func NewService(
 		return nil, err
 	}
 	service := &Service{
-		create:          create,
-		status:          status,
-		delete:          deleteAdapter,
-		bindings:        bindings,
-		operations:      operationStore,
-		resolver:        resolver,
-		worker:          worker,
-		maxAttempts:     config.MaxAttempts,
-		now:             time.Now,
-		createdBindings: createdBindings,
+		create:            create,
+		status:            status,
+		delete:            deleteAdapter,
+		bindings:          bindings,
+		operations:        operationStore,
+		resolver:          resolver,
+		worker:            worker,
+		maxAttempts:       config.MaxAttempts,
+		now:               time.Now,
+		createdBindings:   createdBindings,
+		deleteCoordinator: config.DeleteCoordinator,
 	}
 	createdBindings.now = func() time.Time { return service.now() }
 	recordingDelete.now = func() time.Time { return service.now() }
@@ -216,6 +223,7 @@ func createdBinding(
 		Namespace:             namespace,
 		NamespaceUID:          result.NamespaceUID,
 		RuntimeWorkloadID:     result.RuntimeWorkloadID,
+		Endpoints:             append([]provisioner.WorkloadEndpoint(nil), result.Endpoints...),
 		IsolationProfile:      profileIdentity(command.Policy.IsolationRef),
 		WorkloadProfile:       profileIdentity(command.Policy.WorkloadProfileRef),
 		ContainerRequirements: command.Policy.Containers,
@@ -253,6 +261,9 @@ func (s *Service) GetRuntimeStatus(ctx context.Context, instanceID string) (k3s.
 func (s *Service) EnqueueDelete(command provisioner.DeleteWorkloadCommand) (operations.Operation, bool, error) {
 	s.enqueueMu.Lock()
 	defer s.enqueueMu.Unlock()
+	if s.deleteCoordinator != nil {
+		return s.deleteCoordinator.BeginDelete(command, s.maxAttempts, s.now().UTC())
+	}
 
 	existing, err := s.operations.GetByRequestID(command.RequestID)
 	if err == nil {

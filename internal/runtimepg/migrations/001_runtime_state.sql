@@ -23,3 +23,18 @@ CREATE TABLE IF NOT EXISTS runtime_operations (
 CREATE INDEX IF NOT EXISTS runtime_operations_claim_idx
     ON runtime_operations (priority DESC, created_at ASC, next_retry_at, lease_until)
     WHERE status IN ('QUEUED','RUNNING','RETRYING');
+
+CREATE TABLE IF NOT EXISTS runtime_bindings (
+    instance_id TEXT PRIMARY KEY,
+    team_id BIGINT NOT NULL CHECK (team_id > 0),
+    target_id TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    namespace_uid TEXT NOT NULL,
+    runtime_workload_id TEXT NOT NULL,
+    endpoints JSONB NOT NULL DEFAULT '[]'::jsonb,
+    policy_snapshot JSONB NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('CREATED','DELETING','DELETED')),
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    deleted_at TIMESTAMPTZ
+);

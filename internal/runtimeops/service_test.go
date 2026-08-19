@@ -466,6 +466,28 @@ func TestServiceRejectsDeleteCommandThatConflictsWithBinding(t *testing.T) {
 	}
 }
 
+func TestServiceUsesDeleteCoordinatorWhenConfigured(t *testing.T) {
+	bindings := runtimebinding.NewMemoryStore()
+	binding := savedBinding(t, bindings)
+	store := operations.NewMemoryStore(nil)
+	operation, err := operations.NewDeleteOperation("op-delete", deleteCommand(binding), 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator := &recordingDeleteCoordinator{operation: operation, created: true}
+	service, err := NewService(&recordingCreate{}, &recordingStatus{}, &recordingDelete{}, bindings, store, isolation.NewStaticResolver(), Config{
+		MaxAttempts: 3, CleanupTimeout: time.Second, DeleteCoordinator: coordinator,
+		Worker: operations.WorkerConfig{Concurrency: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, created, err := service.EnqueueDelete(deleteCommand(binding))
+	if err != nil || !created || got.ID != coordinator.operation.ID || coordinator.calls != 1 {
+		t.Fatalf("EnqueueDelete = %#v, %t, %v; coordinator calls=%d", got, created, err, coordinator.calls)
+	}
+}
+
 func TestServiceProcessesDeleteAndMarksBindingDeleted(t *testing.T) {
 	bindings := runtimebinding.NewMemoryStore()
 	binding := savedBinding(t, bindings)
@@ -774,6 +796,18 @@ func (retryableTestError) Retryable() bool {
 type failingDeleteOperationStore struct {
 	operations.LegacyStore
 	err error
+}
+
+type recordingDeleteCoordinator struct {
+	operation operations.Operation
+	created   bool
+	err       error
+	calls     int
+}
+
+func (coordinator *recordingDeleteCoordinator) BeginDelete(provisioner.DeleteWorkloadCommand, int, time.Time) (operations.Operation, bool, error) {
+	coordinator.calls++
+	return coordinator.operation, coordinator.created, coordinator.err
 }
 
 func (s *failingDeleteOperationStore) EnqueueDelete(provisioner.DeleteWorkloadCommand, int) (operations.Operation, bool, error) {

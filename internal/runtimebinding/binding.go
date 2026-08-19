@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
+	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 )
 
 type State string
@@ -31,6 +32,7 @@ type Binding struct {
 	Namespace             string
 	NamespaceUID          string
 	RuntimeWorkloadID     string
+	Endpoints             []provisioner.WorkloadEndpoint
 	IsolationProfile      string
 	WorkloadProfile       string
 	ContainerRequirements []isolation.ContainerRequirement
@@ -71,6 +73,7 @@ func samePlacement(first, second Binding) bool {
 		first.Namespace == second.Namespace &&
 		first.NamespaceUID == second.NamespaceUID &&
 		first.RuntimeWorkloadID == second.RuntimeWorkloadID &&
+		reflect.DeepEqual(first.Endpoints, second.Endpoints) &&
 		first.IsolationProfile == second.IsolationProfile &&
 		first.WorkloadProfile == second.WorkloadProfile &&
 		reflect.DeepEqual(first.ContainerRequirements, second.ContainerRequirements) &&
@@ -81,6 +84,7 @@ func samePlacement(first, second Binding) bool {
 
 func copyBinding(binding Binding) Binding {
 	copied := binding
+	copied.Endpoints = append([]provisioner.WorkloadEndpoint(nil), binding.Endpoints...)
 	if binding.ContainerRequirements != nil {
 		copied.ContainerRequirements = make([]isolation.ContainerRequirement, len(binding.ContainerRequirements))
 		for index, requirement := range binding.ContainerRequirements {

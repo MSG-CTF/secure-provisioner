@@ -59,7 +59,7 @@ func openTestDatabase(t *testing.T) *Database {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.db.ExecContext(context.Background(), "TRUNCATE runtime_operations"); err != nil {
+	if _, err := database.db.ExecContext(context.Background(), "TRUNCATE runtime_operations, runtime_bindings"); err != nil {
 		_ = database.Close()
 		t.Fatal(err)
 	}

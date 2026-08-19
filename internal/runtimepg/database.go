@@ -13,6 +13,8 @@ import (
 type Database struct {
 	db         *sql.DB
 	operations *OperationStore
+	bindings   *BindingStore
+	deletes    *DeleteCoordinator
 }
 
 func Open(ctx context.Context, dsn string) (*Database, error) {
@@ -36,8 +38,12 @@ func Open(ctx context.Context, dsn string) (*Database, error) {
 	}
 	database := &Database{db: db}
 	database.operations = &OperationStore{db: db}
+	database.bindings = &BindingStore{db: db}
+	database.deletes = &DeleteCoordinator{db: db}
 	return database, nil
 }
 
-func (database *Database) Operations() *OperationStore { return database.operations }
-func (database *Database) Close() error                { return database.db.Close() }
+func (database *Database) Operations() *OperationStore           { return database.operations }
+func (database *Database) Bindings() *BindingStore               { return database.bindings }
+func (database *Database) DeleteCoordinator() *DeleteCoordinator { return database.deletes }
+func (database *Database) Close() error                          { return database.db.Close() }
