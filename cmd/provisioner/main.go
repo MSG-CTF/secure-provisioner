@@ -269,28 +269,53 @@ func runApplication(ctx context.Context, config appConfig, app *application, log
 		}
 	}
 
-	cancel()
 	httpShutdownCtx, httpShutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer httpShutdownCancel()
-	if err := server.Shutdown(httpShutdownCtx); err != nil {
-		runErr = errors.Join(runErr, fmt.Errorf("graceful shutdown: %w", err))
-	}
-	if !workerStopped {
-		workerShutdownCtx, workerShutdownCancel := context.WithTimeout(context.Background(), config.WorkerShutdownTimeout)
-		defer workerShutdownCancel()
-		select {
-		case err := <-workerErrors:
-			if err != nil {
-				runErr = errors.Join(runErr, fmt.Errorf("runtime worker shutdown: %w", err))
+	shutdownErr := shutdownInOrder(
+		func() error {
+			if err := server.Shutdown(httpShutdownCtx); err != nil {
+				return fmt.Errorf("graceful shutdown: %w", err)
 			}
-		case <-workerShutdownCtx.Done():
-			runErr = errors.Join(runErr, errors.New("runtime worker shutdown timed out"))
-		}
-	}
-	if app.close != nil {
-		if err := app.close(); err != nil {
-			runErr = errors.Join(runErr, fmt.Errorf("close runtime store: %w", err))
-		}
-	}
+			return nil
+		},
+		cancel,
+		func() error {
+			if workerStopped {
+				return nil
+			}
+			workerShutdownCtx, workerShutdownCancel := context.WithTimeout(context.Background(), config.WorkerShutdownTimeout)
+			defer workerShutdownCancel()
+			select {
+			case err := <-workerErrors:
+				if err != nil {
+					return fmt.Errorf("runtime worker shutdown: %w", err)
+				}
+				return nil
+			case <-workerShutdownCtx.Done():
+				return errors.New("runtime worker shutdown timed out")
+			}
+		},
+		app.close,
+	)
+	runErr = errors.Join(runErr, shutdownErr)
 	return runErr
+}
+
+func shutdownInOrder(stopHTTP func() error, cancelWorker func(), waitWorker func() error, closeStore func() error) error {
+	var result error
+	if stopHTTP != nil {
+		result = errors.Join(result, stopHTTP())
+	}
+	if cancelWorker != nil {
+		cancelWorker()
+	}
+	if waitWorker != nil {
+		result = errors.Join(result, waitWorker())
+	}
+	if closeStore != nil {
+		if err := closeStore(); err != nil {
+			result = errors.Join(result, fmt.Errorf("close runtime store: %w", err))
+		}
+	}
+	return result
 }

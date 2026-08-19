@@ -185,6 +185,22 @@ func TestRunApplicationWaitsForWorkerCleanupAfterCancellation(t *testing.T) {
 	}
 }
 
+func TestShutdownInOrderStopsHTTPBeforeWorkerAndStore(t *testing.T) {
+	var order []string
+	err := shutdownInOrder(
+		func() error { order = append(order, "http"); return nil },
+		func() { order = append(order, "cancel") },
+		func() error { order = append(order, "worker"); return nil },
+		func() error { order = append(order, "store"); return nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(order, ","); got != "http,cancel,worker,store" {
+		t.Fatalf("shutdown order = %s", got)
+	}
+}
+
 func environment(values map[string]string) func(string) string {
 	return func(key string) string {
 		return values[key]
