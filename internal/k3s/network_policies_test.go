@@ -295,6 +295,7 @@ func TestBuildNetworkPoliciesRejectsUntrustedTargetSelectors(t *testing.T) {
 func TestBuildNetworkPoliciesUsesDeterministicNamesAndOrder(t *testing.T) {
 	first := validMultiCreateCommand("aws-dev")
 	first.Containers[1].Expose = true
+	first.Policy.Containers[1].Expose = true
 	first.Policy.InternalConnections = []isolation.InternalConnection{
 		{SourceContainer: "web", DestinationContainer: "internal", Protocol: isolation.ProtocolTCP, Port: 9090},
 		{SourceContainer: "internal", DestinationContainer: "web", Protocol: isolation.ProtocolTCP, Port: 8080},
@@ -354,6 +355,7 @@ func networkPolicyCluster(targetID string) Cluster {
 	cluster.Config.SecurityCapabilities = SecurityCapabilities{
 		NetworkPolicyEnforced:          true,
 		SupplementalGroupsPolicyStrict: true,
+		PodPIDLimitEnforced:            true,
 		NetworkPolicyProvider:          "kube-router",
 		DNSNamespace:                   "kube-system",
 		DNSPodSelector:                 map[string]string{"k8s-app": "kube-dns"},

@@ -132,7 +132,7 @@ func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.Create
 	endpoints := append([]provisioner.WorkloadEndpoint(nil), resources.Endpoints...)
 	serviceURL := resources.ServiceURL
 	if cluster.Config.ExposureMode == ExposureModeNodePort {
-		endpoints, err = BuildNodePortEndpoints(cluster.Config.PublicGateway, applied.Services)
+		endpoints, err = BuildNodePortEndpoints(cluster.Config.PublicGateway, command.Policy.EndpointProtocol, applied.Services)
 		if err != nil {
 			return provisioner.CreateWorkloadResult{}, a.failWithRollback(cluster.Client, observedNamespace, "RESOURCE_APPLY_FAILED", err)
 		}
@@ -738,6 +738,9 @@ func normalizeDeploymentAPIDefaults(deployment *appsv1.Deployment) {
 	if podSpec.SchedulerName == "" {
 		podSpec.SchedulerName = corev1.DefaultSchedulerName
 	}
+	if podSpec.DeprecatedServiceAccount == "" {
+		podSpec.DeprecatedServiceAccount = podSpec.ServiceAccountName
+	}
 	if podSpec.TerminationGracePeriodSeconds == nil {
 		value := int64(corev1.DefaultTerminationGracePeriodSeconds)
 		podSpec.TerminationGracePeriodSeconds = &value
@@ -758,32 +761,13 @@ func normalizeContainerAPIDefaults(container *corev1.Container) {
 		container.TerminationMessagePolicy = corev1.TerminationMessageReadFile
 	}
 	if container.ImagePullPolicy == "" {
-		container.ImagePullPolicy = defaultImagePullPolicy(container.Image)
+		container.ImagePullPolicy = corev1.PullIfNotPresent
 	}
 	for index := range container.Ports {
 		if container.Ports[index].Protocol == "" {
 			container.Ports[index].Protocol = corev1.ProtocolTCP
 		}
 	}
-}
-
-func defaultImagePullPolicy(image string) corev1.PullPolicy {
-	nameAndTag := image
-	hasDigest := false
-	if separator := strings.Index(nameAndTag, "@"); separator >= 0 {
-		nameAndTag = nameAndTag[:separator]
-		hasDigest = true
-	}
-	lastSlash := strings.LastIndex(nameAndTag, "/")
-	lastColon := strings.LastIndex(nameAndTag, ":")
-	hasTag := lastColon > lastSlash
-	if hasTag && nameAndTag[lastColon+1:] == "latest" {
-		return corev1.PullAlways
-	}
-	if !hasTag && !hasDigest {
-		return corev1.PullAlways
-	}
-	return corev1.PullIfNotPresent
 }
 
 func reconcileWorkloadMetadata(candidate, desired metav1.Object) {
@@ -873,6 +857,9 @@ func normalizeServiceAPIDefaults(service *corev1.Service) {
 	if service.Spec.InternalTrafficPolicy == nil {
 		value := corev1.ServiceInternalTrafficPolicyCluster
 		service.Spec.InternalTrafficPolicy = &value
+	}
+	if service.Spec.Type == corev1.ServiceTypeNodePort && service.Spec.ExternalTrafficPolicy == "" {
+		service.Spec.ExternalTrafficPolicy = corev1.ServiceExternalTrafficPolicyCluster
 	}
 	for index := range service.Spec.Ports {
 		if service.Spec.Ports[index].Protocol == "" {

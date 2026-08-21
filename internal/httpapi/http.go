@@ -18,15 +18,15 @@ type API struct {
 	directResolver isolation.Resolver
 }
 
-func NewHandler(createWorkload provisioner.CreateWorkloadUseCase) http.Handler {
-	return newHandler(createWorkload, nil)
+func NewHandler(createWorkload provisioner.CreateWorkloadUseCase, authConfig ServiceAuthConfig) http.Handler {
+	return newHandler(createWorkload, nil, authConfig)
 }
 
-func NewHandlerWithRuntime(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase) http.Handler {
-	return newHandler(createWorkload, runtime)
+func NewHandlerWithRuntime(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase, authConfig ServiceAuthConfig) http.Handler {
+	return newHandler(createWorkload, runtime, authConfig)
 }
 
-func newHandler(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase) http.Handler {
+func newHandler(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase, authConfig ServiceAuthConfig) http.Handler {
 	api := &API{createWorkload: createWorkload, runtime: runtime}
 	if runtime == nil {
 		api.directResolver = isolation.NewStaticResolver()
@@ -38,7 +38,7 @@ func newHandler(createWorkload provisioner.CreateWorkloadUseCase, runtime Runtim
 		mux.HandleFunc("DELETE /internal/v1/instances/{instance_id}", api.handleDeleteInstance)
 		mux.HandleFunc("GET /internal/v1/operations/{operation_id}", api.handleGetOperation)
 	}
-	return requestSizeLimit(mux)
+	return newServiceAuthenticator(authConfig).wrap(requestSizeLimit(mux))
 }
 
 func (api *API) handleCreateInstance(writer http.ResponseWriter, request *http.Request) {

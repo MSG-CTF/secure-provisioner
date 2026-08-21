@@ -67,12 +67,12 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 	if !validWorkloadCommand(cluster, command, containers) {
 		return ResourceSet{}, newRuntimeError("INVALID_CREATE_COMMAND", false, nil)
 	}
-	if err := cluster.Supports(command.Policy); err != nil {
-		return ResourceSet{}, err
-	}
 	policyContainers, validPolicy := validateResolvedPolicy(command, containers)
 	if !validPolicy {
 		return ResourceSet{}, newRuntimeError("INVALID_CREATE_COMMAND", false, nil)
+	}
+	if err := cluster.Supports(command.Policy); err != nil {
+		return ResourceSet{}, err
 	}
 
 	namespace, err := NamespaceForInstance(command.InstanceID)
@@ -145,9 +145,10 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 		}
 
 		podContainer := corev1.Container{
-			Name:  container.Name,
-			Image: container.Image,
-			Ports: containerPorts,
+			Name:            container.Name,
+			Image:           container.Image,
+			ImagePullPolicy: corev1.PullIfNotPresent,
+			Ports:           containerPorts,
 			Resources: corev1.ResourceRequirements{
 				Requests: quantities,
 				Limits:   quantities.DeepCopy(),
@@ -155,6 +156,10 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 		}
 		podSpec := corev1.PodSpec{Containers: []corev1.Container{podContainer}}
 		applyPodSecurityBaseline(&podSpec, &podSpec.Containers[0], requirement)
+		if command.Policy.RuntimeClassName != "" {
+			runtimeClassName := command.Policy.RuntimeClassName
+			podSpec.RuntimeClassName = &runtimeClassName
+		}
 		deployment := &appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:        container.Name,
@@ -190,6 +195,7 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 		}
 		if container.Expose && cluster.Config.ExposureMode == ExposureModeNodePort {
 			service.Spec.Type = corev1.ServiceTypeNodePort
+			service.Spec.ExternalTrafficPolicy = corev1.ServiceExternalTrafficPolicyCluster
 		}
 		resources.Deployments = append(resources.Deployments, deployment)
 		resources.Services = append(resources.Services, service)
@@ -215,6 +221,7 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 				resources.Endpoints = append(resources.Endpoints, provisioner.WorkloadEndpoint{
 					ContainerName: container.Name,
 					Port:          port,
+					Protocol:      isolation.EndpointProtocolHTTP,
 					ServiceURL:    strings.TrimRight(cluster.Config.PublicGateway, "/") + path,
 				})
 			}
@@ -231,7 +238,14 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 	return resources, nil
 }
 
-func BuildNodePortEndpoints(publicGateway string, services []*corev1.Service) ([]provisioner.WorkloadEndpoint, error) {
+func BuildNodePortEndpoints(
+	publicGateway string,
+	protocol isolation.EndpointProtocol,
+	services []*corev1.Service,
+) ([]provisioner.WorkloadEndpoint, error) {
+	if protocol != isolation.EndpointProtocolHTTP && protocol != isolation.EndpointProtocolTCP {
+		return nil, newRuntimeError("RESOURCE_APPLY_FAILED", false, nil)
+	}
 	gateway, err := url.Parse(publicGateway)
 	if err != nil || gateway.Scheme == "" || gateway.Hostname() == "" {
 		return nil, newRuntimeError("RESOURCE_APPLY_FAILED", true, err)
@@ -251,10 +265,14 @@ func BuildNodePortEndpoints(publicGateway string, services []*corev1.Service) ([
 				return nil, newRuntimeError("RESOURCE_APPLY_FAILED", true, nil)
 			}
 			endpointURL := *gateway
+			if protocol == isolation.EndpointProtocolTCP {
+				endpointURL.Scheme = "tcp"
+			}
 			endpointURL.Host = net.JoinHostPort(gateway.Hostname(), strconv.Itoa(int(port.NodePort)))
 			endpoints = append(endpoints, provisioner.WorkloadEndpoint{
 				ContainerName: containerName,
 				Port:          int(port.Port),
+				Protocol:      protocol,
 				ServiceURL:    endpointURL.String(),
 			})
 		}
@@ -305,23 +323,33 @@ func createContainerSpecHash(
 	limits provisioner.ResourceLimits,
 ) (string, error) {
 	spec := struct {
-		InstanceID     string                         `json:"instance_id"`
-		TeamID         int64                          `json:"team_id"`
-		RuntimeType    provisioner.RuntimeType        `json:"runtime_type"`
-		TargetID       string                         `json:"target_id"`
-		Container      provisioner.WorkloadContainer  `json:"container"`
-		Requirement    isolation.ContainerRequirement `json:"requirement"`
-		Baseline       isolation.Baseline             `json:"baseline"`
-		ResourceLimits provisioner.ResourceLimits     `json:"resource_limits"`
+		InstanceID          string                         `json:"instance_id"`
+		TeamID              int64                          `json:"team_id"`
+		RuntimeType         provisioner.RuntimeType        `json:"runtime_type"`
+		TargetID            string                         `json:"target_id"`
+		Container           provisioner.WorkloadContainer  `json:"container"`
+		Requirement         isolation.ContainerRequirement `json:"requirement"`
+		IsolationRef        isolation.ProfileRef           `json:"isolation_ref"`
+		WorkloadProfileRef  isolation.ProfileRef           `json:"workload_profile_ref"`
+		RuntimeClassName    string                         `json:"runtime_class_name"`
+		EndpointProtocol    isolation.EndpointProtocol     `json:"endpoint_protocol"`
+		ExposureRequirement isolation.ExposureRequirement  `json:"exposure_requirement"`
+		Baseline            isolation.Baseline             `json:"baseline"`
+		ResourceLimits      provisioner.ResourceLimits     `json:"resource_limits"`
 	}{
-		InstanceID:     command.InstanceID,
-		TeamID:         command.TeamID,
-		RuntimeType:    command.RuntimeType,
-		TargetID:       command.TargetID,
-		Container:      container,
-		Requirement:    requirement,
-		Baseline:       command.Policy.Baseline,
-		ResourceLimits: limits,
+		InstanceID:          command.InstanceID,
+		TeamID:              command.TeamID,
+		RuntimeType:         command.RuntimeType,
+		TargetID:            command.TargetID,
+		Container:           container,
+		Requirement:         requirement,
+		IsolationRef:        command.Policy.IsolationRef,
+		WorkloadProfileRef:  command.Policy.WorkloadProfileRef,
+		RuntimeClassName:    command.Policy.RuntimeClassName,
+		EndpointProtocol:    command.Policy.EndpointProtocol,
+		ExposureRequirement: command.Policy.ExposureRequirement,
+		Baseline:            command.Policy.Baseline,
+		ResourceLimits:      limits,
 	}
 	encoded, err := json.Marshal(spec)
 	if err != nil {

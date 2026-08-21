@@ -499,34 +499,21 @@ func TestAdapterAcceptsDocumentedDeploymentAPIServerDefaults(t *testing.T) {
 	}
 }
 
-func TestDefaultImagePullPolicyMatchesKubernetesTagAndDigestRules(t *testing.T) {
-	digest := strings.Repeat("a", 64)
-	for _, test := range []struct {
-		name  string
-		image string
-		want  corev1.PullPolicy
-	}{
-		{name: "latest tag with digest", image: "registry.example/challenge:latest@sha256:" + digest, want: corev1.PullAlways},
-		{name: "version tag with digest", image: "registry.example/challenge:v2@sha256:" + digest, want: corev1.PullIfNotPresent},
-		{name: "digest without tag", image: "registry.example/challenge@sha256:" + digest, want: corev1.PullIfNotPresent},
-		{name: "registry port without tag", image: "registry.example:5000/challenge", want: corev1.PullAlways},
-		{name: "registry port and digest without tag", image: "registry.example:5000/challenge@sha256:" + digest, want: corev1.PullIfNotPresent},
-		{name: "registry port latest tag and digest", image: "registry.example:5000/challenge:latest@sha256:" + digest, want: corev1.PullAlways},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			if got := defaultImagePullPolicy(test.image); got != test.want {
-				t.Fatalf("defaultImagePullPolicy(%q) = %q, want %q", test.image, got, test.want)
-			}
-		})
-	}
+func TestRenderedContainersUseIfNotPresentForPrePullAndLazyPull(t *testing.T) {
+	command := validMultiCreateCommand("aws-dev")
+	command.Containers[0].Image = "registry.example/challenge:latest"
+	command.Containers[1].Image = "registry.example/sidecar"
 
-	container := corev1.Container{
-		Image:           "registry.example/challenge:latest@sha256:" + digest,
-		ImagePullPolicy: corev1.PullNever,
+	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
 	}
-	normalizeContainerAPIDefaults(&container)
-	if container.ImagePullPolicy != corev1.PullNever {
-		t.Fatalf("explicit imagePullPolicy = %q, want unchanged %q", container.ImagePullPolicy, corev1.PullNever)
+	for _, deployment := range resources.Deployments {
+		for _, container := range deployment.Spec.Template.Spec.Containers {
+			if container.ImagePullPolicy != corev1.PullIfNotPresent {
+				t.Fatalf("container %q pull policy = %q, want %q", container.Name, container.ImagePullPolicy, corev1.PullIfNotPresent)
+			}
+		}
 	}
 }
 
@@ -685,6 +672,9 @@ func TestAdapterRejectsTargetWithoutRequiredIsolationCapability(t *testing.T) {
 		{name: "strict supplemental groups policy", mutate: func(capabilities *SecurityCapabilities) {
 			capabilities.SupplementalGroupsPolicyStrict = false
 		}},
+		{name: "Pod PID limit", mutate: func(capabilities *SecurityCapabilities) {
+			capabilities.PodPIDLimitEnforced = false
+		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			command := validCreateCommand("aws-dev")
@@ -700,6 +690,42 @@ func TestAdapterRejectsTargetWithoutRequiredIsolationCapability(t *testing.T) {
 			}
 			if runtimeErr.Retryable() {
 				t.Fatal("TARGET_CAPABILITY_MISMATCH must not be retryable")
+			}
+			if got := len(client.Actions()); got != 0 {
+				t.Fatalf("K3s client actions = %d, want 0", got)
+			}
+		})
+	}
+}
+
+func TestAdapterRejectsUnsupportedPwnTargetBeforeKubernetesCalls(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*ClusterConfig)
+	}{
+		{name: "missing gVisor", mutate: func(config *ClusterConfig) {
+			config.ExposureMode = ExposureModeNodePort
+			config.SecurityCapabilities.RuntimeClasses = nil
+		}},
+		{name: "Ingress exposure", mutate: func(config *ClusterConfig) {
+			config.ExposureMode = ExposureModeIngressPath
+			config.SecurityCapabilities.RuntimeClasses = []string{"gvisor"}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			command := validCreateCommand("aws-dev")
+			command.Policy.WorkloadProfileRef = isolation.ProfileRef{Name: "PWN", Version: "v1"}
+			command.Policy.RuntimeClassName = "gvisor"
+			command.Policy.EndpointProtocol = isolation.EndpointProtocolTCP
+			command.Policy.ExposureRequirement = isolation.ExposureNodePortOnly
+			config := validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")
+			test.mutate(&config)
+			client := fake.NewSimpleClientset()
+			adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{config}, client))
+
+			_, err := adapter.CreateWorkload(context.Background(), command)
+			if code := runtimeErrorCode(t, err); code != "TARGET_CAPABILITY_MISMATCH" {
+				t.Fatalf("code = %q, want TARGET_CAPABILITY_MISMATCH", code)
 			}
 			if got := len(client.Actions()); got != 0 {
 				t.Fatalf("K3s client actions = %d, want 0", got)
@@ -758,6 +784,24 @@ func TestAdapterReturnsKubernetesAllocatedNodePortURL(t *testing.T) {
 	}
 	if got := actionCount(client, "create", "ingresses"); got != 0 {
 		t.Fatalf("ingress create actions = %d, want 0", got)
+	}
+}
+
+func TestSameServiceSpecAcceptsKubernetesDefaultedExternalTrafficPolicyForNodePort(t *testing.T) {
+	command := validMultiCreateCommand("aws-dev")
+	cluster := validCluster("aws-dev")
+	cluster.Config.ExposureMode = ExposureModeNodePort
+	resources, err := BuildResourceSet(cluster, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	desired := resources.Services[0].DeepCopy()
+	desired.Spec.ExternalTrafficPolicy = ""
+	actual := desired.DeepCopy()
+	actual.Spec.ExternalTrafficPolicy = corev1.ServiceExternalTrafficPolicyCluster
+
+	if !sameServiceSpec(actual, desired) {
+		t.Fatal("sameServiceSpec() = false, want Kubernetes-defaulted NodePort Service accepted")
 	}
 }
 
@@ -853,7 +897,7 @@ func TestUpsertServicePreservesAllocatedNodePortOnReconcile(t *testing.T) {
 	if got := stored.Spec.Ports[0].NodePort; got != 31042 {
 		t.Fatalf("NodePort = %d, want 31042", got)
 	}
-	endpoints, err := BuildNodePortEndpoints(cluster.Config.PublicGateway, []*corev1.Service{stored})
+	endpoints, err := BuildNodePortEndpoints(cluster.Config.PublicGateway, isolation.EndpointProtocolHTTP, []*corev1.Service{stored})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2972,6 +3016,7 @@ func applyDocumentedDeploymentDefaults(deployment *appsv1.Deployment) {
 	podSpec.RestartPolicy = corev1.RestartPolicyAlways
 	podSpec.DNSPolicy = corev1.DNSClusterFirst
 	podSpec.SchedulerName = corev1.DefaultSchedulerName
+	podSpec.DeprecatedServiceAccount = podSpec.ServiceAccountName
 	podSpec.TerminationGracePeriodSeconds = ptr.To[int64](30)
 	for index := range podSpec.Containers {
 		container := &podSpec.Containers[index]

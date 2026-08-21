@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
@@ -44,6 +45,7 @@ type Operation struct {
 	MaxAttempts      int
 	Result           OperationResult
 	LastErrorCode    string
+	NextRetryAt      time.Time
 }
 
 func validCreateWorkloadResult(result provisioner.CreateWorkloadResult) bool {
@@ -125,7 +127,6 @@ func sameCreateCommand(first, second provisioner.CreateWorkloadCommand) bool {
 	if first.RequestID != second.RequestID ||
 		first.InstanceID != second.InstanceID ||
 		first.TeamID != second.TeamID ||
-		first.ChallengeRef != second.ChallengeRef ||
 		first.RuntimeType != second.RuntimeType ||
 		first.TargetID != second.TargetID ||
 		first.ResourceLimits != second.ResourceLimits ||

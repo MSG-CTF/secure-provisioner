@@ -503,6 +503,10 @@ func TestBuildResourceSetRejectsUnsafeOrUnresolvableResolvedPolicy(t *testing.T)
 		{name: "privileged", mutate: func(policy *isolation.ResolvedPolicy) { policy.Baseline.Privileged = true }},
 		{name: "capability retained", mutate: func(policy *isolation.ResolvedPolicy) { policy.Baseline.DropAllCapabilities = false }},
 		{name: "seccomp disabled", mutate: func(policy *isolation.ResolvedPolicy) { policy.Baseline.SeccompRuntimeDefault = false }},
+		{name: "missing workload profile", mutate: func(policy *isolation.ResolvedPolicy) { policy.WorkloadProfileRef = isolation.ProfileRef{} }},
+		{name: "Web with sandbox runtime", mutate: func(policy *isolation.ResolvedPolicy) { policy.RuntimeClassName = "gvisor" }},
+		{name: "Web with TCP endpoint", mutate: func(policy *isolation.ResolvedPolicy) { policy.EndpointProtocol = isolation.EndpointProtocolTCP }},
+		{name: "Web with Pwn exposure", mutate: func(policy *isolation.ResolvedPolicy) { policy.ExposureRequirement = isolation.ExposureNodePortOnly }},
 		{name: "root UID", mutate: func(policy *isolation.ResolvedPolicy) { policy.Containers[0].RunAsUser = 0 }},
 		{name: "unknown container", mutate: func(policy *isolation.ResolvedPolicy) { policy.Containers[0].Name = "missing" }},
 		{name: "unapproved port", mutate: func(policy *isolation.ResolvedPolicy) { policy.Containers[0].Ports = []int{9090} }},
@@ -515,6 +519,9 @@ func TestBuildResourceSetRejectsUnsafeOrUnresolvableResolvedPolicy(t *testing.T)
 		}},
 		{name: "host secret path", mutate: func(policy *isolation.ResolvedPolicy) {
 			policy.Containers[0].WritablePaths = []isolation.WritablePath{{Path: "/var/run/secrets/token", SizeMiB: 1}}
+		}},
+		{name: "device path", mutate: func(policy *isolation.ResolvedPolicy) {
+			policy.Containers[0].WritablePaths = []isolation.WritablePath{{Path: "/dev/shm", SizeMiB: 1}}
 		}},
 		{name: "overlapping path", mutate: func(policy *isolation.ResolvedPolicy) {
 			policy.Containers[0].WritablePaths = []isolation.WritablePath{{Path: "/tmp", SizeMiB: 1}, {Path: "/tmp/cache", SizeMiB: 1}}
@@ -530,6 +537,37 @@ func TestBuildResourceSetRejectsUnsafeOrUnresolvableResolvedPolicy(t *testing.T)
 				t.Fatalf("error = %v, want INVALID_CREATE_COMMAND", err)
 			}
 		})
+	}
+}
+
+func TestBuildResourceSetRejectsNonCanonicalPwnExecutionPolicy(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		mutate func(*isolation.ResolvedPolicy)
+	}{
+		{name: "missing gVisor", mutate: func(policy *isolation.ResolvedPolicy) { policy.RuntimeClassName = "" }},
+		{name: "HTTP endpoint", mutate: func(policy *isolation.ResolvedPolicy) { policy.EndpointProtocol = isolation.EndpointProtocolHTTP }},
+		{name: "unrestricted exposure", mutate: func(policy *isolation.ResolvedPolicy) { policy.ExposureRequirement = isolation.ExposureAnySupported }},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			command := validPwnCreateCommand("aws-dev")
+			testCase.mutate(&command.Policy)
+			_, err := BuildResourceSet(nodePortGVisorCluster("aws-dev"), command)
+			if code := runtimeErrorCode(t, err); code != "INVALID_CREATE_COMMAND" {
+				t.Fatalf("code = %q, want INVALID_CREATE_COMMAND", code)
+			}
+		})
+	}
+}
+
+func TestBuildResourceSetRejectsWebExecutionPolicyWithoutExposedContainer(t *testing.T) {
+	command := validCreateCommand("aws-dev")
+	command.Containers[0].Expose = false
+	command.Policy.Containers[0].Expose = false
+
+	_, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if code := runtimeErrorCode(t, err); code != "INVALID_CREATE_COMMAND" {
+		t.Fatalf("code = %q, want INVALID_CREATE_COMMAND", code)
 	}
 }
 

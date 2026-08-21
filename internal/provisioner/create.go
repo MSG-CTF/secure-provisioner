@@ -19,11 +19,6 @@ type ResourceLimits struct {
 	EphemeralStorageMiB int
 }
 
-type ChallengeRef struct {
-	ChallengeID string
-	Version     string
-}
-
 type WorkloadContainer struct {
 	Name   string
 	Image  string
@@ -35,7 +30,6 @@ type CreateWorkloadCommand struct {
 	RequestID      string
 	InstanceID     string
 	TeamID         int64
-	ChallengeRef   ChallengeRef
 	RuntimeType    RuntimeType
 	TargetID       string
 	Containers     []WorkloadContainer
@@ -54,6 +48,7 @@ type CreateWorkloadResult struct {
 type WorkloadEndpoint struct {
 	ContainerName string
 	Port          int
+	Protocol      isolation.EndpointProtocol
 	ServiceURL    string
 }
 

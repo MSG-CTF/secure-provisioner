@@ -271,7 +271,7 @@ func TestWorkerCancellationAfterNextRequeuesClaimedOperation(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	store := &cancellingNextStore{Store: memoryStore, cancel: cancel}
+	store := &cancellingNextStore{LegacyStore: memoryStore, cancel: cancel}
 	worker, err := NewWorker(store, &scriptedExecutor{}, WorkerConfig{Concurrency: 1})
 	if err != nil {
 		t.Fatal(err)
@@ -350,6 +350,37 @@ func TestWorkerCancellationStopsAllWorkers(t *testing.T) {
 	}
 }
 
+func TestWorkerCancelsExecutorWhenLeaseRenewalFails(t *testing.T) {
+	base := NewMemoryStore(sequenceIDs("op-1"))
+	if _, _, err := base.EnqueueDelete(validDeleteCommand("request-1"), 4); err != nil {
+		t.Fatal(err)
+	}
+	renewErr := errors.New("renew lease failed")
+	store := &failingRenewLeaseStore{MemoryStore: base, err: renewErr}
+	executor := newCancellationExecutor()
+	worker, err := NewWorker(store, executor, WorkerConfig{
+		Concurrency:   1,
+		WorkerID:      "worker-a",
+		PollInterval:  time.Millisecond,
+		LeaseDuration: time.Minute,
+		RenewInterval: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() { result <- worker.Run(context.Background()) }()
+	executor.waitForStarted(t, 1)
+	select {
+	case err := <-result:
+		if !errors.Is(err, renewErr) {
+			t.Fatalf("Run() error = %v, want %v", err, renewErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("worker did not stop after lease renewal failure")
+	}
+}
+
 func TestWorkerTreatsNextContextErrorAsNormalShutdown(t *testing.T) {
 	worker, err := NewWorker(contextErrorStore{}, &scriptedExecutor{}, WorkerConfig{Concurrency: 1})
 	if err != nil {
@@ -410,7 +441,7 @@ func TestWorkerRequeuesCheckpointOnCancellationAndResumesWithoutExecute(t *testi
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	store := &checkpointCancelingStore{Store: memoryStore, cancel: cancel}
+	store := &checkpointCancelingStore{LegacyStore: memoryStore, cancel: cancel}
 	executor := &checkpointFinalizingExecutor{}
 	worker, err := NewWorker(store, executor, WorkerConfig{Concurrency: 1, Backoff: noBackoff, Sleep: sleepWithContext})
 	if err != nil {
@@ -763,6 +794,15 @@ func (e *cancellationExecutor) waitForStarted(t *testing.T, want int) {
 
 type contextErrorStore struct{}
 
+type failingRenewLeaseStore struct {
+	*MemoryStore
+	err error
+}
+
+func (store *failingRenewLeaseStore) RenewLease(context.Context, ClaimedOperation, time.Time) (ClaimedOperation, error) {
+	return ClaimedOperation{}, store.err
+}
+
 func (contextErrorStore) EnqueueCreate(provisioner.CreateWorkloadCommand, int) (Operation, bool, error) {
 	return Operation{}, false, errors.New("not implemented")
 }
@@ -806,17 +846,17 @@ func (contextErrorStore) MarkFailed(string, string) (Operation, error) {
 }
 
 type cancellingNextStore struct {
-	Store
+	LegacyStore
 	cancel context.CancelFunc
 }
 
 type checkpointCancelingStore struct {
-	Store
+	LegacyStore
 	cancel context.CancelFunc
 }
 
 func (s *checkpointCancelingStore) CheckpointCreateResult(id string, result provisioner.CreateWorkloadResult) (Operation, error) {
-	operation, err := s.Store.CheckpointCreateResult(id, result)
+	operation, err := s.LegacyStore.CheckpointCreateResult(id, result)
 	if err == nil {
 		s.cancel()
 	}
@@ -824,7 +864,7 @@ func (s *checkpointCancelingStore) CheckpointCreateResult(id string, result prov
 }
 
 func (s *cancellingNextStore) Next(ctx context.Context) (Operation, error) {
-	operation, err := s.Store.Next(ctx)
+	operation, err := s.LegacyStore.Next(ctx)
 	if err == nil {
 		s.cancel()
 	}

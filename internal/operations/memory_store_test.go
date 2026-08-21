@@ -9,8 +9,61 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 )
+
+func TestMemoryStoreReclaimsExpiredLeaseAndRejectsStaleOwner(t *testing.T) {
+	store := NewMemoryStore(sequenceIDs("op-1"))
+	if _, _, err := store.EnqueueCreate(validCreateCommand("request-1"), 4); err != nil {
+		t.Fatal(err)
+	}
+	first, claimed, err := store.Claim(context.Background(), ClaimOptions{
+		WorkerID: "worker-a", Now: time.Unix(100, 0), LeaseDuration: time.Minute,
+	})
+	if err != nil || !claimed {
+		t.Fatalf("first claim = %#v, %t, %v", first, claimed, err)
+	}
+	second, claimed, err := store.Claim(context.Background(), ClaimOptions{
+		WorkerID: "worker-b", Now: time.Unix(161, 0), LeaseDuration: time.Minute,
+	})
+	if err != nil || !claimed {
+		t.Fatalf("reclaim = %#v, %t, %v", second, claimed, err)
+	}
+	if second.Lease.Version <= first.Lease.Version {
+		t.Fatalf("reclaimed lease version = %d, want greater than %d", second.Lease.Version, first.Lease.Version)
+	}
+	if _, err := store.MarkLeaseSucceeded(first, OperationResult{}, time.Unix(162, 0)); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("stale completion error = %v", err)
+	}
+}
+
+func TestMemoryStoreDoesNotClaimRetryBeforeNextRetryAt(t *testing.T) {
+	store := NewMemoryStore(sequenceIDs("op-1"))
+	if _, _, err := store.EnqueueDelete(validDeleteCommand("request-1"), 4); err != nil {
+		t.Fatal(err)
+	}
+	claimed, ok, err := store.Claim(context.Background(), ClaimOptions{
+		WorkerID: "worker-a", Now: time.Unix(100, 0), LeaseDuration: time.Minute,
+	})
+	if err != nil || !ok {
+		t.Fatalf("claim = %#v, %t, %v", claimed, ok, err)
+	}
+	if _, err := store.MarkLeaseRetrying(claimed, "TARGET_TEMPORARILY_UNAVAILABLE", time.Unix(200, 0), time.Unix(101, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if early, ok, err := store.Claim(context.Background(), ClaimOptions{
+		WorkerID: "worker-b", Now: time.Unix(199, 0), LeaseDuration: time.Minute,
+	}); err != nil || ok {
+		t.Fatalf("early claim = %#v, %t, %v", early, ok, err)
+	}
+	retried, ok, err := store.Claim(context.Background(), ClaimOptions{
+		WorkerID: "worker-b", Now: time.Unix(200, 0), LeaseDuration: time.Minute,
+	})
+	if err != nil || !ok || retried.Operation.Attempt != 2 {
+		t.Fatalf("retry claim = %#v, %t, %v", retried, ok, err)
+	}
+}
 
 func TestMemoryStoreDeduplicatesSameRequest(t *testing.T) {
 	store := NewMemoryStore(sequenceIDs("op-1", "op-2"))
@@ -265,6 +318,7 @@ func TestMemoryStoreCopiesCreateResultEndpoints(t *testing.T) {
 		Endpoints: []provisioner.WorkloadEndpoint{{
 			ContainerName: "web",
 			Port:          8080,
+			Protocol:      isolation.EndpointProtocolHTTP,
 			ServiceURL:    "https://gateway.example/instances/inst-1",
 		}},
 	}}
@@ -284,7 +338,8 @@ func TestMemoryStoreCopiesCreateResultEndpoints(t *testing.T) {
 		t.Fatal(err)
 	}
 	endpoint := stored.Result.Create.Endpoints[0]
-	if endpoint.Port != 8080 || endpoint.ServiceURL != "https://gateway.example/instances/inst-1" {
+	if endpoint.Port != 8080 || endpoint.Protocol != isolation.EndpointProtocolHTTP ||
+		endpoint.ServiceURL != "https://gateway.example/instances/inst-1" {
 		t.Fatalf("store leaked result endpoints: %#v", endpoint)
 	}
 }
@@ -634,6 +689,7 @@ func validCreateCheckpointResult() provisioner.CreateWorkloadResult {
 		Endpoints: []provisioner.WorkloadEndpoint{{
 			ContainerName: "web",
 			Port:          8080,
+			Protocol:      isolation.EndpointProtocolHTTP,
 			ServiceURL:    "https://gateway.example/instances/inst-1",
 		}},
 	}

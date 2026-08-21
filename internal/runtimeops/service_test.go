@@ -51,7 +51,7 @@ func TestEnqueueCreateResolvesPolicyBeforePersistingOperation(t *testing.T) {
 	if err != nil || !created {
 		t.Fatalf("EnqueueCreate() = (%#v, %t, %v)", operation, created, err)
 	}
-	if resolver.calls != 1 || resolver.request.ChallengeID != "web-chall1" {
+	if resolver.calls != 1 || resolver.request.WorkloadProfile != isolation.WorkloadProfileWeb {
 		t.Fatalf("resolver calls = %d; request = %#v", resolver.calls, resolver.request)
 	}
 	if operation.CreateCommand == nil || operation.CreateCommand.Policy.IsolationRef.Name != "STANDARD" ||
@@ -134,8 +134,7 @@ func TestCreateOperationStoresAppliedIsolationPolicy(t *testing.T) {
 	}
 	wantPolicy := validResolvedPolicyFor(command.PolicyRequest)
 	if binding.NamespaceUID != create.result.NamespaceUID ||
-		binding.ChallengeID != "web-chall2" || binding.ChallengeVersion != "2026.08.1" ||
-		binding.IsolationProfile != "STANDARD@v1" || binding.ResourceProfile != "SMALL_MULTI@v1" ||
+		binding.IsolationProfile != "STANDARD@v1" || binding.WorkloadProfile != "WEB@v1" ||
 		!reflect.DeepEqual(binding.ContainerRequirements, wantPolicy.Containers) ||
 		!reflect.DeepEqual(binding.InternalConnections, wantPolicy.InternalConnections) ||
 		binding.OutboundMode != isolation.OutboundNone || binding.ResourceLimits != wantPolicy.ResourceLimits {
@@ -253,8 +252,7 @@ func TestServiceProcessesCreateAndRecordsBinding(t *testing.T) {
 		binding.Namespace != "ctf-018f3f1e21b87a91a30b63b3400fd001" ||
 		binding.NamespaceUID != create.result.NamespaceUID ||
 		binding.RuntimeWorkloadID != create.result.RuntimeWorkloadID ||
-		binding.ChallengeID != "web-chall1" || binding.ChallengeVersion != "2026.08.1" ||
-		binding.IsolationProfile != "STANDARD@v1" || binding.ResourceProfile != "SMALL_SINGLE@v1" ||
+		binding.IsolationProfile != "STANDARD@v1" || binding.WorkloadProfile != "WEB@v1" ||
 		!reflect.DeepEqual(binding.ContainerRequirements, validResolvedPolicy().Containers) ||
 		binding.OutboundMode != isolation.OutboundNone {
 		t.Fatalf("binding = %#v", binding)
@@ -468,6 +466,28 @@ func TestServiceRejectsDeleteCommandThatConflictsWithBinding(t *testing.T) {
 	}
 }
 
+func TestServiceUsesDeleteCoordinatorWhenConfigured(t *testing.T) {
+	bindings := runtimebinding.NewMemoryStore()
+	binding := savedBinding(t, bindings)
+	store := operations.NewMemoryStore(nil)
+	operation, err := operations.NewDeleteOperation("op-delete", deleteCommand(binding), 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator := &recordingDeleteCoordinator{operation: operation, created: true}
+	service, err := NewService(&recordingCreate{}, &recordingStatus{}, &recordingDelete{}, bindings, store, isolation.NewStaticResolver(), Config{
+		MaxAttempts: 3, CleanupTimeout: time.Second, DeleteCoordinator: coordinator,
+		Worker: operations.WorkerConfig{Concurrency: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, created, err := service.EnqueueDelete(deleteCommand(binding))
+	if err != nil || !created || got.ID != coordinator.operation.ID || coordinator.calls != 1 {
+		t.Fatalf("EnqueueDelete = %#v, %t, %v; coordinator calls=%d", got, created, err, coordinator.calls)
+	}
+}
+
 func TestServiceProcessesDeleteAndMarksBindingDeleted(t *testing.T) {
 	bindings := runtimebinding.NewMemoryStore()
 	binding := savedBinding(t, bindings)
@@ -507,8 +527,8 @@ func TestServiceRestoresCreatedBindingWhenDeleteQueueFails(t *testing.T) {
 	bindings := runtimebinding.NewMemoryStore()
 	binding := savedBinding(t, bindings)
 	store := &failingDeleteOperationStore{
-		Store: operations.NewMemoryStore(nil),
-		err:   errors.New("queue unavailable"),
+		LegacyStore: operations.NewMemoryStore(nil),
+		err:         errors.New("queue unavailable"),
 	}
 	service := newTestServiceWithOperationStore(t, &recordingCreate{}, &recordingStatus{}, &recordingDelete{}, bindings, store)
 
@@ -774,8 +794,20 @@ func (retryableTestError) Retryable() bool {
 }
 
 type failingDeleteOperationStore struct {
-	operations.Store
+	operations.LegacyStore
 	err error
+}
+
+type recordingDeleteCoordinator struct {
+	operation operations.Operation
+	created   bool
+	err       error
+	calls     int
+}
+
+func (coordinator *recordingDeleteCoordinator) BeginDelete(provisioner.DeleteWorkloadCommand, int, time.Time) (operations.Operation, bool, error) {
+	coordinator.calls++
+	return coordinator.operation, coordinator.created, coordinator.err
 }
 
 func (s *failingDeleteOperationStore) EnqueueDelete(provisioner.DeleteWorkloadCommand, int) (operations.Operation, bool, error) {
@@ -784,12 +816,11 @@ func (s *failingDeleteOperationStore) EnqueueDelete(provisioner.DeleteWorkloadCo
 
 func createCommand() provisioner.CreateWorkloadCommand {
 	return provisioner.CreateWorkloadCommand{
-		RequestID:    "create-request-01",
-		InstanceID:   "018f3f1e-21b8-7a91-a30b-63b3400fd001",
-		TeamID:       18,
-		ChallengeRef: provisioner.ChallengeRef{ChallengeID: "web-chall1", Version: "2026.08.1"},
-		RuntimeType:  provisioner.RuntimeTypeKubernetes,
-		TargetID:     "aws-dev",
+		RequestID:   "create-request-01",
+		InstanceID:  "018f3f1e-21b8-7a91-a30b-63b3400fd001",
+		TeamID:      18,
+		RuntimeType: provisioner.RuntimeTypeKubernetes,
+		TargetID:    "aws-dev",
 		Containers: []provisioner.WorkloadContainer{{
 			Name:   "challenge",
 			Image:  "registry.example.invalid/challenge@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -802,13 +833,10 @@ func createCommand() provisioner.CreateWorkloadCommand {
 			EphemeralStorageMiB: 128,
 		},
 		PolicyRequest: isolation.Request{
-			ChallengeID:  "web-chall1",
-			IsolationRef: isolation.ProfileRef{Name: "STANDARD", Version: "v1"},
-			ResourceRef:  isolation.ProfileRef{Name: "SMALL_SINGLE", Version: "v1"},
+			WorkloadProfile: isolation.WorkloadProfileWeb,
 			Containers: []isolation.ContainerRequirement{{
-				Name: "challenge", Ports: []int{8080}, RunAsUser: 10001,
+				Name: "challenge", Ports: []int{8080}, Expose: true, RunAsUser: 10001,
 			}},
-			OutboundMode:   isolation.OutboundNone,
 			ResourceLimits: isolation.ResourceLimits{CPUMillicores: 100, MemoryMiB: 128, EphemeralStorageMiB: 128},
 		},
 	}
@@ -828,23 +856,19 @@ func validResolvedPolicyFor(request isolation.Request) isolation.ResolvedPolicy 
 
 func createPolicyCommand() provisioner.CreateWorkloadCommand {
 	command := createCommand()
-	command.ChallengeRef = provisioner.ChallengeRef{ChallengeID: "web-chall2", Version: "2026.08.1"}
 	command.Containers = []provisioner.WorkloadContainer{
 		{Name: "web", Image: "registry.example.invalid/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Ports: []int{8000}, Expose: true},
 		{Name: "api", Image: "registry.example.invalid/api@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Ports: []int{8080}},
 	}
 	command.PolicyRequest = isolation.Request{
-		ChallengeID:  "web-chall2",
-		IsolationRef: isolation.ProfileRef{Name: "STANDARD", Version: "v1"},
-		ResourceRef:  isolation.ProfileRef{Name: "SMALL_MULTI", Version: "v1"},
+		WorkloadProfile: isolation.WorkloadProfileWeb,
 		Containers: []isolation.ContainerRequirement{
-			{Name: "web", Ports: []int{8000}, RunAsUser: 101, WritablePaths: []isolation.WritablePath{{Path: "/tmp", SizeMiB: 64}}},
+			{Name: "web", Ports: []int{8000}, Expose: true, RunAsUser: 101, WritablePaths: []isolation.WritablePath{{Path: "/tmp", SizeMiB: 64}}},
 			{Name: "api", Ports: []int{8080}, RunAsUser: 10001},
 		},
 		InternalConnections: []isolation.InternalConnection{{
 			SourceContainer: "web", DestinationContainer: "api", Protocol: isolation.ProtocolTCP, Port: 8080,
 		}},
-		OutboundMode: isolation.OutboundNone,
 		ResourceLimits: isolation.ResourceLimits{
 			CPUMillicores: 200, MemoryMiB: 256, EphemeralStorageMiB: 256,
 		},

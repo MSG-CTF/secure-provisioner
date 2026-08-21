@@ -24,9 +24,8 @@ func validateResolvedPolicy(
 	containers []provisioner.WorkloadContainer,
 ) (map[string]isolation.ContainerRequirement, bool) {
 	policy := command.Policy
-	if policy.ChallengeID == "" ||
-		policy.IsolationRef.Name == "" || policy.IsolationRef.Version == "" ||
-		policy.ResourceRef.Name == "" || policy.ResourceRef.Version == "" ||
+	if policy.IsolationRef != (isolation.ProfileRef{Name: "STANDARD", Version: "v1"}) ||
+		!canonicalExecutionPolicy(policy) ||
 		policy.OutboundMode != isolation.OutboundNone ||
 		policy.Baseline != requiredSecurityBaseline() ||
 		len(policy.Containers) != len(containers) ||
@@ -39,6 +38,7 @@ func validateResolvedPolicy(
 	approved := make(map[string]isolation.ContainerRequirement, len(policy.Containers))
 	totalWritableMiB := int64(0)
 	totalEphemeralMiB := int64(policy.ResourceLimits.EphemeralStorageMiB)
+	exposedContainers := 0
 	for _, requirement := range policy.Containers {
 		if requirement.RunAsUser <= 0 {
 			return nil, false
@@ -56,9 +56,19 @@ func validateResolvedPolicy(
 			}
 			seenPorts[port] = struct{}{}
 		}
+		if requirement.Expose {
+			exposedContainers++
+			if policy.WorkloadProfileRef == (isolation.ProfileRef{Name: "PWN", Version: "v1"}) && len(requirement.Ports) != 1 {
+				return nil, false
+			}
+		}
 		cleanPaths := make([]string, 0, len(requirement.WritablePaths))
 		for _, writable := range requirement.WritablePaths {
 			if writable.SizeMiB <= 0 || int64(writable.SizeMiB) > math.MaxInt64/(1024*1024) || !safeWritablePath(writable.Path) {
+				return nil, false
+			}
+			if policy.WorkloadProfileRef == (isolation.ProfileRef{Name: "PWN", Version: "v1"}) &&
+				writable.Path != "/tmp" && !strings.HasPrefix(writable.Path, "/tmp/") {
 				return nil, false
 			}
 			for _, existing := range cleanPaths {
@@ -75,10 +85,13 @@ func validateResolvedPolicy(
 		}
 		approved[requirement.Name] = requirement
 	}
+	if policy.WorkloadProfileRef == (isolation.ProfileRef{Name: "PWN", Version: "v1"}) && exposedContainers != 1 {
+		return nil, false
+	}
 
 	for index, container := range containers {
 		requirement, found := approved[container.Name]
-		if !found || !samePorts(container.Ports, requirement.Ports) {
+		if !found || container.Expose != requirement.Expose || !samePorts(container.Ports, requirement.Ports) {
 			return nil, false
 		}
 		containerWritableMiB := int64(0)
@@ -97,6 +110,21 @@ func validateResolvedPolicy(
 	return approved, true
 }
 
+func canonicalExecutionPolicy(policy isolation.ResolvedPolicy) bool {
+	switch policy.WorkloadProfileRef {
+	case isolation.ProfileRef{Name: "WEB", Version: "v1"}:
+		return policy.RuntimeClassName == "" &&
+			policy.EndpointProtocol == isolation.EndpointProtocolHTTP &&
+			policy.ExposureRequirement == isolation.ExposureAnySupported
+	case isolation.ProfileRef{Name: "PWN", Version: "v1"}:
+		return policy.RuntimeClassName == "gvisor" &&
+			policy.EndpointProtocol == isolation.EndpointProtocolTCP &&
+			policy.ExposureRequirement == isolation.ExposureNodePortOnly
+	default:
+		return false
+	}
+}
+
 func requiredSecurityBaseline() isolation.Baseline {
 	return isolation.Baseline{
 		AutomountServiceAccountToken: false,
@@ -113,7 +141,7 @@ func safeWritablePath(value string) bool {
 	if value == "" || !strings.HasPrefix(value, "/") || path.Clean(value) != value || value == "/" {
 		return false
 	}
-	for _, reserved := range []string{"/proc", "/sys", "/var/run/secrets"} {
+	for _, reserved := range []string{"/proc", "/sys", "/dev", "/var/run/secrets"} {
 		if value == reserved || strings.HasPrefix(value, reserved+"/") {
 			return false
 		}
