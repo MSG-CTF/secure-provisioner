@@ -2113,7 +2113,7 @@ func TestAdapterRollbackUsesNamespaceUIDAndResourceVersionPreconditions(t *testi
 				"app.kubernetes.io/managed-by": "secure-provisioner",
 				"app.kubernetes.io/name":       resourceName,
 				"msgctf.io/instance-id":        "018f3f1e-21b8-7a91-a30b-63b3400fd002",
-				"msgctf.io/team-id":            "42",
+				"msgctf.io/team-id":            "00000000-0000-4000-8000-000000000042",
 			},
 		}}
 		if err := client.Tracker().Update(corev1.SchemeGroupVersion.WithResource("namespaces"), foreign, ""); err != nil {
@@ -2573,7 +2573,7 @@ func TestAdapterDoesNotDeleteNamespaceOwnedByAnotherInstance(t *testing.T) {
 			"app.kubernetes.io/managed-by": "secure-provisioner",
 			"app.kubernetes.io/name":       resourceName,
 			"msgctf.io/instance-id":        "018f3f1e-21b8-7a91-a30b-63b3400fd002",
-			"msgctf.io/team-id":            "42",
+			"msgctf.io/team-id":            "00000000-0000-4000-8000-000000000042",
 		},
 	}})
 	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))

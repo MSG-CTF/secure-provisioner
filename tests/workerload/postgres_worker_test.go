@@ -107,5 +107,5 @@ func openDatabase(t *testing.T) (*runtimepg.Database, *sql.DB) {
 }
 
 func createCommand(requestID, instanceID string) provisioner.CreateWorkloadCommand {
-	return provisioner.CreateWorkloadCommand{RequestID: requestID, InstanceID: instanceID, TeamID: 1, RuntimeType: provisioner.RuntimeTypeKubernetes, TargetID: "aws-k3s-001", Containers: []provisioner.WorkloadContainer{{Name: "web", Image: "ghcr.io/msg-ctf/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Ports: []int{8080}, Expose: true}}, ResourceLimits: provisioner.ResourceLimits{CPUMillicores: 100, MemoryMiB: 128, EphemeralStorageMiB: 128}}
+	return provisioner.CreateWorkloadCommand{RequestID: requestID, InstanceID: instanceID, TeamID: "00000000-0000-4000-8000-000000000001", RuntimeType: provisioner.RuntimeTypeKubernetes, TargetID: "aws-k3s-001", Containers: []provisioner.WorkloadContainer{{Name: "web", Image: "ghcr.io/msg-ctf/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Ports: []int{8080}, Expose: true}}, ResourceLimits: provisioner.ResourceLimits{CPUMillicores: 100, MemoryMiB: 128, EphemeralStorageMiB: 128}}
 }

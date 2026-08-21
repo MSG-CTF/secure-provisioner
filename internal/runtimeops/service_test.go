@@ -818,7 +818,7 @@ func createCommand() provisioner.CreateWorkloadCommand {
 	return provisioner.CreateWorkloadCommand{
 		RequestID:   "create-request-01",
 		InstanceID:  "018f3f1e-21b8-7a91-a30b-63b3400fd001",
-		TeamID:      18,
+		TeamID:      "00000000-0000-4000-8000-000000000018",
 		RuntimeType: provisioner.RuntimeTypeKubernetes,
 		TargetID:    "aws-dev",
 		Containers: []provisioner.WorkloadContainer{{
@@ -881,7 +881,7 @@ func savedBinding(t *testing.T, store runtimebinding.Store) runtimebinding.Bindi
 	t.Helper()
 	binding := runtimebinding.Binding{
 		InstanceID:        createCommand().InstanceID,
-		TeamID:            18,
+		TeamID:            "00000000-0000-4000-8000-000000000018",
 		TargetID:          "aws-dev",
 		Namespace:         "ctf-018f3f1e21b87a91a30b63b3400fd001",
 		NamespaceUID:      "namespace-uid-01",

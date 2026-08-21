@@ -172,7 +172,7 @@ func TestNewOperationRejectsEmptyIDRequestIDAndInvalidMaxAttempts(t *testing.T) 
 
 func TestSameRequestRequiresMatchingTypeRequestIDAndFullCommand(t *testing.T) {
 	createCommand := provisioner.CreateWorkloadCommand{
-		RequestID: "req-1", InstanceID: "inst-1", TeamID: 7,
+		RequestID: "req-1", InstanceID: "inst-1", TeamID: "00000000-0000-4000-8000-000000000007",
 		RuntimeType: provisioner.RuntimeTypeKubernetes, TargetID: "aws-dev",
 		Containers: []provisioner.WorkloadContainer{{
 			Name: "challenge", Image: "nginx:1.27", Ports: []int{80}, Expose: true,

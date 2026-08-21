@@ -224,7 +224,7 @@ func TestBuildNetworkPoliciesScopesPodSelectorsToOwningTeamAndInstance(t *testin
 		SourceContainer: "web", DestinationContainer: "internal", Protocol: isolation.ProtocolTCP, Port: 9090,
 	}}
 	second := first
-	second.TeamID = 84
+	second.TeamID = "00000000-0000-4000-8000-000000000084"
 
 	firstResources := buildNetworkPolicyResources(t, first)
 	secondResources := buildNetworkPolicyResources(t, second)

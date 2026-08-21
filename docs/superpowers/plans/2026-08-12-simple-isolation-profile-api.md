@@ -155,7 +155,7 @@ Use a literal valid request containing:
 {
   "request_id":"runtime-create-018f3f1e",
   "instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001",
-  "team_id":18,
+  "team_id":"00000000-0000-4000-8000-000000000018",
   "isolation_profile":"WEB",
   "target":{"runtime_type":"KUBERNETES","target_id":"aws-k3s-001"},
   "workload":{

@@ -69,7 +69,7 @@ func openTestDatabase(t *testing.T) *Database {
 
 func validDeleteCommand(requestID string) provisioner.DeleteWorkloadCommand {
 	return provisioner.DeleteWorkloadCommand{
-		RequestID: requestID, InstanceID: "11111111-1111-4111-8111-111111111111", TeamID: 1,
+		RequestID: requestID, InstanceID: "11111111-1111-4111-8111-111111111111", TeamID: "00000000-0000-4000-8000-000000000001",
 		RuntimeType: provisioner.RuntimeTypeKubernetes, TargetID: "aws-k3s-001",
 		RuntimeWorkloadID: "aws-k3s-001/instance-11111111", Reason: provisioner.DeleteReasonUserRequested,
 	}

@@ -2,7 +2,6 @@ package k3s
 
 import (
 	"context"
-	"strconv"
 	"time"
 
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
@@ -166,5 +165,5 @@ func deleteMatchesBinding(command provisioner.DeleteWorkloadCommand, binding run
 func namespaceOwnedByBinding(labels map[string]string, binding runtimebinding.Binding) bool {
 	return labels["app.kubernetes.io/managed-by"] == "secure-provisioner" &&
 		labels["msgctf.io/instance-id"] == binding.InstanceID &&
-		labels["msgctf.io/team-id"] == strconv.FormatInt(binding.TeamID, 10)
+		labels["msgctf.io/team-id"] == string(binding.TeamID)
 }

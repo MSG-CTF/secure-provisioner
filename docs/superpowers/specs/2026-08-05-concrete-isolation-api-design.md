@@ -34,7 +34,7 @@ The resulting multi-container request is:
 {
   "request_id": "create-team18-web2-01",
   "instance_id": "22222222-2222-4222-8222-222222222222",
-  "team_id": 18,
+  "team_id": "00000000-0000-4000-8000-000000000018",
   "target": {
     "runtime_type": "KUBERNETES",
     "target_id": "aws-k3s-001"
@@ -87,7 +87,7 @@ The existing single-container shape remains accepted:
 {
   "request_id": "create-team18-single-01",
   "instance_id": "11111111-1111-4111-8111-111111111111",
-  "team_id": 18,
+  "team_id": "00000000-0000-4000-8000-000000000018",
   "target": {
     "runtime_type": "KUBERNETES",
     "target_id": "aws-k3s-001"

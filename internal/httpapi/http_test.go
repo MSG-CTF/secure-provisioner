@@ -132,7 +132,7 @@ func TestCreateInstanceAcceptsDeprecatedSingleContainerWireContractWithExplicitP
 	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(`{
 		"request_id":"req-legacy",
 		"instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001",
-		"team_id":1,
+		"team_id":"00000000-0000-4000-8000-000000000001",
 		"isolation_profile":"WEB",
 		"target":{"runtime_type":"KUBERNETES","target_id":"cluster-main"},
 		"workload":{
@@ -164,11 +164,11 @@ func TestCreateInstanceRejectsRemovedPolicyFieldsAndMissingProfile(t *testing.T)
 	}{
 		{
 			name: "removed isolation ref",
-			body: strings.Replace(legacySingle, `"team_id":1,`, `"team_id":1,"isolation_ref":{},`, 1),
+			body: strings.Replace(legacySingle, `"team_id":"00000000-0000-4000-8000-000000000001",`, `"team_id":"00000000-0000-4000-8000-000000000001","isolation_ref":{},`, 1),
 		},
 		{
 			name: "removed workload profile ref",
-			body: strings.Replace(legacySingle, `"team_id":1,`, `"team_id":1,"workload_profile_ref":{"name":"WEB","version":"v1"},`, 1),
+			body: strings.Replace(legacySingle, `"team_id":"00000000-0000-4000-8000-000000000001",`, `"team_id":"00000000-0000-4000-8000-000000000001","workload_profile_ref":{"name":"WEB","version":"v1"},`, 1),
 		},
 		{
 			name: "removed outbound mode",
@@ -318,7 +318,7 @@ func TestCreateInstanceRejectsInvalidJSONContracts(t *testing.T) {
 		{name: "legacy camelCase", body: `{"requestId":"req-01","instanceId":"018f3f1e-21b8-7a91-a30b-63b3400fd001"}`},
 		{name: "unknown field", body: `{"request_id":"req-01","unexpected":true}`},
 		{name: "multiple objects", body: `{}` + "\n" + `{}`},
-		{name: "wrong field type", body: `{"request_id":"req-secret-value","instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001","team_id":"secret-team"}`},
+		{name: "wrong field type", body: `{"request_id":"req-secret-value","instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001","team_id":18}`},
 	}
 
 	for _, test := range tests {
@@ -340,7 +340,7 @@ func TestCreateInstanceRejectsInvalidJSONContracts(t *testing.T) {
 			if !strings.Contains(response.Body.String(), "invalid JSON request body") {
 				t.Fatalf("response does not use stable decode error: %s", response.Body.String())
 			}
-			if strings.Contains(response.Body.String(), "CreateWorkloadRequest") || strings.Contains(response.Body.String(), "secret-team") {
+			if strings.Contains(response.Body.String(), "CreateWorkloadRequest") {
 				t.Fatalf("response leaked decoder details: %s", response.Body.String())
 			}
 			assertErrorCode(t, response, "INVALID_REQUEST")
@@ -354,7 +354,7 @@ func TestCreateInstanceRejectsInvalidResourceValues(t *testing.T) {
 	body := `{
 		"request_id":"req-01",
 		"instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001",
-		"team_id":1,
+		"team_id":"00000000-0000-4000-8000-000000000001",
 		"isolation_profile":"WEB",
 		"target":{"runtime_type":"KUBERNETES","target_id":"cluster-main"},
 		"workload":{
@@ -450,7 +450,7 @@ func legacyWireRequestJSON() string {
 	return `{
 		"request_id":"req-legacy",
 		"instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001",
-		"team_id":1,
+		"team_id":"00000000-0000-4000-8000-000000000001",
 		"isolation_profile":"WEB",
 		"target":{"runtime_type":"KUBERNETES","target_id":"cluster-main"},
 		"workload":{
@@ -465,7 +465,7 @@ func legacyMultiWireRequestJSON() string {
 	return `{
 		"request_id":"req-legacy-multi",
 		"instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001",
-		"team_id":18,
+		"team_id":"00000000-0000-4000-8000-000000000018",
 		"isolation_profile":"WEB",
 		"target":{"runtime_type":"KUBERNETES","target_id":"aws-dev"},
 		"workload":{

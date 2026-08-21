@@ -421,7 +421,7 @@ func TestGetOperationMapsLookupErrorsWithoutLeakingDetails(t *testing.T) {
 }
 
 func validDeleteRequestJSON() string {
-	return `{"request_id":"req-delete-01","instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001","team_id":1,"target":{"runtime_type":"KUBERNETES","target_id":"aws-dev"},"runtime_workload_id":"aws-dev/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge","delete_reason":"USER_REQUESTED"}`
+	return `{"request_id":"req-delete-01","instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001","team_id":"00000000-0000-4000-8000-000000000001","target":{"runtime_type":"KUBERNETES","target_id":"aws-dev"},"runtime_workload_id":"aws-dev/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge","delete_reason":"USER_REQUESTED"}`
 }
 
 type recordingRuntimeUseCase struct {

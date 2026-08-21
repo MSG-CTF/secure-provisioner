@@ -26,7 +26,7 @@ CREATE INDEX IF NOT EXISTS runtime_operations_claim_idx
 
 CREATE TABLE IF NOT EXISTS runtime_bindings (
     instance_id TEXT PRIMARY KEY,
-    team_id BIGINT NOT NULL CHECK (team_id > 0),
+    team_id UUID NOT NULL,
     target_id TEXT NOT NULL,
     namespace TEXT NOT NULL,
     namespace_uid TEXT NOT NULL,

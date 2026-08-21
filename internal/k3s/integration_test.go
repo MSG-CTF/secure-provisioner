@@ -151,7 +151,7 @@ func TestIntegrationNamespaceCleanupRefusesForeignNamespace(t *testing.T) {
 		Labels: map[string]string{
 			"app.kubernetes.io/managed-by": "secure-provisioner",
 			"msgctf.io/instance-id":        "expected-instance",
-			"msgctf.io/team-id":            "18",
+			"msgctf.io/team-id":            "00000000-0000-4000-8000-000000000018",
 		},
 	}}
 	foreign := expected.DeepCopy()
@@ -539,7 +539,7 @@ func integrationCreateCommand(
 	return provisioner.CreateWorkloadCommand{
 		RequestID:      requestID,
 		InstanceID:     instanceID,
-		TeamID:         18,
+		TeamID:         "00000000-0000-4000-8000-000000000018",
 		RuntimeType:    provisioner.RuntimeTypeKubernetes,
 		TargetID:       targetID,
 		Containers:     append([]provisioner.WorkloadContainer(nil), containers...),
