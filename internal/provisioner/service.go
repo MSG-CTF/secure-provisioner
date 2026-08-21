@@ -15,36 +15,88 @@ const (
 	maximumRetries = 3
 )
 
+type WorkerOptions struct {
+	Concurrency    int
+	PollInterval   time.Duration
+	LeaseDuration  time.Duration
+	MaximumRetries int
+	RetryBaseDelay time.Duration
+}
+
 type Service struct {
-	store              *memoryStore
+	store              operationStore
 	dependencies       *dependencyClient
-	cluster            *fakeCluster
-	jobs               chan string
+	cluster            clusterAdapter
 	logger             *slog.Logger
 	expirationInterval time.Duration
 	instanceLocks      sync.Map
+	workerOptions      WorkerOptions
 }
 
 func NewService(mockURL string, logger *slog.Logger, expirationInterval time.Duration) *Service {
+	return newService(mockURL, logger, expirationInterval, newFakeCluster(mockURL))
+}
+
+func NewPostgresService(ctx context.Context, mockURL string, logger *slog.Logger, expirationInterval time.Duration, dsn string) (*Service, error) {
+	store, err := NewPostgresStore(ctx, dsn)
+	if err != nil {
+		return nil, err
+	}
+	return newServiceWithStore(mockURL, logger, expirationInterval, newFakeCluster(mockURL), store), nil
+}
+
+func newService(mockURL string, logger *slog.Logger, expirationInterval time.Duration, cluster clusterAdapter) *Service {
+	return newServiceWithStore(mockURL, logger, expirationInterval, cluster, newMemoryStore())
+}
+
+func newServiceWithStore(mockURL string, logger *slog.Logger, expirationInterval time.Duration, cluster clusterAdapter, store operationStore) *Service {
 	return &Service{
-		store:              newMemoryStore(),
+		store:              store,
 		dependencies:       newDependencyClient(mockURL),
-		cluster:            newFakeCluster(mockURL),
-		jobs:               make(chan string, 128),
+		cluster:            cluster,
 		logger:             logger,
 		expirationInterval: expirationInterval,
 	}
 }
 
 func (service *Service) Start(ctx context.Context, workerCount int) {
-	if workerCount < 1 {
-		workerCount = 1
-	}
+	service.StartWithOptions(ctx, WorkerOptions{Concurrency: workerCount})
+}
 
-	for workerID := 1; workerID <= workerCount; workerID++ {
-		go service.worker(ctx, workerID)
+func (service *Service) StartWithOptions(ctx context.Context, options WorkerOptions) {
+	options = normalizedWorkerOptions(options)
+	service.workerOptions = options
+
+	for workerIndex := 1; workerIndex <= options.Concurrency; workerIndex++ {
+		go service.worker(ctx, fmt.Sprintf("worker-%d-%s", workerIndex, randomOperationID()))
 	}
 	go service.expirationWorker(ctx)
+}
+
+func (service *Service) Close() error {
+	return service.store.close()
+}
+
+func normalizedWorkerOptions(options WorkerOptions) WorkerOptions {
+	if options.Concurrency < 1 {
+		options.Concurrency = 10
+	}
+	if options.PollInterval <= 0 {
+		options.PollInterval = 200 * time.Millisecond
+	}
+	if options.LeaseDuration <= 0 {
+		options.LeaseDuration = 3 * time.Minute
+	}
+	if options.MaximumRetries < 0 {
+		options.MaximumRetries = maximumRetries
+	}
+	if options.MaximumRetries == 0 {
+		options.MaximumRetries = maximumRetries
+	}
+	if options.RetryBaseDelay <= 0 {
+		options.RetryBaseDelay = time.Second
+	}
+	return options
 }
 
 func (service *Service) AcceptCreate(ctx context.Context, request CreateRequest) (AcceptedOperation, error) {
@@ -53,15 +105,9 @@ func (service *Service) AcceptCreate(ctx context.Context, request CreateRequest)
 		return AcceptedOperation{}, err
 	}
 
-	operation, instance, duplicate, enqueue, err := service.store.acceptCreate(request, now)
+	operation, instance, duplicate, err := service.store.acceptCreate(ctx, request, now)
 	if err != nil {
 		return AcceptedOperation{}, err
-	}
-
-	if enqueue {
-		if err := service.enqueue(ctx, operation.OperationID); err != nil {
-			return AcceptedOperation{}, err
-		}
 	}
 
 	return AcceptedOperation{
@@ -74,18 +120,12 @@ func (service *Service) AcceptCreate(ctx context.Context, request CreateRequest)
 
 func (service *Service) AcceptDelete(ctx context.Context, requestID string, instanceID string) (AcceptedOperation, error) {
 	if strings.TrimSpace(requestID) == "" {
-		return AcceptedOperation{}, errors.New("requestId is required")
+		return AcceptedOperation{}, errors.New("request_id is required")
 	}
 
-	operation, instance, duplicate, enqueue, err := service.store.acceptDelete(requestID, instanceID, time.Now().UTC())
+	operation, instance, duplicate, err := service.store.acceptDelete(ctx, requestID, instanceID, time.Now().UTC())
 	if err != nil {
 		return AcceptedOperation{}, err
-	}
-
-	if enqueue {
-		if err := service.enqueue(ctx, operation.OperationID); err != nil {
-			return AcceptedOperation{}, err
-		}
 	}
 
 	return AcceptedOperation{
@@ -112,32 +152,30 @@ func (service *Service) GetRuntimeResources(instanceID string) (RuntimeResources
 	return service.cluster.get(instanceID)
 }
 
-func (service *Service) enqueue(ctx context.Context, operationID string) error {
-	select {
-	case service.jobs <- operationID:
-		return nil
-	case <-ctx.Done():
-		return errors.New("operation queue is unavailable")
-	}
-}
-
-func (service *Service) worker(ctx context.Context, workerID int) {
+func (service *Service) worker(ctx context.Context, workerID string) {
+	options := service.workerOptions
 	for {
+		operation, claimed, err := service.store.claim(ctx, ClaimOptions{
+			WorkerID:      workerID,
+			Now:           time.Now().UTC(),
+			LeaseDuration: options.LeaseDuration,
+		})
+		if err != nil {
+			service.logger.Error("claim operation", "worker_id", workerID, "error", err)
+		}
+		if claimed {
+			service.processOperation(ctx, workerID, operation)
+			continue
+		}
 		select {
 		case <-ctx.Done():
 			return
-		case operationID := <-service.jobs:
-			service.processOperation(ctx, workerID, operationID)
+		case <-time.After(options.PollInterval):
 		}
 	}
 }
 
-func (service *Service) processOperation(ctx context.Context, workerID int, operationID string) {
-	operation, started := service.store.startOperation(operationID, time.Now().UTC())
-	if !started {
-		return
-	}
-
+func (service *Service) processOperation(ctx context.Context, workerID string, operation Operation) {
 	lockValue, _ := service.instanceLocks.LoadOrStore(operation.InstanceID, &sync.Mutex{})
 	instanceLock := lockValue.(*sync.Mutex)
 	instanceLock.Lock()
@@ -150,41 +188,75 @@ func (service *Service) processOperation(ctx context.Context, workerID int, oper
 		"operationType", operation.OperationType,
 	)
 
-	var err error
-	for attempt := 1; attempt <= maximumRetries; attempt++ {
-		if attempt > 1 {
-			service.store.incrementAttempt(operation.OperationID, time.Now().UTC())
+	stopRenewal := make(chan struct{})
+	renewalDone := make(chan struct{})
+	go service.renewOperationLease(ctx, workerID, operation.OperationID, stopRenewal, renewalDone)
+	err := service.executeOperation(ctx, operation)
+	close(stopRenewal)
+	<-renewalDone
+	if err == nil {
+		if finishErr := service.store.finishOperation(operation.OperationID, workerID, OperationSucceeded, "", time.Now().UTC()); finishErr != nil {
+			service.logger.Error("finish operation", "operation_id", operation.OperationID, "worker_id", workerID, "error", finishErr)
 		}
+		return
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	if isPermanentOperationError(err) || operation.AttemptCount > service.workerOptions.MaximumRetries {
+		service.failOperation(ctx, workerID, operation, err)
+		return
+	}
+	delay := service.workerOptions.RetryBaseDelay * time.Duration(1<<uint(operation.AttemptCount-1))
+	now := time.Now().UTC()
+	if retryErr := service.store.retryOperation(operation.OperationID, workerID, now.Add(delay), err.Error(), now); retryErr != nil {
+		service.logger.Error("schedule operation retry", "operation_id", operation.OperationID, "error", retryErr)
+	}
+}
 
-		switch operation.OperationType {
-		case OperationCreate:
-			err = service.provision(ctx, operation)
-		case OperationDelete:
-			err = service.delete(ctx, operation)
-		default:
-			err = errors.New("unsupported operation type")
-		}
-
-		if err == nil {
-			service.store.finishOperation(operation.OperationID, OperationSucceeded, "", time.Now().UTC())
+func (service *Service) renewOperationLease(ctx context.Context, workerID string, operationID string, stop <-chan struct{}, done chan<- struct{}) {
+	defer close(done)
+	interval := service.workerOptions.LeaseDuration / 3
+	if interval <= 0 {
+		interval = time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
 			return
-		}
-
-		if attempt < maximumRetries {
-			service.logger.Warn("operation retry scheduled",
-				"operationId", operation.OperationID,
-				"instanceId", operation.InstanceID,
-				"attempt", attempt,
-			)
-			select {
-			case <-ctx.Done():
+		case <-stop:
+			return
+		case now := <-ticker.C:
+			if err := service.store.renewLease(operationID, workerID, now.UTC().Add(service.workerOptions.LeaseDuration)); err != nil {
+				service.logger.Warn("renew operation lease", "operation_id", operationID, "worker_id", workerID, "error", err)
 				return
-			case <-time.After(time.Duration(attempt) * 100 * time.Millisecond):
 			}
 		}
 	}
+}
 
-	service.failOperation(ctx, operation, err)
+func (service *Service) executeOperation(ctx context.Context, operation Operation) error {
+	switch operation.OperationType {
+	case OperationCreate:
+		return service.provision(ctx, operation)
+	case OperationDelete:
+		return service.delete(ctx, operation)
+	default:
+		return errors.New("unsupported operation type")
+	}
+}
+
+func isPermanentOperationError(err error) bool {
+	if errors.Is(err, ErrRuntimeClassUnavailable) {
+		return true
+	}
+	message := err.Error()
+	return strings.Contains(message, "does not match") ||
+		strings.Contains(message, "mismatched") ||
+		strings.Contains(message, "cancelled by a delete request") ||
+		strings.Contains(message, "reservation is invalid")
 }
 
 func (service *Service) provision(ctx context.Context, operation Operation) error {
@@ -220,7 +292,7 @@ func (service *Service) provision(ctx context.Context, operation Operation) erro
 		return errors.New("challenge catalog returned a mismatched challenge")
 	}
 
-	resources, err := service.cluster.create(ctx, instance, challenge)
+	resources, err := service.cluster.create(ctx, instance, challenge, reservation)
 	if err != nil {
 		return err
 	}
@@ -237,7 +309,7 @@ func (service *Service) provision(ctx context.Context, operation Operation) erro
 		return err
 	}
 
-	if err := service.dependencies.verifyEndpoint(ctx, resources.Endpoint); err != nil {
+	if err := service.cluster.verify(ctx, resources); err != nil {
 		return err
 	}
 
@@ -283,7 +355,7 @@ func (service *Service) delete(ctx context.Context, operation Operation) error {
 	return nil
 }
 
-func (service *Service) failOperation(ctx context.Context, operation Operation, operationError error) {
+func (service *Service) failOperation(ctx context.Context, workerID string, operation Operation, operationError error) {
 	lastError := operationError.Error()
 	phase := PhaseFailed
 	if operation.OperationType == OperationDelete {
@@ -296,7 +368,9 @@ func (service *Service) failOperation(ctx context.Context, operation Operation, 
 		current.Phase = phase
 		current.LastError = lastError
 	}, time.Now().UTC())
-	service.store.finishOperation(operation.OperationID, OperationFailed, lastError, time.Now().UTC())
+	if err := service.store.finishOperation(operation.OperationID, workerID, OperationFailed, lastError, time.Now().UTC()); err != nil {
+		service.logger.Error("finish failed operation", "operation_id", operation.OperationID, "worker_id", workerID, "error", err)
+	}
 
 	service.logger.Error("operation failed",
 		"operationId", operation.OperationID,
@@ -331,27 +405,29 @@ func (service *Service) expirationWorker(ctx context.Context) {
 
 func validateCreateRequest(request CreateRequest, now time.Time) error {
 	required := map[string]string{
-		"requestId":     request.RequestID,
-		"instanceId":    request.InstanceID,
-		"teamId":        request.TeamID,
-		"challengeId":   request.ChallengeID,
-		"clusterId":     request.ClusterID,
-		"reservationId": request.ReservationID,
+		"request_id":     request.RequestID,
+		"instance_id":    request.InstanceID,
+		"challenge_id":   request.ChallengeID,
+		"cluster_id":     request.ClusterID,
+		"reservation_id": request.ReservationID,
 	}
 	for field, value := range required {
 		if strings.TrimSpace(value) == "" {
 			return fmt.Errorf("%s is required", field)
 		}
 	}
+	if request.TeamID < 1 {
+		return errors.New("team_id must be a positive integer")
+	}
 
 	if request.ExpiresAt.IsZero() {
-		return errors.New("expiresAt is required")
+		return errors.New("expires_at is required")
 	}
 	if !request.ExpiresAt.After(now) {
-		return errors.New("expiresAt must be in the future")
+		return errors.New("expires_at must be in the future")
 	}
 	if request.ExpiresAt.After(now.Add(maximumTTL)) {
-		return errors.New("expiresAt exceeds the six-hour MVP limit")
+		return errors.New("expires_at exceeds the six-hour MVP limit")
 	}
 
 	return nil

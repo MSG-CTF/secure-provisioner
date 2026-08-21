@@ -9,6 +9,7 @@ coverage.out
 .env
 .env.local
 data/
+.tmp/
 *.db
 *.db-journal
 

@@ -1,6 +1,7 @@
 package provisioner
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -33,14 +34,14 @@ func newMemoryStore() *memoryStore {
 	}
 }
 
-func (store *memoryStore) acceptCreate(request CreateRequest, now time.Time) (Operation, Instance, bool, bool, error) {
+func (store *memoryStore) acceptCreate(_ context.Context, request CreateRequest, now time.Time) (Operation, Instance, bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 
 	if operationID, exists := store.requestOperations[request.RequestID]; exists {
 		operation := *store.operations[operationID]
 		instance := *store.instances[operation.InstanceID]
-		return operation, instance, true, false, nil
+		return operation, instance, true, nil
 	}
 
 	allocationKey := activeAllocationKey(request.TeamID, request.ChallengeID)
@@ -48,11 +49,11 @@ func (store *memoryStore) acceptCreate(request CreateRequest, now time.Time) (Op
 		instance := *store.instances[instanceID]
 		operation := store.latestOperationLocked(instanceID)
 		store.requestOperations[request.RequestID] = operation.OperationID
-		return operation, instance, true, false, nil
+		return operation, instance, true, nil
 	}
 
 	if _, exists := store.instances[request.InstanceID]; exists {
-		return Operation{}, Instance{}, false, false, ErrInstanceIDInUse
+		return Operation{}, Instance{}, false, ErrInstanceIDInUse
 	}
 
 	operation := store.newOperationLocked(request.RequestID, request.InstanceID, OperationCreate, now)
@@ -76,10 +77,10 @@ func (store *memoryStore) acceptCreate(request CreateRequest, now time.Time) (Op
 	store.operations[operation.OperationID] = &operation
 	store.requestOperations[request.RequestID] = operation.OperationID
 
-	return operation, *instance, false, true, nil
+	return operation, *instance, false, nil
 }
 
-func (store *memoryStore) acceptDelete(requestID string, instanceID string, now time.Time) (Operation, Instance, bool, bool, error) {
+func (store *memoryStore) acceptDelete(_ context.Context, requestID string, instanceID string, now time.Time) (Operation, Instance, bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 
@@ -87,14 +88,14 @@ func (store *memoryStore) acceptDelete(requestID string, instanceID string, now 
 		operation := *store.operations[operationID]
 		instance, exists := store.instances[operation.InstanceID]
 		if !exists {
-			return Operation{}, Instance{}, false, false, ErrInstanceNotFound
+			return Operation{}, Instance{}, false, ErrInstanceNotFound
 		}
-		return operation, *instance, true, false, nil
+		return operation, *instance, true, nil
 	}
 
 	instance, exists := store.instances[instanceID]
 	if !exists {
-		return Operation{}, Instance{}, false, false, ErrInstanceNotFound
+		return Operation{}, Instance{}, false, ErrInstanceNotFound
 	}
 
 	if instance.Phase == PhaseTerminated {
@@ -102,7 +103,7 @@ func (store *memoryStore) acceptDelete(requestID string, instanceID string, now 
 		operation.Status = OperationSucceeded
 		store.operations[operation.OperationID] = &operation
 		store.requestOperations[requestID] = operation.OperationID
-		return operation, *instance, true, false, nil
+		return operation, *instance, true, nil
 	}
 
 	if operationID, exists := store.deleteOperations[instanceID]; exists {
@@ -112,10 +113,10 @@ func (store *memoryStore) acceptDelete(requestID string, instanceID string, now 
 			store.operations[newOperation.OperationID] = &newOperation
 			store.requestOperations[requestID] = newOperation.OperationID
 			store.deleteOperations[instanceID] = newOperation.OperationID
-			return newOperation, *instance, false, true, nil
+			return newOperation, *instance, false, nil
 		}
 		store.requestOperations[requestID] = operationID
-		return operation, *instance, true, false, nil
+		return operation, *instance, true, nil
 	}
 
 	operation := store.newOperationLocked(requestID, instanceID, OperationDelete, now)
@@ -125,7 +126,7 @@ func (store *memoryStore) acceptDelete(requestID string, instanceID string, now 
 	instance.DesiredState = DesiredTerminated
 	instance.UpdatedAt = now
 
-	return operation, *instance, false, true, nil
+	return operation, *instance, false, nil
 }
 
 func (store *memoryStore) incrementAttempt(operationID string, now time.Time) {
@@ -138,15 +139,55 @@ func (store *memoryStore) incrementAttempt(operationID string, now time.Time) {
 }
 
 func (store *memoryStore) newOperationLocked(requestID string, instanceID string, operationType OperationType, now time.Time) Operation {
+	priority := createPriority
+	if operationType == OperationDelete {
+		priority = deletePriority
+	}
 	return Operation{
 		OperationID:   fmt.Sprintf("op-%06d", store.sequence.Add(1)),
 		RequestID:     requestID,
 		InstanceID:    instanceID,
 		OperationType: operationType,
 		Status:        OperationPending,
+		Priority:      priority,
+		MaxAttempts:   maximumRetries + 1,
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}
+}
+
+func (store *memoryStore) claim(_ context.Context, options ClaimOptions) (Operation, bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	leaseDuration := options.LeaseDuration
+	if leaseDuration <= 0 {
+		leaseDuration = 3 * time.Minute
+	}
+	var selected *Operation
+	for _, operation := range store.operations {
+		eligible := operation.Status == OperationPending ||
+			(operation.Status == OperationRetryWait && (operation.NextRetryAt == nil || !operation.NextRetryAt.After(options.Now))) ||
+			(operation.Status == OperationRunning && (operation.LeaseUntil == nil || !operation.LeaseUntil.After(options.Now)))
+		if !eligible {
+			continue
+		}
+		if selected == nil || operation.Priority > selected.Priority ||
+			(operation.Priority == selected.Priority && operation.CreatedAt.Before(selected.CreatedAt)) {
+			selected = operation
+		}
+	}
+	if selected == nil {
+		return Operation{}, false, nil
+	}
+
+	leaseUntil := options.Now.Add(leaseDuration)
+	selected.Status = OperationRunning
+	selected.AttemptCount++
+	selected.LeaseOwner = options.WorkerID
+	selected.LeaseUntil = &leaseUntil
+	selected.UpdatedAt = options.Now
+	return *selected, true, nil
 }
 
 func (store *memoryStore) latestOperationLocked(instanceID string) Operation {
@@ -202,15 +243,51 @@ func (store *memoryStore) startOperation(operationID string, now time.Time) (Ope
 	return *operation, true
 }
 
-func (store *memoryStore) finishOperation(operationID string, status OperationStatus, lastError string, now time.Time) {
+func (store *memoryStore) finishOperation(operationID string, workerID string, status OperationStatus, lastError string, now time.Time) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 
-	operation := store.operations[operationID]
+	operation, exists := store.operations[operationID]
+	if !exists || operation.Status != OperationRunning || operation.LeaseOwner != workerID {
+		return errors.New("operation lease is not owned by worker")
+	}
 	operation.Status = status
 	operation.LastError = lastError
+	operation.LeaseOwner = ""
+	operation.LeaseUntil = nil
 	operation.UpdatedAt = now
+	return nil
 }
+
+func (store *memoryStore) retryOperation(operationID string, workerID string, nextRetryAt time.Time, lastError string, now time.Time) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	operation, exists := store.operations[operationID]
+	if !exists || operation.LeaseOwner != workerID {
+		return errors.New("operation lease is not owned by worker")
+	}
+	operation.Status = OperationRetryWait
+	operation.NextRetryAt = &nextRetryAt
+	operation.LastError = lastError
+	operation.LeaseOwner = ""
+	operation.LeaseUntil = nil
+	operation.UpdatedAt = now
+	return nil
+}
+
+func (store *memoryStore) renewLease(operationID string, workerID string, leaseUntil time.Time) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	operation, exists := store.operations[operationID]
+	if !exists || operation.Status != OperationRunning || operation.LeaseOwner != workerID {
+		return errors.New("operation lease is not owned by worker")
+	}
+	operation.LeaseUntil = &leaseUntil
+	operation.UpdatedAt = time.Now().UTC()
+	return nil
+}
+
+func (store *memoryStore) close() error { return nil }
 
 func (store *memoryStore) updateInstance(instanceID string, update func(*Instance), now time.Time) (Instance, error) {
 	store.mu.Lock()
@@ -246,6 +323,6 @@ func (store *memoryStore) expiredInstances(now time.Time) []string {
 	return instanceIDs
 }
 
-func activeAllocationKey(teamID string, challengeID string) string {
-	return teamID + "\x00" + challengeID
+func activeAllocationKey(teamID int64, challengeID string) string {
+	return fmt.Sprintf("%d\x00%s", teamID, challengeID)
 }

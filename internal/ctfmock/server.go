@@ -4,27 +4,56 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"html/template"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
 )
 
+const mockChallengeFlag = "MSG{reflected_xss_runtime_demo}"
+
+var mockChallengeTemplate = template.Must(template.New("mock-xss").Parse(`<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Reflected Search</title>
+  <style>
+    body { max-width: 720px; margin: 56px auto; padding: 0 20px; font: 16px/1.5 system-ui,sans-serif; color: #17202a; }
+    input { width: min(100%,520px); padding: 10px; border: 1px solid #9aa5b1; }
+    button { padding: 10px 16px; background: #087e8b; color: white; border: 0; cursor: pointer; }
+    code { background: #eef2f5; padding: 2px 5px; }
+    .meta { color: #52616b; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <h1>Reflected Search</h1>
+  <form method="get">
+    <input name="q" autocomplete="off" placeholder="Search term">
+    <button type="submit">Search</button>
+  </form>
+  <p class="meta">Instance <code>{{.InstanceID}}</code></p>
+</body>
+</html>`))
+
 type Scenario struct {
-	SchedulerUnavailable      bool `json:"schedulerUnavailable"`
-	CatalogUnavailable        bool `json:"catalogUnavailable"`
-	EndpointUnhealthy         bool `json:"endpointUnhealthy"`
-	BrokerCallbackUnavailable bool `json:"brokerCallbackUnavailable"`
-	SLAUnavailable            bool `json:"slaUnavailable"`
-	ReleaseUnavailable        bool `json:"releaseUnavailable"`
+	SchedulerUnavailable      bool `json:"scheduler_unavailable"`
+	CatalogUnavailable        bool `json:"catalog_unavailable"`
+	EndpointUnhealthy         bool `json:"endpoint_unhealthy"`
+	BrokerCallbackUnavailable bool `json:"broker_callback_unavailable"`
+	SLAUnavailable            bool `json:"sla_unavailable"`
+	ReleaseUnavailable        bool `json:"release_unavailable"`
 }
 
 type RecordedEvent struct {
 	Target     string         `json:"target"`
 	Payload    map[string]any `json:"payload"`
-	ReceivedAt time.Time      `json:"receivedAt"`
+	ReceivedAt time.Time      `json:"received_at"`
 }
 
 type Server struct {
@@ -106,12 +135,12 @@ func (server *Server) handleReservation(writer http.ResponseWriter, request *htt
 
 	reservationID := request.PathValue("reservationId")
 	writeJSON(writer, http.StatusOK, map[string]any{
-		"reservationId":       reservationID,
-		"clusterId":           "k3s-local",
-		"valid":               reservationID != "invalid",
-		"cpuMillicores":       500,
-		"memoryMiB":           256,
-		"ephemeralStorageMiB": 256,
+		"reservation_id":        reservationID,
+		"cluster_id":            "k3s-local",
+		"valid":                 reservationID != "invalid",
+		"cpu_millicores":        500,
+		"memory_mib":            256,
+		"ephemeral_storage_mib": 256,
 	})
 }
 
@@ -137,33 +166,47 @@ func (server *Server) handleChallenge(writer http.ResponseWriter, request *http.
 	}
 
 	challengeID := request.PathValue("challengeId")
+	xssImage := os.Getenv("CTF_MOCK_XSS_IMAGE")
+	if xssImage == "" {
+		xssImage = "msg-ctf/reflected-xss@sha256:" + strings.Repeat("d", 64)
+	}
 	challenges := map[string]map[string]any{
+		"xss-101": {
+			"challenge_id":     "xss-101",
+			"image":            xssImage,
+			"container_port":   8080,
+			"command":          []string{"/xss-challenge"},
+			"security_profile": "restricted-web",
+			"resource_profile": "small",
+			"network_profile":  "http-ingress-no-egress",
+			"runtime_class":    "runc",
+		},
 		"pwn-101": {
-			"challengeId":     "pwn-101",
-			"image":           "ghcr.io/msg-ctf/sample-pwn@sha256:" + strings.Repeat("a", 64),
-			"containerPort":   31337,
-			"securityProfile": "pwn-sandbox",
-			"resourceProfile": "small",
-			"networkProfile":  "tcp-ingress-dns-egress",
-			"runtimeClass":    "runc",
+			"challenge_id":     "pwn-101",
+			"image":            "ghcr.io/msg-ctf/sample-pwn@sha256:" + strings.Repeat("a", 64),
+			"container_port":   31337,
+			"security_profile": "pwn-sandbox",
+			"resource_profile": "small",
+			"network_profile":  "tcp-ingress-dns-egress",
+			"runtime_class":    "runc",
 		},
 		"web-101": {
-			"challengeId":     "web-101",
-			"image":           "ghcr.io/msg-ctf/sample-web@sha256:" + strings.Repeat("b", 64),
-			"containerPort":   8080,
-			"securityProfile": "standard-web",
-			"resourceProfile": "small",
-			"networkProfile":  "http-ingress-dns-egress",
-			"runtimeClass":    "runc",
+			"challenge_id":     "web-101",
+			"image":            "ghcr.io/msg-ctf/sample-web@sha256:" + strings.Repeat("b", 64),
+			"container_port":   8080,
+			"security_profile": "standard-web",
+			"resource_profile": "small",
+			"network_profile":  "http-ingress-dns-egress",
+			"runtime_class":    "runc",
 		},
 		"kernel-101": {
-			"challengeId":     "kernel-101",
-			"image":           "ghcr.io/msg-ctf/sample-kernel@sha256:" + strings.Repeat("c", 64),
-			"containerPort":   9000,
-			"securityProfile": "strong-isolation",
-			"resourceProfile": "large",
-			"networkProfile":  "tcp-ingress-dns-egress",
-			"runtimeClass":    "kata-qemu",
+			"challenge_id":     "kernel-101",
+			"image":            "ghcr.io/msg-ctf/sample-kernel@sha256:" + strings.Repeat("c", 64),
+			"container_port":   9000,
+			"security_profile": "strong-isolation",
+			"resource_profile": "large",
+			"network_profile":  "tcp-ingress-dns-egress",
+			"runtime_class":    "kata-qemu",
 		},
 	}
 
@@ -181,10 +224,30 @@ func (server *Server) handleChallengeEndpoint(writer http.ResponseWriter, reques
 		return
 	}
 
-	writeJSON(writer, http.StatusOK, map[string]string{
-		"instanceId": request.PathValue("instanceId"),
-		"status":     "ready",
+	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+	query, searched := request.URL.Query()["q"]
+	if !searched {
+		_ = mockChallengeTemplate.Execute(writer, map[string]string{"InstanceID": request.PathValue("instanceId")})
+		return
+	}
+
+	http.SetCookie(writer, &http.Cookie{
+		Name:     "flag",
+		Value:    mockChallengeFlag,
+		Path:     "/",
+		SameSite: http.SameSiteLaxMode,
 	})
+	value := ""
+	if len(query) > 0 {
+		value = query[0]
+	}
+
+	// This unescaped reflection intentionally mirrors the XSS challenge fixture.
+	_, _ = fmt.Fprintf(writer, `<!doctype html>
+<html lang="ko">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Search result</title></head>
+<body><h1>Search result</h1><div id="result">You searched for: %s</div><p><a href="%s">Back</a></p></body>
+</html>`, value, template.URL(request.URL.Path))
 }
 
 func (server *Server) handleBrokerEvent(writer http.ResponseWriter, request *http.Request) {

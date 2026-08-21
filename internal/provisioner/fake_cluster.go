@@ -6,9 +6,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 )
 
 var ErrRuntimeClassUnavailable = errors.New("runtime class is unavailable")
@@ -18,12 +21,14 @@ type fakeCluster struct {
 	challengeURL   string
 	resources      map[string]RuntimeResources
 	runtimeClasses map[string]bool
+	httpClient     *http.Client
 }
 
 func newFakeCluster(challengeURL string) *fakeCluster {
 	return &fakeCluster{
 		challengeURL: strings.TrimRight(challengeURL, "/"),
 		resources:    make(map[string]RuntimeResources),
+		httpClient:   &http.Client{Timeout: 3 * time.Second},
 		runtimeClasses: map[string]bool{
 			"":     true,
 			"runc": true,
@@ -31,7 +36,7 @@ func newFakeCluster(challengeURL string) *fakeCluster {
 	}
 }
 
-func (cluster *fakeCluster) create(_ context.Context, instance Instance, challenge Challenge) (RuntimeResources, error) {
+func (cluster *fakeCluster) create(_ context.Context, instance Instance, challenge Challenge, _ Reservation) (RuntimeResources, error) {
 	if !cluster.runtimeClasses[challenge.RuntimeClass] {
 		return RuntimeResources{}, fmt.Errorf("%w: %s", ErrRuntimeClassUnavailable, challenge.RuntimeClass)
 	}
@@ -73,6 +78,25 @@ func (cluster *fakeCluster) create(_ context.Context, instance Instance, challen
 	return resources, nil
 }
 
+func (cluster *fakeCluster) verify(ctx context.Context, resources RuntimeResources) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, resources.Endpoint, nil)
+	if err != nil {
+		return errors.New("build endpoint verification request")
+	}
+
+	response, err := cluster.httpClient.Do(request)
+	if err != nil {
+		return fmt.Errorf("verify endpoint: %w", err)
+	}
+	defer response.Body.Close()
+
+	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("endpoint returned HTTP %d", response.StatusCode)
+	}
+	return nil
+}
+
 func (cluster *fakeCluster) delete(_ context.Context, instanceID string) error {
 	cluster.mu.Lock()
 	defer cluster.mu.Unlock()
@@ -90,7 +114,7 @@ func (cluster *fakeCluster) get(instanceID string) (RuntimeResources, bool) {
 }
 
 func namespaceFor(instance Instance) string {
-	digest := sha256.Sum256([]byte(instance.TeamID + "\x00" + instance.ChallengeID + "\x00" + instance.InstanceID))
+	digest := sha256.Sum256([]byte(fmt.Sprintf("%d\x00%s\x00%s", instance.TeamID, instance.ChallengeID, instance.InstanceID)))
 	return "ctf-" + hex.EncodeToString(digest[:])[:16]
 }
 

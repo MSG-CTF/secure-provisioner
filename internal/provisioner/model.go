@@ -34,28 +34,29 @@ type OperationStatus string
 const (
 	OperationPending   OperationStatus = "PENDING"
 	OperationRunning   OperationStatus = "RUNNING"
+	OperationRetryWait OperationStatus = "RETRY_WAIT"
 	OperationSucceeded OperationStatus = "SUCCEEDED"
 	OperationFailed    OperationStatus = "FAILED"
 )
 
 type CreateRequest struct {
-	RequestID     string    `json:"requestId"`
-	InstanceID    string    `json:"instanceId"`
-	TeamID        string    `json:"teamId"`
-	ChallengeID   string    `json:"challengeId"`
-	ClusterID     string    `json:"clusterId"`
-	ReservationID string    `json:"reservationId"`
-	CreatedBy     string    `json:"createdBy"`
-	ExpiresAt     time.Time `json:"expiresAt"`
+	RequestID     string    `json:"request_id"`
+	InstanceID    string    `json:"instance_id"`
+	TeamID        int64     `json:"team_id"`
+	ChallengeID   string    `json:"challenge_id"`
+	ClusterID     string    `json:"cluster_id"`
+	ReservationID string    `json:"reservation_id"`
+	CreatedBy     string    `json:"created_by"`
+	ExpiresAt     time.Time `json:"expires_at"`
 }
 
 type DeleteRequest struct {
-	RequestID string `json:"requestId"`
+	RequestID string `json:"request_id"`
 }
 
 type Instance struct {
 	InstanceID      string
-	TeamID          string
+	TeamID          int64
 	ChallengeID     string
 	ClusterID       string
 	ReservationID   string
@@ -75,26 +76,30 @@ type Instance struct {
 }
 
 type Operation struct {
-	OperationID   string          `json:"operationId"`
-	RequestID     string          `json:"requestId"`
-	InstanceID    string          `json:"instanceId"`
-	OperationType OperationType   `json:"operationType"`
+	OperationID   string          `json:"operation_id"`
+	RequestID     string          `json:"request_id"`
+	InstanceID    string          `json:"instance_id"`
+	OperationType OperationType   `json:"operation_type"`
 	Status        OperationStatus `json:"status"`
-	AttemptCount  int             `json:"attemptCount"`
-	NextRetryAt   *time.Time      `json:"nextRetryAt,omitempty"`
-	LastError     string          `json:"lastError,omitempty"`
-	CreatedAt     time.Time       `json:"createdAt"`
-	UpdatedAt     time.Time       `json:"updatedAt"`
+	Priority      int             `json:"priority"`
+	AttemptCount  int             `json:"attempt_count"`
+	MaxAttempts   int             `json:"max_attempts"`
+	NextRetryAt   *time.Time      `json:"next_retry_at,omitempty"`
+	LeaseOwner    string          `json:"lease_owner,omitempty"`
+	LeaseUntil    *time.Time      `json:"lease_until,omitempty"`
+	LastError     string          `json:"last_error,omitempty"`
+	CreatedAt     time.Time       `json:"created_at"`
+	UpdatedAt     time.Time       `json:"updated_at"`
 }
 
 type InstanceView struct {
-	InstanceID  string    `json:"instanceId"`
-	TeamID      string    `json:"teamId"`
-	ChallengeID string    `json:"challengeId"`
+	InstanceID  string    `json:"instance_id"`
+	TeamID      int64     `json:"team_id"`
+	ChallengeID string    `json:"challenge_id"`
 	Endpoint    string    `json:"endpoint,omitempty"`
 	Phase       Phase     `json:"phase"`
-	ExpiresAt   time.Time `json:"expiresAt"`
-	LastError   string    `json:"lastError,omitempty"`
+	ExpiresAt   time.Time `json:"expires_at"`
+	LastError   string    `json:"last_error,omitempty"`
 }
 
 func newInstanceView(instance Instance) InstanceView {
@@ -110,49 +115,51 @@ func newInstanceView(instance Instance) InstanceView {
 }
 
 type AcceptedOperation struct {
-	OperationID string `json:"operationId"`
-	InstanceID  string `json:"instanceId"`
+	OperationID string `json:"operation_id"`
+	InstanceID  string `json:"instance_id"`
 	Phase       Phase  `json:"phase"`
 	Duplicate   bool   `json:"duplicate"`
 }
 
 type Challenge struct {
-	ChallengeID     string `json:"challengeId"`
-	Image           string `json:"image"`
-	ContainerPort   int    `json:"containerPort"`
-	SecurityProfile string `json:"securityProfile"`
-	ResourceProfile string `json:"resourceProfile"`
-	NetworkProfile  string `json:"networkProfile"`
-	RuntimeClass    string `json:"runtimeClass"`
+	ChallengeID     string   `json:"challenge_id"`
+	Image           string   `json:"image"`
+	ContainerPort   int      `json:"container_port"`
+	Command         []string `json:"command,omitempty"`
+	SecurityProfile string   `json:"security_profile"`
+	ResourceProfile string   `json:"resource_profile"`
+	NetworkProfile  string   `json:"network_profile"`
+	RuntimeClass    string   `json:"runtime_class"`
 }
 
 type Reservation struct {
-	ReservationID       string `json:"reservationId"`
-	ClusterID           string `json:"clusterId"`
+	ReservationID       string `json:"reservation_id"`
+	ClusterID           string `json:"cluster_id"`
 	Valid               bool   `json:"valid"`
-	CPUMillicores       int    `json:"cpuMillicores"`
-	MemoryMiB           int    `json:"memoryMiB"`
-	EphemeralStorageMiB int    `json:"ephemeralStorageMiB"`
+	CPUMillicores       int    `json:"cpu_millicores"`
+	MemoryMiB           int    `json:"memory_mib"`
+	EphemeralStorageMiB int    `json:"ephemeral_storage_mib"`
 }
 
 type RuntimeResources struct {
-	InstanceID               string `json:"instanceId"`
+	InstanceID               string `json:"instance_id"`
 	Namespace                string `json:"namespace"`
 	Image                    string `json:"image"`
-	ContainerPort            int    `json:"containerPort"`
-	RuntimeClass             string `json:"runtimeClass"`
-	ResourceQuotaApplied     bool   `json:"resourceQuotaApplied"`
-	LimitRangeApplied        bool   `json:"limitRangeApplied"`
-	DefaultDenyNetworkPolicy bool   `json:"defaultDenyNetworkPolicy"`
-	DNSOnlyEgress            bool   `json:"dnsOnlyEgress"`
-	ServiceAccountAutomount  bool   `json:"serviceAccountAutomount"`
-	AllowPrivilegeEscalation bool   `json:"allowPrivilegeEscalation"`
+	ContainerPort            int    `json:"container_port"`
+	RuntimeClass             string `json:"runtime_class"`
+	ResourceQuotaApplied     bool   `json:"resource_quota_applied"`
+	LimitRangeApplied        bool   `json:"limit_range_applied"`
+	DefaultDenyNetworkPolicy bool   `json:"default_deny_network_policy"`
+	DNSOnlyEgress            bool   `json:"dns_only_egress"`
+	ServiceAccountAutomount  bool   `json:"service_account_automount"`
+	AllowPrivilegeEscalation bool   `json:"allow_privilege_escalation"`
 	Privileged               bool   `json:"privileged"`
-	HostNetwork              bool   `json:"hostNetwork"`
-	HostPID                  bool   `json:"hostPID"`
-	HostIPC                  bool   `json:"hostIPC"`
-	HostPathAllowed          bool   `json:"hostPathAllowed"`
-	DropAllCapabilities      bool   `json:"dropAllCapabilities"`
-	SeccompProfile           string `json:"seccompProfile"`
+	HostNetwork              bool   `json:"host_network"`
+	HostPID                  bool   `json:"host_pid"`
+	HostIPC                  bool   `json:"host_ipc"`
+	HostPathAllowed          bool   `json:"host_path_allowed"`
+	DropAllCapabilities      bool   `json:"drop_all_capabilities"`
+	SeccompProfile           string `json:"seccomp_profile"`
 	Endpoint                 string `json:"endpoint"`
+	NodePort                 int32  `json:"node_port,omitempty"`
 }
