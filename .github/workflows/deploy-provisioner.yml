@@ -1,0 +1,80 @@
+name: Deploy Provisioner MVP
+
+on:
+  push:
+    branches:
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: provisioner-mvp-deployment
+  cancel-in-progress: false
+
+jobs:
+  test-build-deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      SSH_HOST: 3.36.110.174
+      SSH_USER: ubuntu
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test deployment rollback
+        run: bash scripts/test-deploy-provisioner-release.sh
+
+      - name: Test
+        run: go test -p 1 ./... -count=1 -timeout 5m
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build Linux binary
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          mkdir -p dist
+          go build -trimpath -ldflags='-s -w' -o dist/secure-provisioner ./cmd/provisioner
+          sha256sum dist/secure-provisioner > dist/secure-provisioner.sha256
+
+      - name: Configure pinned SSH host
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.PROVISIONER_SSH_PRIVATE_KEY }}
+        run: |
+          if [[ -z "${SSH_PRIVATE_KEY}" ]]; then
+            echo "PROVISIONER_SSH_PRIVATE_KEY is required" >&2
+            exit 1
+          fi
+          install -d -m 0700 "${HOME}/.ssh"
+          printf '%s\n' "${SSH_PRIVATE_KEY}" | tr -d '\r' > "${HOME}/.ssh/id_provisioner"
+          chmod 0600 "${HOME}/.ssh/id_provisioner"
+          printf '%s\n' '3.36.110.174 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDIZpU/FNdIdzs0AwvhTnRZ0gHNMLuSyrYu9nWLilEM3' > "${HOME}/.ssh/known_hosts"
+          chmod 0644 "${HOME}/.ssh/known_hosts"
+
+      - name: Upload release candidate
+        run: |
+          scp -i "${HOME}/.ssh/id_provisioner" \
+            "dist/secure-provisioner" \
+            "scripts/deploy-provisioner-release.sh" \
+            "${SSH_USER}@${SSH_HOST}:/tmp/"
+
+      - name: Deploy and verify
+        run: |
+          binary_sha256="$(cut -d ' ' -f 1 dist/secure-provisioner.sha256)"
+          ssh -i "${HOME}/.ssh/id_provisioner" "${SSH_USER}@${SSH_HOST}" \
+            "sudo bash /tmp/deploy-provisioner-release.sh /tmp/secure-provisioner '${binary_sha256}'"
+          ssh -i "${HOME}/.ssh/id_provisioner" "${SSH_USER}@${SSH_HOST}" \
+            "rm -f /tmp/deploy-provisioner-release.sh"
