@@ -1,7 +1,7 @@
 {
   "request_id": "runtime-create-pwn-001",
   "instance_id": "22222222-2222-4222-8222-222222222222",
-  "team_id": 18,
+  "team_id": "00000000-0000-4000-8000-000000000018",
   "isolation_profile": "PWN",
   "target": {"runtime_type": "KUBERNETES", "target_id": "aws-k3s-001"},
   "workload": {

@@ -27,7 +27,7 @@ var (
 
 type Binding struct {
 	InstanceID            string
-	TeamID                int64
+	TeamID                provisioner.TeamID
 	TargetID              string
 	Namespace             string
 	NamespaceUID          string
@@ -55,7 +55,7 @@ type Store interface {
 
 func validCreatedBinding(binding Binding) bool {
 	return strings.TrimSpace(binding.InstanceID) != "" &&
-		binding.TeamID > 0 &&
+		binding.TeamID.Valid() &&
 		strings.TrimSpace(binding.TargetID) != "" &&
 		strings.TrimSpace(binding.Namespace) != "" &&
 		strings.TrimSpace(binding.NamespaceUID) != "" &&

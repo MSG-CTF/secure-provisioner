@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
+	"github.com/google/uuid"
 )
 
 type RuntimeType string
@@ -12,6 +13,14 @@ type RuntimeType string
 const RuntimeTypeKubernetes RuntimeType = "KUBERNETES"
 
 var ErrRuntimeUnavailable = errors.New("runtime adapter is unavailable")
+
+// TeamID is the canonical UUID assigned to a team by the scheduler.
+type TeamID string
+
+func (id TeamID) Valid() bool {
+	parsed, err := uuid.Parse(string(id))
+	return err == nil && parsed != uuid.Nil && parsed.String() == string(id)
+}
 
 type ResourceLimits struct {
 	CPUMillicores       int
@@ -29,7 +38,7 @@ type WorkloadContainer struct {
 type CreateWorkloadCommand struct {
 	RequestID      string
 	InstanceID     string
-	TeamID         int64
+	TeamID         TeamID
 	RuntimeType    RuntimeType
 	TargetID       string
 	Containers     []WorkloadContainer

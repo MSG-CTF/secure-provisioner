@@ -50,7 +50,7 @@ func TestCreateWorkloadRequestDecodesMultipleContainers(t *testing.T) {
 	err := json.Unmarshal([]byte(`{
 	  "request_id":"req-multi",
 	  "instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001",
-	  "team_id":18,
+	  "team_id":"00000000-0000-4000-8000-000000000018",
 	  "target":{"runtime_type":"KUBERNETES","target_id":"aws-dev"},
 	  "workload":{
 	    "containers":[

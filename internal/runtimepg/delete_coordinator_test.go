@@ -11,7 +11,7 @@ import (
 func TestBeginDeleteAtomicallyMarksBindingAndEnqueuesOperation(t *testing.T) {
 	database := openTestDatabase(t)
 	binding := runtimebinding.Binding{
-		InstanceID: "11111111-1111-4111-8111-111111111111", TeamID: 1,
+		InstanceID: "11111111-1111-4111-8111-111111111111", TeamID: "00000000-0000-4000-8000-000000000001",
 		TargetID: "aws-k3s-001", Namespace: "instance-11111111",
 		NamespaceUID: "namespace-uid", RuntimeWorkloadID: "aws-k3s-001/instance-11111111",
 		State: runtimebinding.StateCreated, CreatedAt: time.Unix(90, 0), UpdatedAt: time.Unix(90, 0),
@@ -37,7 +37,7 @@ func TestBeginDeleteAtomicallyMarksBindingAndEnqueuesOperation(t *testing.T) {
 func TestBeginDeleteRollsBackBindingWhenOperationInsertFails(t *testing.T) {
 	database := openTestDatabase(t)
 	binding := runtimebinding.Binding{
-		InstanceID: "22222222-2222-4222-8222-222222222222", TeamID: 2,
+		InstanceID: "22222222-2222-4222-8222-222222222222", TeamID: "00000000-0000-4000-8000-000000000002",
 		TargetID: "aws-k3s-001", Namespace: "instance-22222222", NamespaceUID: "namespace-uid-2",
 		RuntimeWorkloadID: "aws-k3s-001/instance-22222222", State: runtimebinding.StateCreated,
 		CreatedAt: time.Unix(90, 0), UpdatedAt: time.Unix(90, 0),

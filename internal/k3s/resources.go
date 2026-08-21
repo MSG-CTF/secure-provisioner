@@ -324,7 +324,7 @@ func createContainerSpecHash(
 ) (string, error) {
 	spec := struct {
 		InstanceID          string                         `json:"instance_id"`
-		TeamID              int64                          `json:"team_id"`
+		TeamID              provisioner.TeamID             `json:"team_id"`
 		RuntimeType         provisioner.RuntimeType        `json:"runtime_type"`
 		TargetID            string                         `json:"target_id"`
 		Container           provisioner.WorkloadContainer  `json:"container"`
@@ -374,7 +374,7 @@ func validWorkloadCommand(
 ) bool {
 	if strings.TrimSpace(cluster.Config.TargetID) == "" ||
 		command.TargetID != cluster.Config.TargetID ||
-		command.TeamID <= 0 ||
+		!command.TeamID.Valid() ||
 		command.RuntimeType != provisioner.RuntimeTypeKubernetes ||
 		strings.TrimSpace(cluster.Config.PublicGateway) == "" ||
 		len(containers) == 0 ||
@@ -422,7 +422,7 @@ func ownershipLabels(command provisioner.CreateWorkloadCommand) map[string]strin
 		"app.kubernetes.io/managed-by": "secure-provisioner",
 		"app.kubernetes.io/name":       resourceName,
 		"msgctf.io/instance-id":        command.InstanceID,
-		"msgctf.io/team-id":            strconv.FormatInt(command.TeamID, 10),
+		"msgctf.io/team-id":            string(command.TeamID),
 	}
 }
 

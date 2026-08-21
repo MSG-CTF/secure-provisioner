@@ -9,7 +9,7 @@ import (
 )
 
 func TestDeleteWorkloadRequestDecodesAndConvertsSchedulerContract(t *testing.T) {
-	body := `{"request_id":"req-delete-01","instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001","team_id":1,"target":{"runtime_type":"KUBERNETES","target_id":"cluster-main"},"runtime_workload_id":"cluster-main/ns-team-1/workload-abc","delete_reason":"TTL_EXPIRED"}`
+	body := `{"request_id":"req-delete-01","instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001","team_id":"00000000-0000-4000-8000-000000000001","target":{"runtime_type":"KUBERNETES","target_id":"cluster-main"},"runtime_workload_id":"cluster-main/ns-team-1/workload-abc","delete_reason":"TTL_EXPIRED"}`
 	var request DeleteWorkloadRequest
 	if err := json.Unmarshal([]byte(body), &request); err != nil {
 		t.Fatal(err)
@@ -59,6 +59,16 @@ func TestDeleteWorkloadRequestAcceptsOnlyDocumentedReasons(t *testing.T) {
 	}
 }
 
+func TestDeleteWorkloadRequestRejectsInvalidTeamID(t *testing.T) {
+	for _, teamID := range []provisioner.TeamID{"", "1", "not-a-uuid", "00000000-0000-0000-0000-000000000000"} {
+		request := validDeleteWorkloadRequest()
+		request.TeamID = teamID
+		if err := request.Validate(); err == nil {
+			t.Fatalf("team_id %q: Validate() error = nil", teamID)
+		}
+	}
+}
+
 func TestNewDeleteWorkloadResponseReturnsSuccess(t *testing.T) {
 	response := NewDeleteWorkloadResponse("cluster-main/ns-team-1/workload-abc")
 	if response.RuntimeWorkloadID != "cluster-main/ns-team-1/workload-abc" || response.Status != "SUCCESS" {
@@ -70,7 +80,7 @@ func validDeleteWorkloadRequest() DeleteWorkloadRequest {
 	return DeleteWorkloadRequest{
 		RequestID:  "req-delete-01",
 		InstanceID: "018f3f1e-21b8-7a91-a30b-63b3400fd001",
-		TeamID:     1,
+		TeamID:     "00000000-0000-4000-8000-000000000001",
 		Target: RuntimeTarget{
 			RuntimeType: RuntimeTypeKubernetes,
 			TargetID:    "cluster-main",

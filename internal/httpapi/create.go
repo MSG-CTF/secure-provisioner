@@ -58,12 +58,12 @@ type ResourceLimits struct {
 }
 
 type CreateWorkloadRequest struct {
-	RequestID        string          `json:"request_id"`
-	InstanceID       string          `json:"instance_id"`
-	TeamID           int64           `json:"team_id"`
-	IsolationProfile string          `json:"isolation_profile"`
-	Target           RuntimeTarget   `json:"target"`
-	Workload         RuntimeWorkload `json:"workload"`
+	RequestID        string             `json:"request_id"`
+	InstanceID       string             `json:"instance_id"`
+	TeamID           provisioner.TeamID `json:"team_id"`
+	IsolationProfile string             `json:"isolation_profile"`
+	Target           RuntimeTarget      `json:"target"`
+	Workload         RuntimeWorkload    `json:"workload"`
 }
 
 func (request *CreateWorkloadRequest) UnmarshalJSON(data []byte) error {
@@ -168,8 +168,8 @@ func (request *CreateWorkloadRequest) Validate() error {
 	if !isUUID(request.InstanceID) {
 		return fmt.Errorf("instance_id must be a UUID")
 	}
-	if request.TeamID <= 0 {
-		return fmt.Errorf("team_id must be positive")
+	if !request.TeamID.Valid() {
+		return fmt.Errorf("team_id must be a canonical UUID")
 	}
 	if request.IsolationProfile != string(isolation.WorkloadProfileWeb) &&
 		request.IsolationProfile != string(isolation.WorkloadProfilePwn) {

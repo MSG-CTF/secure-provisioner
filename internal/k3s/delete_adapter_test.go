@@ -278,7 +278,7 @@ func TestDeleteAdapterAllowsRepeatedDeletion(t *testing.T) {
 func deleteFixture() (runtimebinding.Binding, *corev1.Namespace) {
 	binding := runtimebinding.Binding{
 		InstanceID:        "018f3f1e-21b8-7a91-a30b-63b3400fd001",
-		TeamID:            18,
+		TeamID:            "00000000-0000-4000-8000-000000000018",
 		TargetID:          "aws-dev",
 		Namespace:         "ctf-018f3f1e21b87a91a30b63b3400fd001",
 		NamespaceUID:      "namespace-uid-01",
@@ -294,7 +294,7 @@ func deleteFixture() (runtimebinding.Binding, *corev1.Namespace) {
 		Labels: map[string]string{
 			"app.kubernetes.io/managed-by": "secure-provisioner",
 			"msgctf.io/instance-id":        binding.InstanceID,
-			"msgctf.io/team-id":            "18",
+			"msgctf.io/team-id":            "00000000-0000-4000-8000-000000000018",
 		},
 	}}
 	return binding, namespace

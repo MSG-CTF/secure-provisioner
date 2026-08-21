@@ -34,7 +34,7 @@ func TestBuildResourceSetCreatesOwnedKubernetesResources(t *testing.T) {
 		"app.kubernetes.io/managed-by": "secure-provisioner",
 		"app.kubernetes.io/name":       resourceName,
 		"msgctf.io/instance-id":        command.InstanceID,
-		"msgctf.io/team-id":            "42",
+		"msgctf.io/team-id":            "00000000-0000-4000-8000-000000000042",
 	}
 	for resource, labels := range map[string]map[string]string{
 		"namespace": resources.Namespace.Labels,
@@ -77,7 +77,7 @@ func TestBuildResourceSetCreatesOwnedKubernetesResources(t *testing.T) {
 		}
 	}
 
-	const wantSpecHash = "7e5ed2f6298bda28bd27f885c31feab342ccf048bb51e019fe87f31b5d728616"
+	const wantSpecHash = "4a1a64eed73e02401973e53a58ecbaca0f5d658eefab7f743973c2d8929630a2"
 	if resources.ExpectedSpecHash != wantSpecHash {
 		t.Fatalf("ExpectedSpecHash = %q, want stable SHA-256", resources.ExpectedSpecHash)
 	}
@@ -488,7 +488,7 @@ func validCreateCommand(targetID string) provisioner.CreateWorkloadCommand {
 	command := provisioner.CreateWorkloadCommand{
 		RequestID:   "req-01",
 		InstanceID:  "018f3f1e-21b8-7a91-a30b-63b3400fd001",
-		TeamID:      42,
+		TeamID:      "00000000-0000-4000-8000-000000000042",
 		RuntimeType: provisioner.RuntimeTypeKubernetes,
 		TargetID:    targetID,
 		Containers: []provisioner.WorkloadContainer{{
@@ -523,7 +523,7 @@ func validMultiCreateCommand(targetID string) provisioner.CreateWorkloadCommand 
 	command := provisioner.CreateWorkloadCommand{
 		RequestID:   "req-multi",
 		InstanceID:  "018f3f1e-21b8-7a91-a30b-63b3400fd001",
-		TeamID:      42,
+		TeamID:      "00000000-0000-4000-8000-000000000042",
 		RuntimeType: provisioner.RuntimeTypeKubernetes,
 		TargetID:    targetID,
 		Containers: []provisioner.WorkloadContainer{

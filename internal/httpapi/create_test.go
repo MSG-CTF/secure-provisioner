@@ -23,7 +23,7 @@ func TestCreateWorkloadRequestDecodesSimplifiedMultiContainerContract(t *testing
 
 	command := request.ToCommand()
 	if command.RuntimeType != provisioner.RuntimeTypeKubernetes || command.TargetID != "aws-dev" ||
-		command.RequestID != "req-multi" || command.TeamID != 18 {
+		command.RequestID != "req-multi" || command.TeamID != "00000000-0000-4000-8000-000000000018" {
 		t.Fatalf("command = %#v", command)
 	}
 	if len(command.Containers) != 2 || command.Containers[1].Name != "api" ||
@@ -83,15 +83,33 @@ func TestCreateWorkloadRequestRejectsMissingOrUnknownIsolationProfile(t *testing
 	}
 }
 
+func TestCreateWorkloadRequestRejectsNonCanonicalTeamID(t *testing.T) {
+	for _, teamID := range []provisioner.TeamID{
+		"",
+		"18",
+		"not-a-uuid",
+		"00000000-0000-0000-0000-000000000000",
+		"00000000-0000-4000-8000-0000000000AA",
+	} {
+		t.Run(string(teamID), func(t *testing.T) {
+			request := validCreateWorkloadRequest()
+			request.TeamID = teamID
+			if err := request.Validate(); err == nil {
+				t.Fatal("Validate() error = nil")
+			}
+		})
+	}
+}
+
 func TestCreateWorkloadRequestRejectsRemovedPolicyFields(t *testing.T) {
 	for _, testCase := range []struct {
 		name string
 		body string
 	}{
-		{name: "challenge ref", body: strings.Replace(validCreateRequestJSON(), `"team_id":18,`, `"team_id":18,"challenge_ref":{"challenge_id":"old","version":"v1"},`, 1)},
-		{name: "isolation ref", body: strings.Replace(validCreateRequestJSON(), `"team_id":18,`, `"team_id":18,"isolation_ref":{"name":"STANDARD","version":"v1"},`, 1)},
-		{name: "workload profile ref", body: strings.Replace(validCreateRequestJSON(), `"team_id":18,`, `"team_id":18,"workload_profile_ref":{"name":"WEB","version":"v1"},`, 1)},
-		{name: "resource profile ref", body: strings.Replace(validCreateRequestJSON(), `"team_id":18,`, `"team_id":18,"resource_profile_ref":{"name":"SMALL_MULTI","version":"v1"},`, 1)},
+		{name: "challenge ref", body: strings.Replace(validCreateRequestJSON(), `"team_id":"00000000-0000-4000-8000-000000000018",`, `"team_id":"00000000-0000-4000-8000-000000000018","challenge_ref":{"challenge_id":"old","version":"v1"},`, 1)},
+		{name: "isolation ref", body: strings.Replace(validCreateRequestJSON(), `"team_id":"00000000-0000-4000-8000-000000000018",`, `"team_id":"00000000-0000-4000-8000-000000000018","isolation_ref":{"name":"STANDARD","version":"v1"},`, 1)},
+		{name: "workload profile ref", body: strings.Replace(validCreateRequestJSON(), `"team_id":"00000000-0000-4000-8000-000000000018",`, `"team_id":"00000000-0000-4000-8000-000000000018","workload_profile_ref":{"name":"WEB","version":"v1"},`, 1)},
+		{name: "resource profile ref", body: strings.Replace(validCreateRequestJSON(), `"team_id":"00000000-0000-4000-8000-000000000018",`, `"team_id":"00000000-0000-4000-8000-000000000018","resource_profile_ref":{"name":"SMALL_MULTI","version":"v1"},`, 1)},
 		{name: "outbound mode", body: strings.Replace(validCreateRequestJSON(), `"workload":{`, `"workload":{"outbound_mode":"NONE",`, 1)},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -105,7 +123,7 @@ func TestCreateWorkloadRequestRejectsRemovedPolicyFields(t *testing.T) {
 
 func TestCreateWorkloadRequestKeepsDeprecatedSingleContainerInput(t *testing.T) {
 	request := CreateWorkloadRequest{
-		RequestID: "req-single", InstanceID: "018f3f1e-21b8-7a91-a30b-63b3400fd001", TeamID: 18,
+		RequestID: "req-single", InstanceID: "018f3f1e-21b8-7a91-a30b-63b3400fd001", TeamID: "00000000-0000-4000-8000-000000000018",
 		IsolationProfile: "WEB",
 		Target:           RuntimeTarget{RuntimeType: RuntimeTypeKubernetes, TargetID: "aws-dev"},
 		Workload: RuntimeWorkload{
@@ -129,7 +147,7 @@ func TestCreateWorkloadRequestAcceptsNullableOptionalIsolationRequirements(t *te
 	if err := json.Unmarshal([]byte(`{
 		"request_id":"req-nullable-policy",
 		"instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001",
-		"team_id":18,
+		"team_id":"00000000-0000-4000-8000-000000000018",
 		"isolation_profile":"WEB",
 		"target":{"runtime_type":"KUBERNETES","target_id":"aws-dev"},
 		"workload":{
@@ -392,7 +410,7 @@ func validIsolationCreateWorkloadRequest() CreateWorkloadRequest {
 
 func validCreateWorkloadRequest() CreateWorkloadRequest {
 	return CreateWorkloadRequest{
-		RequestID: "req-multi", InstanceID: "018f3f1e-21b8-7a91-a30b-63b3400fd001", TeamID: 18,
+		RequestID: "req-multi", InstanceID: "018f3f1e-21b8-7a91-a30b-63b3400fd001", TeamID: "00000000-0000-4000-8000-000000000018",
 		IsolationProfile: "WEB",
 		Target:           RuntimeTarget{RuntimeType: RuntimeTypeKubernetes, TargetID: "aws-dev"},
 		Workload: RuntimeWorkload{
@@ -410,7 +428,7 @@ func validCreateRequestJSON() string {
 	return `{
 		"request_id":"req-multi",
 		"instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001",
-		"team_id":18,
+		"team_id":"00000000-0000-4000-8000-000000000018",
 		"isolation_profile":"WEB",
 		"target":{"runtime_type":"KUBERNETES","target_id":"aws-dev"},
 		"workload":{

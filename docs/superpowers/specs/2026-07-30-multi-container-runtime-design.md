@@ -66,7 +66,7 @@ Kubernetes 리소스를 따로 만든다. 생성과 삭제는 기존 비동기 O
 {
   "request_id": "req-multi-01",
   "instance_id": "018f3f1e-21b8-7a91-a30b-63b3400fd001",
-  "team_id": 1,
+  "team_id": "00000000-0000-4000-8000-000000000001",
   "target": {
     "runtime_type": "KUBERNETES",
     "target_id": "aws-dev"

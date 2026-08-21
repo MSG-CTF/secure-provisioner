@@ -14,7 +14,7 @@ const (
 type DeleteWorkloadCommand struct {
 	RequestID         string
 	InstanceID        string
-	TeamID            int64
+	TeamID            TeamID
 	RuntimeType       RuntimeType
 	TargetID          string
 	RuntimeWorkloadID string

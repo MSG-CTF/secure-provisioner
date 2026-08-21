@@ -32,7 +32,7 @@ paths:
                 value:
                   request_id: runtime-create-018f3f1e
                   instance_id: 018f3f1e-21b8-7a91-a30b-63b3400fd001
-                  team_id: 18
+                  team_id: "00000000-0000-4000-8000-000000000018"
                   isolation_profile: WEB
                   target:
                     runtime_type: KUBERNETES
@@ -65,7 +65,7 @@ paths:
                 value:
                   request_id: runtime-create-pwn-018f3f1e
                   instance_id: 018f3f1e-21b8-7a91-a30b-63b3400fd009
-                  team_id: 18
+                  team_id: "00000000-0000-4000-8000-000000000018"
                   isolation_profile: PWN
                   target:
                     runtime_type: KUBERNETES
@@ -89,7 +89,7 @@ paths:
                 value:
                   request_id: runtime-create-single-018f3f1e
                   instance_id: 018f3f1e-21b8-7a91-a30b-63b3400fd002
-                  team_id: 18
+                  team_id: "00000000-0000-4000-8000-000000000018"
                   isolation_profile: WEB
                   target:
                     runtime_type: KUBERNETES
@@ -106,7 +106,7 @@ paths:
                 value:
                   request_id: runtime-create-nullable-018f3f1e
                   instance_id: 018f3f1e-21b8-7a91-a30b-63b3400fd003
-                  team_id: 18
+                  team_id: "00000000-0000-4000-8000-000000000018"
                   isolation_profile: WEB
                   target:
                     runtime_type: KUBERNETES
@@ -787,9 +787,8 @@ components:
           type: string
           format: uuid
         team_id:
-          type: integer
-          format: int64
-          minimum: 1
+          type: string
+          format: uuid
         isolation_profile:
           $ref: "#/components/schemas/IsolationProfile"
         target:
@@ -823,9 +822,8 @@ components:
           type: string
           format: uuid
         team_id:
-          type: integer
-          format: int64
-          minimum: 1
+          type: string
+          format: uuid
         target:
           $ref: "#/components/schemas/RuntimeTarget"
         runtime_workload_id:

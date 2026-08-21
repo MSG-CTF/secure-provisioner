@@ -672,7 +672,7 @@ func TestMemoryStoreGetsOperationByRequestID(t *testing.T) {
 
 func validCreateCommand(requestID string) provisioner.CreateWorkloadCommand {
 	return provisioner.CreateWorkloadCommand{
-		RequestID: requestID, InstanceID: "inst-1", TeamID: 7,
+		RequestID: requestID, InstanceID: "inst-1", TeamID: "00000000-0000-4000-8000-000000000007",
 		RuntimeType: provisioner.RuntimeTypeKubernetes, TargetID: "target-1",
 		Containers: []provisioner.WorkloadContainer{{
 			Name: "challenge", Image: "nginx:1.27", Ports: []int{8080}, Expose: true,
@@ -699,7 +699,7 @@ func validDeleteCommand(requestID string) provisioner.DeleteWorkloadCommand {
 	return provisioner.DeleteWorkloadCommand{
 		RequestID:   requestID,
 		InstanceID:  "inst-1",
-		TeamID:      7,
+		TeamID:      "00000000-0000-4000-8000-000000000007",
 		RuntimeType: provisioner.RuntimeTypeKubernetes,
 		TargetID:    "target-1",
 	}

@@ -139,7 +139,7 @@ func scanBinding(row rowScanner) (runtimebinding.Binding, error) {
 }
 
 func validBinding(binding runtimebinding.Binding) bool {
-	return strings.TrimSpace(binding.InstanceID) != "" && binding.TeamID > 0 && strings.TrimSpace(binding.TargetID) != "" && strings.TrimSpace(binding.Namespace) != "" && strings.TrimSpace(binding.NamespaceUID) != "" && strings.TrimSpace(binding.RuntimeWorkloadID) != "" && binding.State == runtimebinding.StateCreated && !binding.CreatedAt.IsZero() && !binding.UpdatedAt.IsZero() && binding.DeletedAt == nil
+	return strings.TrimSpace(binding.InstanceID) != "" && binding.TeamID.Valid() && strings.TrimSpace(binding.TargetID) != "" && strings.TrimSpace(binding.Namespace) != "" && strings.TrimSpace(binding.NamespaceUID) != "" && strings.TrimSpace(binding.RuntimeWorkloadID) != "" && binding.State == runtimebinding.StateCreated && !binding.CreatedAt.IsZero() && !binding.UpdatedAt.IsZero() && binding.DeletedAt == nil
 }
 
 func sameBindingPlacement(a, b runtimebinding.Binding) bool {
