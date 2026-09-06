@@ -1,12 +1,59 @@
 package runtimepg
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
 	"github.com/MSG-CTF/secure-provisioner/internal/operations"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 )
+
+func TestOperationCodecPreservesMixedPublicPorts(t *testing.T) {
+	command := validResolvedPwnCommand(t)
+	command.Containers[0].Ports = []int{8080, 9000}
+	command.Containers[0].Expose = false
+	command.Containers[0].ExposedPorts = []int{8080}
+	command.PolicyRequest.WorkloadProfile = isolation.WorkloadProfileWeb
+	command.PolicyRequest.Containers[0].Ports = []int{8080, 9000}
+	command.PolicyRequest.Containers[0].Expose = false
+	command.PolicyRequest.Containers[0].ExposedPorts = []int{8080}
+	var err error
+	command.Policy, err = isolation.NewStaticResolver().Resolve(command.PolicyRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, err := operations.NewCreateOperation("op-mixed", command, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := encodeOperationCommand(op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodeOperationCommand(operations.OperationTypeCreate, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ports := range [][]int{decoded.CreateCommand.Containers[0].PublicPorts(), decoded.CreateCommand.PolicyRequest.Containers[0].PublicPorts(), decoded.CreateCommand.Policy.Containers[0].PublicPorts()} {
+		if !reflect.DeepEqual(ports, []int{8080}) {
+			t.Fatalf("public selection after round trip = %v", ports)
+		}
+	}
+	if !op.SameRequest(decoded) {
+		t.Fatal("round trip changes request identity")
+	}
+}
+
+func TestOperationCodecReadsLegacyExposureWithoutNewField(t *testing.T) {
+	decoded, err := decodeOperationCommand(operations.OperationTypeCreate, []byte(`{"RequestID":"old","Containers":[{"Name":"web","Ports":[8080,9000],"Expose":true}],"Policy":{"Containers":[{"Name":"web","Ports":[8080,9000],"Expose":true}]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(decoded.CreateCommand.Containers[0].PublicPorts(), []int{8080, 9000}) || !reflect.DeepEqual(decoded.CreateCommand.Policy.Containers[0].PublicPorts(), []int{8080, 9000}) {
+		t.Fatal("legacy persisted exposure was lost")
+	}
+}
 
 func TestOperationCodecRoundTripsResolvedCreateCommand(t *testing.T) {
 	command := validResolvedPwnCommand(t)

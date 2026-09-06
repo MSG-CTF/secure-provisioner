@@ -665,11 +665,16 @@ components:
           minContains: 1
           contains:
             type: object
-            required:
-              - expose
-            properties:
-              expose:
-                const: true
+            anyOf:
+              - required: [expose]
+                properties:
+                  expose:
+                    const: true
+              - required: [exposed_ports]
+                properties:
+                  exposed_ports:
+                    type: array
+                    minItems: 1
           items:
             $ref: "#/components/schemas/RuntimeContainer"
         resource_limits:
@@ -684,6 +689,11 @@ components:
     RuntimeContainer:
       type: object
       additionalProperties: false
+      not:
+        required: [expose, exposed_ports]
+        properties:
+          expose: {}
+          exposed_ports: {}
       required:
         - name
         - image
@@ -721,13 +731,21 @@ components:
           type:
             - boolean
             - "null"
-          description: 참가자 외부 접속점(NodePort 또는 Ingress)에 공개할지 여부
+          description: 기존 호환 필드. true는 ports 전체 공개, false/null/생략은 전체 private. exposed_ports와 함께 지정할 수 없다.
+        exposed_ports:
+          type: array
+          uniqueItems: true
+          items:
+            type: integer
+            minimum: 1
+            maximum: 65535
+          description: 공개할 ports의 부분집합. 빈 배열은 전체 private이며 null은 허용하지 않는다. expose와 동시 지정은 값과 관계없이 거절한다. WEB 혼합 포트를 지원하며 PWN의 공개 컨테이너는 기존과 같이 ports 자체가 1개여야 한다.
     IsolationProfile:
       type: string
       enum:
         - WEB
         - PWN
-      description: Scheduler-owned challenge class resolved to immutable internal policy versions.
+      description: Scheduler가 선택하는 현행 문제 분류. WEB은 STANDARD@v1 + WEB@v1, PWN은 STANDARD@v1 + PWN@v1으로 해석한다. standard-web, pwn-sandbox, strong-isolation 등의 alias나 세 번째 실행 프로필은 지원하지 않는다.
     WritablePath:
       type: object
       additionalProperties: false

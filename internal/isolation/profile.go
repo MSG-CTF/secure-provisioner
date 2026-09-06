@@ -39,6 +39,35 @@ type ContainerRequirement struct {
 	Expose        bool
 	RunAsUser     int64
 	WritablePaths []WritablePath
+	ExposedPorts  []int `json:",omitempty"`
+}
+
+func (container ContainerRequirement) PublicPorts() []int {
+	if container.ExposedPorts != nil {
+		return container.ExposedPorts
+	}
+	if container.Expose {
+		return container.Ports
+	}
+	return nil
+}
+
+// ValidPublicPorts also rejects ambiguous internal representations.
+func ValidPublicPorts(ports []int, expose bool, exposedPorts []int) bool {
+	if expose && exposedPorts != nil {
+		return false
+	}
+	allowed := make(map[int]bool, len(ports))
+	for _, port := range ports {
+		allowed[port] = true
+	}
+	for _, port := range exposedPorts {
+		if port < 1 || port > 65535 || !allowed[port] {
+			return false
+		}
+		allowed[port] = false
+	}
+	return true
 }
 
 type EndpointProtocol string

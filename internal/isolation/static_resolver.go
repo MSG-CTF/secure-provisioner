@@ -107,6 +107,9 @@ func validateContainers(containers []ContainerRequirement, limits ResourceLimits
 			ports[port] = struct{}{}
 		}
 		names[container.Name] = ports
+		if !ValidPublicPorts(container.Ports, container.Expose, container.ExposedPorts) {
+			return rejected("invalid public port selection")
+		}
 
 		cleanPaths := make([]string, 0, len(container.WritablePaths))
 		for _, writable := range container.WritablePaths {
@@ -134,7 +137,7 @@ func validateContainers(containers []ContainerRequirement, limits ResourceLimits
 func validateWorkloadProfile(ref ProfileRef, containers []ContainerRequirement) error {
 	exposedContainers := 0
 	for _, container := range containers {
-		if container.Expose {
+		if len(container.PublicPorts()) > 0 {
 			exposedContainers++
 			if ref == (ProfileRef{Name: "PWN", Version: "v1"}) && len(container.Ports) != 1 {
 				return rejected("Pwn workload must expose exactly one port")
@@ -209,6 +212,9 @@ func cloneContainerRequirements(containers []ContainerRequirement) []ContainerRe
 	for index, container := range containers {
 		cloned[index] = container
 		cloned[index].Ports = append([]int(nil), container.Ports...)
+		if container.ExposedPorts != nil {
+			cloned[index].ExposedPorts = append([]int{}, container.ExposedPorts...)
+		}
 		cloned[index].WritablePaths = append([]WritablePath(nil), container.WritablePaths...)
 	}
 	return cloned

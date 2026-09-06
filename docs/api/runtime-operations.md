@@ -96,13 +96,71 @@ Content-Type: application/json
 ```
 
 `containers`는 1개 이상이며 이름은 요청 안에서 고유한 Kubernetes DNS label이어야
-한다. 각 컨테이너는 내부 포트를 여러 개 가질 수 있다. `expose: true`인
-컨테이너의 포트만 외부 접속점으로 공개되며, 적어도 하나는 공개돼야 한다.
+한다. 각 컨테이너는 내부 포트를 여러 개 가질 수 있다. workload 전체에서
+공개 포트는 적어도 1개 있어야 한다. 공개 선언은 컨테이너마다 다음 중 하나를 사용한다.
+
+- 기존 `expose: true`: `ports` 전체 공개. `false`, `null`, 생략은 전체 private.
+- 신규 `exposed_ports`: 공개할 포트 목록. 중복 없는 `ports` 부분집합이며 빈 배열은
+  전체 private다. `null`, 중복, 범위 밖 포트, `ports`에 없는 포트는 거절한다.
+- 두 필드를 함께 보내면 `expose: false`나 `null`도 포함하여 `400 INVALID_REQUEST`다.
+
+### 같은 WEB 컨테이너에서 public/private 포트 혼합
+
+다음은 `containers[]` 원소 예시다. 8080만 외부에 공개하고 9000에는 NodePort나
+Ingress를 만들지 않는다. 전체 요청 예시는
+[`create-web-mixed-ports.json`](../../examples/requests/create-web-mixed-ports.json)을 참고한다.
+이미지 digest와 target_id는 예시이며 실환경 값으로 교체해야 한다.
+
+```json
+{
+  "name": "web",
+  "image": "web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "ports": [8080, 9000],
+  "exposed_ports": [8080],
+  "run_as_user": 10001
+}
+```
+
+혼합 컨테이너의 내부 Service는 기존 컨테이너 이름을 유지하며 모든 `ports`를
+가진 ClusterIP다. 별도 공개 Service는 공개 포트만 포함하고, NODE_PORT에서는
+NodePort, INGRESS_PATH에서는 Ingress backend용 ClusterIP가 된다. 생성 결과의
+`endpoints[]`에는 8080만 포함한다. 다른 컨테이너에서 9000으로 접근하려면 기존과
+같이 `internal_connections`에 명시해야 한다. 같은 컨테이너 내부 loopback 통신을
+별도 컨테이너 간 격리로 취급하지 않는다.
+
+기존 전체 공개/비공개 요청의 Service 이름과 저장 표현은 유지한다. 목록은 `ports`
+순서로 정규화하며, 전체 포트 선택은 기존 `expose:true`와 동일하게 처리한다.
+PWN은 기존 보안 범위를 유지하여 공개 컨테이너의 `ports` 자체가 1개여야 한다.
+
+**롤아웃:** 먼저 이 변경이 포함된 Provisioner를 배포해야 한다. 이전 Provisioner는
+`exposed_ports`를 unknown field로 거절한다. Scheduler의 입력·저장·Runtime DTO가
+새 필드를 전달하도록 변경한 뒤 Scheduler를 배포한다. 현재 Scheduler dev의
+다중 endpoints 지원만으로 포트별 공개 요청을 전송할 수 있는 것은 아니다.
 
 `isolation_profile`은 필수이며 정확히 `WEB` 또는 `PWN`이어야 한다. 누락하거나
 소문자·알 수 없는 값을 보내면 `400 INVALID_REQUEST`다. Provisioner는 이를 각각
 `STANDARD@v1 + WEB@v1` 또는 `STANDARD@v1 + PWN@v1`으로 내부 합성한다. caller는
 baseline 버전, RuntimeClass 또는 Kubernetes 보안 설정을 직접 선택할 수 없다.
+
+### 기술 명세의 프로필 이름과 API 입력값
+
+`STANDARD@v1`은 WEB만의 별칭이 아니라 WEB/PWN 모두에 적용되는 공통 baseline이다.
+API 입력은 `WEB` 또는 `PWN`이며 `standard-web`, `pwn-sandbox`, `strong-isolation`을
+자동 변환하는 alias는 없다. 해당 문자열을 `isolation_profile`에 보내면
+`400 INVALID_REQUEST`다. 생성 경로는 단수 `instance`가 아닌
+`POST /internal/v1/instances`다.
+
+별도 기술 문서의 `standard-web`이 일반 웹용을 의미한다면 WEB과 용도상 대응할 수
+있지만, 세부 보안 조건까지 동일하다는 뜻은 아니다. 설계 문서의 용어를 API enum으로
+그대로 사용하지 않는다. 현행 코드에는 `strong-isolation`이라는 세 번째 실행
+프로필이 없으며, 더 강한 격리가 필수인 문제를 WEB/PWN으로 임의 하향 변환해
+지원된 것으로 간주하면 안 된다. 그런 문제는 별도 정책·대상 capability 계약이 필요하다.
+
+Scheduler는 세부 Kubernetes 보안 설정을 구성하지 않는다. 다만 PWN을 실행할 때
+gvisor와 NODE_PORT를 지원하는 적합한 target이 공급되는지는 Broker/DevOps와
+맞춰야 한다. Provisioner는 Registry capability 불일치를
+`TARGET_CAPABILITY_MISMATCH`로 거절하며, 이 최종 검사가 후보 공급 단계의
+적합성 보장을 대신한다는 뜻은 아니다.
 
 `writable_paths`와 `internal_connections`는 선택 사항이다. 연결을 생략하면 같은
 Namespace 안의 컨테이너 사이라도 자동 허용하지 않는다. 위 예제는
@@ -308,6 +366,38 @@ Retry-After: 2
 `service_url`은 하위 호환을 위한 첫 번째 공개 접속점이며 첫 번째
 `endpoints[]` 항목과 같다. 신규 연동에서는 `endpoints`를 사용한다.
 
+#### 공개 포트가 여러 개인 경우
+
+공개 포트마다 `endpoints[]` 항목을 하나씩 반환한다. 예를 들어 같은 WEB 컨테이너의
+`ports: [8080, 9000, 9090]`, `exposed_ports: [8080, 9090]` 요청은 공개 URL 2개를
+반환하고 private 포트 9000은 응답에서 제외한다. 다음은 NODE_PORT 모드의 생성 완료
+`result` 예시이며, 외부 포트 31042·31043은 예시 할당값이다.
+
+```json
+{
+  "runtime_workload_id": "aws-k3s-001/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge",
+  "service_url": "http://203.0.113.10:31042",
+  "endpoints": [
+    {
+      "container_name": "web",
+      "port": 8080,
+      "protocol": "HTTP",
+      "service_url": "http://203.0.113.10:31042"
+    },
+    {
+      "container_name": "web",
+      "port": 9090,
+      "protocol": "HTTP",
+      "service_url": "http://203.0.113.10:31043"
+    }
+  ]
+}
+```
+
+각 항목의 `container_name`, `port`, `protocol`, `service_url`은 모두 필수다.
+`port`는 컨테이너 내부 포트이므로 접속 주소에 직접 붙이지 않는다. 접속에는 각
+`service_url`을 사용한다. INGRESS_PATH에서는 외부 포트 대신 URL 경로가 구분된다.
+
 로컬 AWS 검증에 사용하는 `NODE_PORT` 노출 모드는 Kubernetes가 각 공개 포트의
 NodePort를 자동 할당하며 주소는 `http://<target 공인 IP>:<NodePort>` 형식이다.
 내부 컨테이너(`expose: false`)는 ClusterIP로만 생성된다. 기존
@@ -465,6 +555,8 @@ Ready EndpointSlice가 있을 때만 `true`다. `NODE_PORT`에서는 NodePort Se
   LimitRange, NetworkPolicy와 컨테이너별 Deployment·Service를 둔다.
 - `NODE_PORT`에서는 공개 컨테이너의 Service만 NodePort로 만들고 Ingress는 만들지
   않는다. `INGRESS_PATH`에서는 Service는 ClusterIP이며 공개용 Ingress 1개를 둔다.
+  혼합 컨테이너는 위의 내부/공개 Service 분리를 적용한다. Service quota는 실제
+  생성 개수에 맞추며 CREATE 완료 전에는 두 Service 모두의 EndpointSlice를 확인한다.
 - `STANDARD@v1`은 모든 문제에 적용한다. `WEB@v1`은 Target 기본 runtime을 사용하고,
   `PWN@v1`은 운영자가 검증한 `gvisor` RuntimeClass와 `NODE_PORT`를 요구한다.
 - ServiceAccount와 Pod 양쪽에서 token 자동 마운트를 끄고, Pod·컨테이너에는 non-root
@@ -477,7 +569,7 @@ Ready EndpointSlice가 있을 때만 `true`다. `NODE_PORT`에서는 NodePort Se
 - `default-deny-all`을 먼저 두고 DNS egress, 공개 컨테이너로 향하는 ingress,
   명시적으로 승인된 컨테이너 간 TCP 연결만 NetworkPolicy allowlist로 연다. 현재
   `INGRESS_PATH`의 공개 ingress source는 설정된 ingress controller로 제한한다.
-  `NODE_PORT`는 외부 source를 허용하되 공개 컨테이너의 승인된 포트만 연다. 현재
+  `NODE_PORT`는 외부 source를 허용하되 승인된 공개 포트 목록만 연다. 현재
   outbound는 내부적으로 항상 `NONE`이므로 그 밖의 외부 egress는 열지 않는다.
 - Namespace와 모든 기존 리소스의 소유권을 먼저 검사한 뒤 ServiceAccount →
   ResourceQuota → LimitRange → NetworkPolicy 순으로 적용·read-back 검증한다. 이 보호

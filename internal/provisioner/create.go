@@ -33,6 +33,19 @@ type WorkloadContainer struct {
 	Image  string
 	Ports  []int
 	Expose bool
+	// ExposedPorts is used for a partial selection. Omitted legacy payloads keep
+	// their original Expose semantics and serialized spec hashes.
+	ExposedPorts []int `json:",omitempty"`
+}
+
+func (container WorkloadContainer) PublicPorts() []int {
+	if container.ExposedPorts != nil {
+		return container.ExposedPorts
+	}
+	if container.Expose {
+		return container.Ports
+	}
+	return nil
 }
 
 type CreateWorkloadCommand struct {

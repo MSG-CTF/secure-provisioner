@@ -193,16 +193,32 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 				Ports:    servicePorts,
 			},
 		}
-		if container.Expose && cluster.Config.ExposureMode == ExposureModeNodePort {
-			service.Spec.Type = corev1.ServiceTypeNodePort
-			service.Spec.ExternalTrafficPolicy = corev1.ServiceExternalTrafficPolicyCluster
+		publicService := service
+		publicPorts := requirement.PublicPorts()
+		mixed := len(publicPorts) > 0 && len(publicPorts) < len(requirement.Ports)
+		if mixed {
+			publicService = service.DeepCopy()
+			publicService.Name = mixedPublicServiceName(index, containers)
+			publicService.Spec.Ports = nil
+			for _, port := range servicePorts {
+				if containsPort(publicPorts, int(port.Port)) {
+					publicService.Spec.Ports = append(publicService.Spec.Ports, port)
+				}
+			}
+		}
+		if len(publicPorts) > 0 && cluster.Config.ExposureMode == ExposureModeNodePort {
+			publicService.Spec.Type = corev1.ServiceTypeNodePort
+			publicService.Spec.ExternalTrafficPolicy = corev1.ServiceExternalTrafficPolicyCluster
 		}
 		resources.Deployments = append(resources.Deployments, deployment)
 		resources.Services = append(resources.Services, service)
+		if mixed {
+			resources.Services = append(resources.Services, publicService)
+		}
 		resources.ExpectedSpecHashes[container.Name] = specHash
 
-		if container.Expose && cluster.Config.ExposureMode != ExposureModeNodePort {
-			for _, port := range requirement.Ports {
+		if cluster.Config.ExposureMode != ExposureModeNodePort {
+			for _, port := range publicPorts {
 				path := instancePathSegment + command.InstanceID
 				if len(resources.Endpoints) > 0 {
 					path += "/" + container.Name + "/" + strconv.Itoa(port)
@@ -213,7 +229,7 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 						Path:     path,
 						PathType: &pathType,
 						Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{
-							Name: container.Name,
+							Name: publicService.Name,
 							Port: networkingv1.ServiceBackendPort{Number: int32(port)},
 						}},
 					},
@@ -227,6 +243,7 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 			}
 		}
 	}
+	resources.ResourceQuota.Spec.Hard[corev1.ResourceServices] = countQuantity(len(resources.Services))
 
 	resources.RuntimeWorkloadID = RuntimeWorkloadID(command.TargetID, namespace)
 	if len(resources.Endpoints) > 0 {
@@ -236,6 +253,25 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 	resources.Service = resources.Services[0]
 	resources.ExpectedSpecHash = resources.ExpectedSpecHashes[resources.Deployment.Name]
 	return resources, nil
+}
+
+// A short deterministic name avoids the DNS length limit and all user supplied
+// container/service names. Each index gets a distinct prefix even on collision.
+func mixedPublicServiceName(index int, containers []provisioner.WorkloadContainer) string {
+	candidate := fmt.Sprintf("public-%d", index)
+	for attempt := 1; ; attempt++ {
+		collision := false
+		for _, container := range containers {
+			if container.Name == candidate {
+				collision = true
+				break
+			}
+		}
+		if !collision {
+			return candidate
+		}
+		candidate = fmt.Sprintf("public-%d-%d", index, attempt)
+	}
 }
 
 func BuildNodePortEndpoints(
@@ -293,9 +329,7 @@ func nodePortQuota(mode ExposureMode, containers []provisioner.WorkloadContainer
 	}
 	count := 0
 	for _, container := range containers {
-		if container.Expose {
-			count += len(container.Ports)
-		}
+		count += len(container.PublicPorts())
 	}
 	return count
 }
@@ -408,7 +442,10 @@ func validWorkloadCommand(
 			}
 			ports[port] = struct{}{}
 		}
-		hasExposed = hasExposed || container.Expose
+		if !isolation.ValidPublicPorts(container.Ports, container.Expose, container.ExposedPorts) {
+			return false
+		}
+		hasExposed = hasExposed || len(container.PublicPorts()) > 0
 	}
 	return hasExposed
 }

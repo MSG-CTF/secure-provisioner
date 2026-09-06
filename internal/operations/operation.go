@@ -117,6 +117,7 @@ func copyCreateCommand(command provisioner.CreateWorkloadCommand) provisioner.Cr
 	for index, container := range command.Containers {
 		copied.Containers[index] = container
 		copied.Containers[index].Ports = slices.Clone(container.Ports)
+		copied.Containers[index].ExposedPorts = slices.Clone(container.ExposedPorts)
 	}
 	copied.PolicyRequest = copyPolicyRequest(command.PolicyRequest)
 	copied.Policy = copyResolvedPolicy(command.Policy)
@@ -141,6 +142,7 @@ func sameCreateCommand(first, second provisioner.CreateWorkloadCommand) bool {
 		if firstContainer.Name != secondContainer.Name ||
 			firstContainer.Image != secondContainer.Image ||
 			firstContainer.Expose != secondContainer.Expose ||
+			!slices.Equal(firstContainer.ExposedPorts, secondContainer.ExposedPorts) ||
 			!slices.Equal(firstContainer.Ports, secondContainer.Ports) {
 			return false
 		}
@@ -170,6 +172,7 @@ func copyContainerRequirements(containers []isolation.ContainerRequirement) []is
 	for index, container := range containers {
 		copied[index] = container
 		copied[index].Ports = slices.Clone(container.Ports)
+		copied[index].ExposedPorts = slices.Clone(container.ExposedPorts)
 		copied[index].WritablePaths = slices.Clone(container.WritablePaths)
 	}
 	return copied
