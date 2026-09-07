@@ -35,8 +35,59 @@ type RuntimeContainer struct {
 	Image         string         `json:"image"`
 	Ports         []int          `json:"ports"`
 	Expose        bool           `json:"expose"`
+	ExposedPorts  []int          `json:"exposed_ports,omitempty"`
 	RunAsUser     int64          `json:"run_as_user"`
 	WritablePaths []WritablePath `json:"writable_paths,omitempty"`
+}
+
+func (container *RuntimeContainer) UnmarshalJSON(data []byte) error {
+	type wireContainer RuntimeContainer
+	var decoded wireContainer
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	for name := range fields {
+		switch name {
+		case "name", "image", "ports", "expose", "exposed_ports", "run_as_user", "writable_paths":
+		default:
+			return fmt.Errorf("unknown container field %q", name)
+		}
+	}
+	if selected, exists := fields["exposed_ports"]; exists {
+		if _, legacy := fields["expose"]; legacy {
+			return fmt.Errorf("expose and exposed_ports cannot be combined")
+		}
+		if bytes.Equal(bytes.TrimSpace(selected), []byte("null")) {
+			return fmt.Errorf("exposed_ports must be an array")
+		}
+	}
+	*container = RuntimeContainer(decoded)
+	return nil
+}
+
+func (container RuntimeContainer) MarshalJSON() ([]byte, error) {
+	type wireContainer RuntimeContainer
+	var expose *bool
+	var exposedPorts *[]int
+	if container.ExposedPorts == nil {
+		expose = &container.Expose
+	} else {
+		if container.Expose {
+			return nil, fmt.Errorf("expose and exposed_ports cannot be combined")
+		}
+		exposedPorts = &container.ExposedPorts
+	}
+	return json.Marshal(struct {
+		wireContainer
+		Expose       *bool  `json:"expose,omitempty"`
+		ExposedPorts *[]int `json:"exposed_ports,omitempty"`
+	}{wireContainer: wireContainer(container), Expose: expose, ExposedPorts: exposedPorts})
 }
 
 type WritablePath struct {
@@ -283,10 +334,31 @@ func (request CreateWorkloadRequest) normalizedContainers() ([]provisioner.Workl
 			seenPorts[port] = struct{}{}
 			ports = append(ports, port)
 		}
-		hasExposed = hasExposed || container.Expose
-		containers = append(containers, provisioner.WorkloadContainer{
+		if !isolation.ValidPublicPorts(ports, container.Expose, container.ExposedPorts) {
+			return nil, fmt.Errorf("exposed_ports must be a unique subset of ports and cannot be combined with expose")
+		}
+		normalized := provisioner.WorkloadContainer{
 			Name: container.Name, Image: container.Image, Ports: ports, Expose: container.Expose,
-		})
+		}
+		if container.ExposedPorts != nil {
+			// Use declared port order and preserve the legacy representation for
+			// all-public/all-private requests, including idempotent replays.
+			selected := make(map[int]bool, len(container.ExposedPorts))
+			for _, port := range container.ExposedPorts {
+				selected[port] = true
+			}
+			for _, port := range ports {
+				if selected[port] {
+					normalized.ExposedPorts = append(normalized.ExposedPorts, port)
+				}
+			}
+			if len(normalized.ExposedPorts) == len(ports) {
+				normalized.Expose = true
+				normalized.ExposedPorts = nil
+			}
+		}
+		hasExposed = hasExposed || len(normalized.PublicPorts()) > 0
+		containers = append(containers, normalized)
 	}
 	if !hasExposed {
 		return nil, fmt.Errorf("at least one container must be exposed")
@@ -376,6 +448,7 @@ func (request CreateWorkloadRequest) toPolicyRequest(containers []provisioner.Wo
 			Name:          container.Name,
 			Ports:         append([]int(nil), container.Ports...),
 			Expose:        container.Expose,
+			ExposedPorts:  append([]int(nil), container.ExposedPorts...),
 			RunAsUser:     runAsUser,
 			WritablePaths: make([]isolation.WritablePath, len(writablePaths)),
 		}

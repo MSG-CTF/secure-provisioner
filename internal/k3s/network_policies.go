@@ -51,7 +51,7 @@ func buildNetworkPolicies(
 
 	exposedNames := make([]string, 0, len(containers))
 	for _, container := range containers {
-		if container.Expose {
+		if len(container.PublicPorts()) > 0 {
 			exposedNames = append(exposedNames, container.Name)
 		}
 	}
@@ -139,7 +139,7 @@ func buildPublicIngressNetworkPolicy(
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
 			Ingress: []networkingv1.NetworkPolicyIngressRule{{
 				From:  from,
-				Ports: tcpNetworkPolicyPorts(requirement.Ports),
+				Ports: tcpNetworkPolicyPorts(requirement.PublicPorts()),
 			}},
 		},
 	}

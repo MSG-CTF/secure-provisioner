@@ -365,7 +365,7 @@ func TestMaintainedMultiContainerRequestExampleDecodesAndValidates(t *testing.T)
 }
 
 func TestCanonicalMVPRequestFixturesDecodeAndValidate(t *testing.T) {
-	for _, name := range []string{"create-web-digest.json", "create-pwn-digest.json"} {
+	for _, name := range []string{"create-web-digest.json", "create-pwn-digest.json", "create-web-mixed-ports.json"} {
 		encoded, err := os.ReadFile("../../examples/requests/" + name)
 		if err != nil {
 			t.Fatal(err)

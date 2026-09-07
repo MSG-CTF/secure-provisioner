@@ -92,6 +92,9 @@ func copyBinding(binding Binding) Binding {
 			if requirement.Ports != nil {
 				copied.ContainerRequirements[index].Ports = append([]int{}, requirement.Ports...)
 			}
+			if requirement.ExposedPorts != nil {
+				copied.ContainerRequirements[index].ExposedPorts = append([]int{}, requirement.ExposedPorts...)
+			}
 			if requirement.WritablePaths != nil {
 				copied.ContainerRequirements[index].WritablePaths = append([]isolation.WritablePath{}, requirement.WritablePaths...)
 			}

@@ -56,7 +56,10 @@ func validateResolvedPolicy(
 			}
 			seenPorts[port] = struct{}{}
 		}
-		if requirement.Expose {
+		if !isolation.ValidPublicPorts(requirement.Ports, requirement.Expose, requirement.ExposedPorts) {
+			return nil, false
+		}
+		if len(requirement.PublicPorts()) > 0 {
 			exposedContainers++
 			if policy.WorkloadProfileRef == (isolation.ProfileRef{Name: "PWN", Version: "v1"}) && len(requirement.Ports) != 1 {
 				return nil, false
@@ -91,7 +94,7 @@ func validateResolvedPolicy(
 
 	for index, container := range containers {
 		requirement, found := approved[container.Name]
-		if !found || container.Expose != requirement.Expose || !samePorts(container.Ports, requirement.Ports) {
+		if !found || !samePorts(container.PublicPorts(), requirement.PublicPorts()) || !samePorts(container.Ports, requirement.Ports) {
 			return nil, false
 		}
 		containerWritableMiB := int64(0)

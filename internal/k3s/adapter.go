@@ -110,6 +110,7 @@ func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.Create
 		readyCtx,
 		cluster.Client,
 		applied.Deployments,
+		applied.Services,
 		resources.ExpectedSpecHashes,
 		a.config.PollInterval,
 	); err != nil {
@@ -1115,6 +1116,7 @@ func waitUntilReady(
 	ctx context.Context,
 	client kubernetes.Interface,
 	expectedDeployments []*appsv1.Deployment,
+	expectedServices []*corev1.Service,
 	expectedSpecHashes map[string]string,
 	interval time.Duration,
 ) error {
@@ -1146,18 +1148,27 @@ func waitUntilReady(
 				allReady = false
 				break
 			}
-			readyEndpoint, endpointErr := hasReadyEndpointForServicePods(
-				ctx,
-				client,
-				expectedDeployment.Namespace,
-				expectedDeployment.Name,
-				readyPods,
-			)
-			if endpointErr != nil {
-				return endpointErr
+			matchedService := false
+			for _, service := range expectedServices {
+				if service.Labels[containerNameLabel] != expectedDeployment.Name {
+					continue
+				}
+				matchedService = true
+				readyEndpoint, endpointErr := hasReadyEndpointForServicePods(
+					ctx, client, expectedDeployment.Namespace, service.Name, readyPods,
+				)
+				if endpointErr != nil {
+					return endpointErr
+				}
+				if !readyEndpoint {
+					allReady = false
+					break
+				}
 			}
-			if !readyEndpoint {
+			if !matchedService {
 				allReady = false
+			}
+			if !allReady {
 				break
 			}
 		}
