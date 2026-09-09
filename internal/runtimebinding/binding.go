@@ -36,13 +36,14 @@ type Binding struct {
 	IsolationProfile      string
 	WorkloadProfile       string
 	ContainerRequirements []isolation.ContainerRequirement
-	InternalConnections   []isolation.InternalConnection
-	OutboundMode          isolation.OutboundMode
-	ResourceLimits        isolation.ResourceLimits
-	State                 State
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
-	DeletedAt             *time.Time
+	// 기존 STANDARD@v1 Binding snapshot 보존 전용.
+	InternalConnections []isolation.InternalConnection `json:",omitempty"`
+	OutboundMode        isolation.OutboundMode
+	ResourceLimits      isolation.ResourceLimits
+	State               State
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+	DeletedAt           *time.Time
 }
 
 type Store interface {

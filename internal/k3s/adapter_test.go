@@ -107,6 +107,7 @@ func TestAdapterPreflightsOwnershipForEveryDesiredResourceBeforeAnyMutation(t *t
 	} {
 		t.Run(foreignResource, func(t *testing.T) {
 			command := validMultiCreateCommand("aws-dev")
+			command.Policy.IsolationRef.Version = "v1"
 			command.Policy.InternalConnections = []isolation.InternalConnection{{
 				SourceContainer: "web", DestinationContainer: "internal", Protocol: isolation.ProtocolTCP, Port: 9090,
 			}}
@@ -536,6 +537,7 @@ func TestAdapterAcceptsCanonicalNetworkPolicyReadbackAfterAPINormalizesEmptySlic
 
 func TestAdapterAppliesProtectionInExactOrderBeforeMultiContainerWorkload(t *testing.T) {
 	command := validMultiCreateCommand("aws-dev")
+	command.Policy.IsolationRef.Version = "v1"
 	command.Policy.InternalConnections = []isolation.InternalConnection{{
 		SourceContainer: "web", DestinationContainer: "internal", Protocol: isolation.ProtocolTCP, Port: 9090,
 	}}

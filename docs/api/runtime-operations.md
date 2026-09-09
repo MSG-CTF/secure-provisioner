@@ -6,7 +6,7 @@
 - OpenAPI: `docs/api/secure-provisioner.openapi.yaml`
 - 설계 문서:
   `docs/superpowers/specs/2026-07-28-async-runtime-operations-status-design.md`
-  및 `docs/superpowers/specs/2026-08-12-simple-isolation-profile-api-design.md`
+  및 `docs/superpowers/specs/2026-09-09-instance-network-policy-design.md`
 
 ## 공통 규칙
 
@@ -78,14 +78,6 @@ Content-Type: application/json
         "run_as_user": 10001
       }
     ],
-    "internal_connections": [
-      {
-        "source_container": "web",
-        "destination_container": "api",
-        "protocol": "TCP",
-        "port": 9000
-      }
-    ],
     "resource_limits": {
       "cpu_millicores": 500,
       "memory_mib": 512,
@@ -124,9 +116,9 @@ Ingress를 만들지 않는다. 전체 요청 예시는
 혼합 컨테이너의 내부 Service는 기존 컨테이너 이름을 유지하며 모든 `ports`를
 가진 ClusterIP다. 별도 공개 Service는 공개 포트만 포함하고, NODE_PORT에서는
 NodePort, INGRESS_PATH에서는 Ingress backend용 ClusterIP가 된다. 생성 결과의
-`endpoints[]`에는 8080만 포함한다. 다른 컨테이너에서 9000으로 접근하려면 기존과
-같이 `internal_connections`에 명시해야 한다. 같은 컨테이너 내부 loopback 통신을
-별도 컨테이너 간 격리로 취급하지 않는다.
+`endpoints[]`에는 8080만 포함한다. 동일 인스턴스의 다른 컨테이너는 내부 Service의
+9000에 별도 연결 선언 없이 접근할 수 있다. 다른 인스턴스에는 내부 허용 규칙이
+적용되지 않는다. 같은 컨테이너 내부 loopback 통신도 유지한다.
 
 기존 전체 공개/비공개 요청의 Service 이름과 저장 표현은 유지한다. 목록은 `ports`
 순서로 정규화하며, 전체 포트 선택은 기존 `expose:true`와 동일하게 처리한다.
@@ -139,12 +131,12 @@ PWN은 기존 보안 범위를 유지하여 공개 컨테이너의 `ports` 자�
 
 `isolation_profile`은 필수이며 정확히 `WEB` 또는 `PWN`이어야 한다. 누락하거나
 소문자·알 수 없는 값을 보내면 `400 INVALID_REQUEST`다. Provisioner는 이를 각각
-`STANDARD@v1 + WEB@v1` 또는 `STANDARD@v1 + PWN@v1`으로 내부 합성한다. caller는
+`STANDARD@v2 + WEB@v1` 또는 `STANDARD@v2 + PWN@v1`으로 내부 합성한다. caller는
 baseline 버전, RuntimeClass 또는 Kubernetes 보안 설정을 직접 선택할 수 없다.
 
 ### 기술 명세의 프로필 이름과 API 입력값
 
-`STANDARD@v1`은 WEB만의 별칭이 아니라 WEB/PWN 모두에 적용되는 공통 baseline이다.
+`STANDARD@v2`은 WEB만의 별칭이 아니라 WEB/PWN 모두에 적용되는 공통 baseline이다.
 API 입력은 `WEB` 또는 `PWN`이며 `standard-web`, `pwn-sandbox`, `strong-isolation`을
 자동 변환하는 alias는 없다. 해당 문자열을 `isolation_profile`에 보내면
 `400 INVALID_REQUEST`다. 생성 경로는 단수 `instance`가 아닌
@@ -162,17 +154,35 @@ gvisor와 NODE_PORT를 지원하는 적합한 target이 공급되는지는 Broke
 `TARGET_CAPABILITY_MISMATCH`로 거절하며, 이 최종 검사가 후보 공급 단계의
 적합성 보장을 대신한다는 뜻은 아니다.
 
-`writable_paths`와 `internal_connections`는 선택 사항이다. 연결을 생략하면 같은
-Namespace 안의 컨테이너 사이라도 자동 허용하지 않는다. 위 예제는
-`web -> api:9000/TCP`만 허용한다. 모든 워크로드의 public internet egress는
-Provisioner 내부의 고정 `NONE` 정책으로 차단하며, 외부 API에는 이를 완화하는
-필드를 제공하지 않는다. cluster DNS와 명시적 내부 연결만 egress allowlist에 추가한다.
+### 인스턴스 내부 통신과 정책 전환
+
+`writable_paths`는 선택 사항이다. `workload.internal_connections`는 삭제된 필드이며
+`null`, 빈 배열, 연결 목록 모두 `400 INVALID_REQUEST`로 거절한다. 같은 인스턴스의
+동일 소유권 Pod끼리는 양방향 내부 통신을 기본 허용한다. 내부 포트/프로토콜 연결
+목록은 필요하지 않으며, 외부 공개는 컨테이너의 `ports`/`exposed_ports`로 제한한다.
+
+Namespace ingress/egress 기본 차단에 소유권 label이 일치하는 동일 Namespace의
+Pod만 허용한다. 다른 팀·같은 팀 다른 인스턴스·다른 문제 인스턴스에는 적용되지
+않는다. public internet egress는 고정 `NONE`이며 DNS와 동일 인스턴스 내부 통신만
+허용한다. raw NetworkPolicy나 외부 egress DSL 입력은 현재 제공하지 않는다.
+노드/metadata 경계의 실제 강제는 #32의 별도 범위다.
+
+신규 승인 정책은 `STANDARD@v2`다. 기존 DB에 저장된 `STANDARD@v1` Operation은
+승인된 연결 목록으로 재시도하며, 실행 중인 인스턴스의 정책을 자동 확대하지 않는다.
+legacy 연결 필드는 기존 snapshot 복원에만 남기고 신규 Operation/Binding에는
+저장하지 않는다. 과거 설계 문서의 연결 목록 설명은 v1 이력이다.
+
+**전환:** Runtime과 CI/Registry/Scheduler caller의 배포를 조율한다. 신규 Runtime은
+구 caller가 보내는 삭제 필드를 명확히 거절한다. 기존 Operation은 `operation_id`로
+끝까지 조회하고 기존 인스턴스는 그대로 삭제할 수 있다. 새 정책으로 생성할 때는
+새 `request_id`와 `instance_id`를 사용한다. 삭제 필드가 없는 동일 요청의 재전송은
+정책 버전이 바뀌어도 기존 Operation을 반환한다. 저장된 요청의 team, target, image,
+profile 또는 자원 입력을 바꿔 같은 ID로 보내면 멱등 충돌로 거절한다.
 
 `resource_limits`는 문제 런타임 전체의 CPU·memory·ephemeral-storage 합산값이다.
 Scheduler가 문제별 수치를 결정하고 Provisioner는 양수 및 표현 가능 범위를 검증한 뒤
 Pod requests/limits, ResourceQuota, LimitRange에 그대로 강제한다. named resource
-profile과 비교하지 않는다. root UID, 잘못된 경로·크기·중첩 writable path, 존재하지
-않는 컨테이너나 포트를 가리키는 내부 연결은 거부한다.
+profile과 비교하지 않는다. root UID, 잘못된 경로·크기·중첩 writable path는 거부한다.
 
 Web은 Target의 기본 runtime을 사용하고 `INGRESS_PATH`와 `NODE_PORT` Target을 모두
 지원하며 endpoint protocol은 `HTTP`다. 일반 Pwn 문제는 다음 계약을 사용한다.
@@ -245,8 +255,8 @@ Retry-After: 2
 `created`는 `false`다.
 
 CREATE adapter가 성공한 뒤에만 Runtime Binding을 저장한다. Binding에는
-적용된 `STANDARD@v1` baseline과 `WEB@v1` 또는 `PWN@v1` workload profile identity,
-resolver가 승인한 컨테이너 UID/port/writable path, 내부 연결, 고정 outbound mode,
+적용된 `STANDARD@v2` baseline과 `WEB@v1` 또는 `PWN@v1` workload profile identity,
+resolver가 승인한 컨테이너 UID/port/writable path, 고정 outbound mode,
 Scheduler가 전달한 자원 합산값과 Kubernetes Namespace UID를 방어적으로
 복사해 기록한다. Namespace UID는 내부 소유권 확인에만 사용하며 API 응답에는 노출하지 않는다. raw 요청,
 이미지 credential, baseline 보안 플래그 또는 Kubernetes 설정은 기록하지 않는다.
@@ -557,7 +567,7 @@ Ready EndpointSlice가 있을 때만 `true`다. `NODE_PORT`에서는 NodePort Se
   않는다. `INGRESS_PATH`에서는 Service는 ClusterIP이며 공개용 Ingress 1개를 둔다.
   혼합 컨테이너는 위의 내부/공개 Service 분리를 적용한다. Service quota는 실제
   생성 개수에 맞추며 CREATE 완료 전에는 두 Service 모두의 EndpointSlice를 확인한다.
-- `STANDARD@v1`은 모든 문제에 적용한다. `WEB@v1`은 Target 기본 runtime을 사용하고,
+- `STANDARD@v2`은 모든 문제에 적용한다. `WEB@v1`은 Target 기본 runtime을 사용하고,
   `PWN@v1`은 운영자가 검증한 `gvisor` RuntimeClass와 `NODE_PORT`를 요구한다.
 - ServiceAccount와 Pod 양쪽에서 token 자동 마운트를 끄고, Pod·컨테이너에는 non-root
   UID, read-only root filesystem, privilege escalation·privileged 금지, 모든 Linux
