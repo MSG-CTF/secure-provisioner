@@ -2,6 +2,8 @@
 
 관련 이슈: #11, #40. `STANDARD@v2`가 구현된 Runtime 소스에서 실행한다.
 
+[2026-09-09 로컬 K3s 실행 결과](results/2026-09-09-local-k3s.md).
+
 ## 검증 범위
 
 `TestK3sLiveInstanceNetwork`는 실제 Adapter로 임시 인스턴스 3개와 Pod 6개를 생성한다.
