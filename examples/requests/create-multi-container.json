@@ -34,14 +34,6 @@
         "run_as_user": 10001
       }
     ],
-    "internal_connections": [
-      {
-        "source_container": "web",
-        "destination_container": "api",
-        "protocol": "TCP",
-        "port": 8080
-      }
-    ],
     "resource_limits": {
       "cpu_millicores": 200,
       "memory_mib": 256,

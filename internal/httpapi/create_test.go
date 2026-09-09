@@ -33,14 +33,11 @@ func TestCreateWorkloadRequestDecodesSimplifiedMultiContainerContract(t *testing
 	if command.PolicyRequest.WorkloadProfile != isolation.WorkloadProfileWeb ||
 		command.PolicyRequest.ResourceLimits != (isolation.ResourceLimits{CPUMillicores: 500, MemoryMiB: 512, EphemeralStorageMiB: 1024}) ||
 		command.Policy.OutboundMode != isolation.OutboundNone ||
-		command.Policy.IsolationRef != (isolation.ProfileRef{Name: "STANDARD", Version: "v1"}) ||
+		command.Policy.IsolationRef != (isolation.ProfileRef{Name: "STANDARD", Version: "v2"}) ||
 		command.Policy.WorkloadProfileRef != (isolation.ProfileRef{Name: "WEB", Version: "v1"}) {
 		t.Fatalf("policy request = %#v; unresolved policy = %#v", command.PolicyRequest, command.Policy)
 	}
-	if len(command.PolicyRequest.InternalConnections) != 1 ||
-		command.PolicyRequest.InternalConnections[0].DestinationContainer != "api" {
-		t.Fatalf("internal connections = %#v", command.PolicyRequest.InternalConnections)
-	}
+
 }
 
 func TestCreateWorkloadRequestMapsExactIsolationProfiles(t *testing.T) {
@@ -59,7 +56,6 @@ func TestCreateWorkloadRequestMapsExactIsolationProfiles(t *testing.T) {
 					Name: "challenge", Image: "pwn@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 					Ports: []int{31337}, Expose: true, RunAsUser: 10001,
 				}}
-				request.Workload.InternalConnections = nil
 			}
 			if err := request.Validate(); err != nil {
 				t.Fatal(err)
@@ -155,7 +151,6 @@ func TestCreateWorkloadRequestAcceptsNullableOptionalIsolationRequirements(t *te
 				{"name":"web","image":"web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","ports":[8080],"expose":true,"run_as_user":101,"writable_paths":null},
 				{"name":"api","image":"api@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","ports":[9000],"expose":null,"run_as_user":10001}
 			],
-			"internal_connections":null,
 			"resource_limits":{"cpu_millicores":200,"memory_mib":256,"ephemeral_storage_mib":256}
 		}
 	}`), &request); err != nil {
@@ -180,15 +175,7 @@ func TestCreateWorkloadRequestRejectsInvalidIsolationRequirements(t *testing.T) 
 		{name: "relative writable path", mutate: func(request *CreateWorkloadRequest) {
 			request.Workload.Containers[0].WritablePaths = []WritablePath{{Path: "tmp", SizeMiB: 8}}
 		}},
-		{name: "unknown source", mutate: func(request *CreateWorkloadRequest) {
-			request.Workload.InternalConnections[0].SourceContainer = "worker"
-		}},
-		{name: "unknown destination port", mutate: func(request *CreateWorkloadRequest) {
-			request.Workload.InternalConnections[0].Port = 7070
-		}},
-		{name: "unsupported protocol", mutate: func(request *CreateWorkloadRequest) {
-			request.Workload.InternalConnections[0].Protocol = "UDP"
-		}},
+
 		{name: "reserved writable path", mutate: func(request *CreateWorkloadRequest) {
 			request.Workload.Containers[0].WritablePaths = []WritablePath{{Path: "/proc/self", SizeMiB: 8}}
 		}},
@@ -200,7 +187,6 @@ func TestCreateWorkloadRequestRejectsInvalidIsolationRequirements(t *testing.T) 
 		}},
 		{name: "Pwn exposes multiple containers", mutate: func(request *CreateWorkloadRequest) {
 			request.IsolationProfile = "PWN"
-			request.Workload.InternalConnections = nil
 			request.Workload.Containers[0].WritablePaths = nil
 			request.Workload.Containers[0].Ports = []int{31337}
 			request.Workload.Containers[1].Expose = true
@@ -418,8 +404,7 @@ func validCreateWorkloadRequest() CreateWorkloadRequest {
 				{Name: "web", Image: "web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Ports: []int{8080}, Expose: true, RunAsUser: 101, WritablePaths: []WritablePath{{Path: "/tmp/web", SizeMiB: 64}}},
 				{Name: "api", Image: "api@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Ports: []int{9000}, RunAsUser: 10001},
 			},
-			InternalConnections: []InternalConnection{{SourceContainer: "web", DestinationContainer: "api", Protocol: "TCP", Port: 9000}},
-			ResourceLimits:      ResourceLimits{CPUMillicores: 500, MemoryMiB: 512, EphemeralStorageMiB: 1024},
+			ResourceLimits: ResourceLimits{CPUMillicores: 500, MemoryMiB: 512, EphemeralStorageMiB: 1024},
 		},
 	}
 }
@@ -436,7 +421,6 @@ func validCreateRequestJSON() string {
 				{"name":"web","image":"web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","ports":[8080],"expose":true,"run_as_user":101,"writable_paths":[{"path":"/tmp/web","size_mib":64}]},
 				{"name":"api","image":"api@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","ports":[9000],"expose":false,"run_as_user":10001}
 			],
-			"internal_connections":[{"source_container":"web","destination_container":"api","protocol":"TCP","port":9000}],
 			"resource_limits":{"cpu_millicores":500,"memory_mib":512,"ephemeral_storage_mib":1024}
 		}
 	}`

@@ -34,12 +34,12 @@ func (r *StaticResolver) Resolve(request Request) (ResolvedPolicy, error) {
 	if err := validateWorkloadProfile(workloadProfileRef, request.Containers); err != nil {
 		return ResolvedPolicy{}, err
 	}
-	if err := validateInternalConnections(request.Containers, request.InternalConnections); err != nil {
-		return ResolvedPolicy{}, err
+	if request.InternalConnections != nil {
+		return ResolvedPolicy{}, rejected("internal connections are no longer accepted")
 	}
 
 	return ResolvedPolicy{
-		IsolationRef:        ProfileRef{Name: "STANDARD", Version: "v1"},
+		IsolationRef:        ProfileRef{Name: "STANDARD", Version: "v2"},
 		WorkloadProfileRef:  workloadProfileRef,
 		RuntimeClassName:    runtimeClassName,
 		EndpointProtocol:    endpointProtocol,
@@ -53,10 +53,9 @@ func (r *StaticResolver) Resolve(request Request) (ResolvedPolicy, error) {
 			DropAllCapabilities:          true,
 			SeccompRuntimeDefault:        true,
 		},
-		Containers:          cloneContainerRequirements(request.Containers),
-		InternalConnections: append([]InternalConnection(nil), request.InternalConnections...),
-		OutboundMode:        OutboundNone,
-		ResourceLimits:      request.ResourceLimits,
+		Containers:     cloneContainerRequirements(request.Containers),
+		OutboundMode:   OutboundNone,
+		ResourceLimits: request.ResourceLimits,
 	}, nil
 }
 
@@ -160,33 +159,6 @@ func validateWorkloadProfile(ref ProfileRef, containers []ContainerRequirement) 
 	}
 	if exposedContainers == 0 {
 		return rejected("Web workload must expose at least one container")
-	}
-	return nil
-}
-
-func validateInternalConnections(containers []ContainerRequirement, connections []InternalConnection) error {
-	portsByContainer := make(map[string]map[int]struct{}, len(containers))
-	for _, container := range containers {
-		ports := make(map[int]struct{}, len(container.Ports))
-		for _, port := range container.Ports {
-			ports[port] = struct{}{}
-		}
-		portsByContainer[container.Name] = ports
-	}
-	for _, connection := range connections {
-		if connection.Protocol != ProtocolTCP {
-			return rejected("internal connection protocol is not allowed")
-		}
-		if _, exists := portsByContainer[connection.SourceContainer]; !exists {
-			return rejected("internal connection source container does not exist")
-		}
-		destinationPorts, exists := portsByContainer[connection.DestinationContainer]
-		if !exists {
-			return rejected("internal connection destination container does not exist")
-		}
-		if _, exists := destinationPorts[connection.Port]; !exists {
-			return rejected("internal connection destination port does not exist")
-		}
 	}
 	return nil
 }
