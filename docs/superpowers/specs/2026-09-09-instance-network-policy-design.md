@@ -18,7 +18,7 @@ DNS와 `ports`/`exposed_ports` 기반 공개 ingress는 유지한다. 외부 egr
 
 기존 DB Operation/Binding의 `STANDARD@v1` 및 연결 목록은 보존한다. 재시도는 저장된 v1 정책으로 실행하고 새 허용 규칙을 추가하지 않는다. 이를 위해 내부 snapshot 모델의 legacy 연결 필드와 v1 builder만 유지하며 신규 snapshot에서는 빈 필드를 생략한다. 새 resolver는 legacy 연결 입력을 받지 않는다. 알 수 없는 정책 버전 및 v2와 legacy 연결 필드의 혼합은 거부한다.
 
-기존 실행 인스턴스의 정책을 일괄 갱신하지 않는다. 운영자는 기존 Operation을 끝까지 조회하고, 새 계약 요청에는 새 request_id/instance_id를 사용한다. 배포 순서는 새 Runtime 준비, caller의 삭제 필드 제거, 신규 인스턴스 생성과 검증이다. 구 caller는 명확히 거절되므로 소비자 전환을 조율해야 한다.
+기존 실행 인스턴스의 정책을 일괄 갱신하지 않는다. 동일 요청은 resolver 실행 전에 기존 Operation을 찾아 원래 결과를 반환한다. 외부 입력이 바뀌면 충돌로 거절하고, 새 인스턴스 생성에만 새 request_id/instance_id를 사용한다. 배포 순서는 새 Runtime 준비, caller의 삭제 필드 제거, 신규 인스턴스 생성과 검증이다. 구 caller는 명확히 거절되므로 소비자 전환을 조율해야 한다.
 
 ## 검증
 

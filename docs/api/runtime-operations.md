@@ -175,8 +175,9 @@ legacy 연결 필드는 기존 snapshot 복원에만 남기고 신규 Operation/
 **전환:** Runtime과 CI/Registry/Scheduler caller의 배포를 조율한다. 신규 Runtime은
 구 caller가 보내는 삭제 필드를 명확히 거절한다. 기존 Operation은 `operation_id`로
 끝까지 조회하고 기존 인스턴스는 그대로 삭제할 수 있다. 새 정책으로 생성할 때는
-새 `request_id`와 `instance_id`를 사용한다. 구 요청을 새 정책으로 다시 접수하면
-멱등 충돌이 발생할 수 있으므로 같은 ID를 재사용하지 않는다.
+새 `request_id`와 `instance_id`를 사용한다. 삭제 필드가 없는 동일 요청의 재전송은
+정책 버전이 바뀌어도 기존 Operation을 반환한다. 저장된 요청의 team, target, image,
+profile 또는 자원 입력을 바꿔 같은 ID로 보내면 멱등 충돌로 거절한다.
 
 `resource_limits`는 문제 런타임 전체의 CPU·memory·ephemeral-storage 합산값이다.
 Scheduler가 문제별 수치를 결정하고 Provisioner는 양수 및 표현 가능 범위를 검증한 뒤
@@ -255,7 +256,7 @@ Retry-After: 2
 
 CREATE adapter가 성공한 뒤에만 Runtime Binding을 저장한다. Binding에는
 적용된 `STANDARD@v2` baseline과 `WEB@v1` 또는 `PWN@v1` workload profile identity,
-resolver가 승인한 컨테이너 UID/port/writable path, 내부 연결, 고정 outbound mode,
+resolver가 승인한 컨테이너 UID/port/writable path, 고정 outbound mode,
 Scheduler가 전달한 자원 합산값과 Kubernetes Namespace UID를 방어적으로
 복사해 기록한다. Namespace UID는 내부 소유권 확인에만 사용하며 API 응답에는 노출하지 않는다. raw 요청,
 이미지 credential, baseline 보안 플래그 또는 Kubernetes 설정은 기록하지 않는다.
