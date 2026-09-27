@@ -25,6 +25,7 @@ func TestLoadConfigRequiresRegistryAndUsesSafeDefaults(t *testing.T) {
 	config, err := loadConfig(environment(map[string]string{
 		"PROVISIONER_CLUSTER_REGISTRY": "clusters.json",
 		"PROVISIONER_SERVICE_TOKEN":    validCurrentServiceToken,
+		"PROVISIONER_DATABASE_URL":     "postgres://provisioner:password@localhost/provisioner",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -34,7 +35,8 @@ func TestLoadConfigRequiresRegistryAndUsesSafeDefaults(t *testing.T) {
 		config.ReadyTimeout != 2*time.Minute || config.PollInterval != time.Second ||
 		config.RollbackTimeout != 30*time.Second || config.DeleteTimeout != time.Minute ||
 		config.WorkerShutdownTimeout != 40*time.Second ||
-		config.ServiceAuth.CurrentToken != validCurrentServiceToken || config.ServiceAuth.PreviousToken != "" {
+		config.ServiceAuth.CurrentToken != validCurrentServiceToken || config.ServiceAuth.PreviousToken != "" ||
+		config.RuntimeStore.Mode != "postgres" {
 		t.Fatalf("config = %#v", config)
 	}
 }
@@ -44,6 +46,7 @@ func TestLoadConfigParsesRuntimeSettingsAndRejectsInvalidValues(t *testing.T) {
 		"PROVISIONER_ADDR":                    "0.0.0.0:9090",
 		"PROVISIONER_CLUSTER_REGISTRY":        "clusters.json",
 		"PROVISIONER_SERVICE_TOKEN":           validCurrentServiceToken,
+		"PROVISIONER_STORE_MODE":              "memory",
 		"PROVISIONER_WORKERS":                 "2",
 		"PROVISIONER_MAX_ATTEMPTS":            "5",
 		"PROVISIONER_READY_TIMEOUT":           "90s",
@@ -75,6 +78,7 @@ func TestLoadConfigParsesRuntimeSettingsAndRejectsInvalidValues(t *testing.T) {
 			values := map[string]string{
 				"PROVISIONER_CLUSTER_REGISTRY": "clusters.json",
 				"PROVISIONER_SERVICE_TOKEN":    validCurrentServiceToken,
+				"PROVISIONER_STORE_MODE":       "memory",
 				key:                            "0",
 			}
 			if _, err := loadConfig(environment(values)); err == nil {
@@ -86,6 +90,7 @@ func TestLoadConfigParsesRuntimeSettingsAndRejectsInvalidValues(t *testing.T) {
 	if _, err := loadConfig(environment(map[string]string{
 		"PROVISIONER_CLUSTER_REGISTRY":        "clusters.json",
 		"PROVISIONER_SERVICE_TOKEN":           validCurrentServiceToken,
+		"PROVISIONER_STORE_MODE":              "memory",
 		"PROVISIONER_ROLLBACK_TIMEOUT":        "30s",
 		"PROVISIONER_WORKER_SHUTDOWN_TIMEOUT": "20s",
 	})); err == nil {
@@ -102,6 +107,7 @@ func TestNewApplicationQueuesCreateThroughRuntimeService(t *testing.T) {
 	config, err := loadConfig(environment(map[string]string{
 		"PROVISIONER_CLUSTER_REGISTRY": registryPath,
 		"PROVISIONER_SERVICE_TOKEN":    validCurrentServiceToken,
+		"PROVISIONER_STORE_MODE":       "memory",
 	}))
 	if err != nil {
 		t.Fatal(err)

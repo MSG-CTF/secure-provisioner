@@ -242,6 +242,30 @@ func TestAdapterRejectsPreexistingMatchingNamespaceBeforeAnyMutation(t *testing.
 	assertNoMutations(t, client.Actions())
 }
 
+func TestAdapterDoesNotBroadenExistingV1NamespaceWithV2Request(t *testing.T) {
+	oldCommand := validCreateCommand("aws-dev")
+	oldCommand.Policy.IsolationRef.Version = "v1"
+	oldResources, err := BuildResourceSet(validCluster("aws-dev"), oldCommand)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preexisting := oldResources.Namespace.DeepCopy()
+	preexisting.UID = "existing-v1-namespace-uid"
+	client := readyClient(t, oldCommand)
+	if err := client.Tracker().Add(preexisting); err != nil {
+		t.Fatal(err)
+	}
+	client.ClearActions()
+	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
+
+	newCommand := validCreateCommand("aws-dev")
+	newCommand.RequestID = "new-request-for-existing-instance"
+	if _, err := adapter.CreateWorkload(context.Background(), newCommand); runtimeErrorCode(t, err) != "RESOURCE_OWNERSHIP_CONFLICT" {
+		t.Fatalf("v2 CREATE of existing v1 instance error = %v, want RESOURCE_OWNERSHIP_CONFLICT", err)
+	}
+	assertNoMutations(t, client.Actions())
+}
+
 func TestAdapterRejectsProtectionReadbackHashTamperingBeforeDeployment(t *testing.T) {
 	for _, resource := range []string{"serviceaccounts", "resourcequotas", "limitranges", "networkpolicies"} {
 		t.Run(resource, func(t *testing.T) {

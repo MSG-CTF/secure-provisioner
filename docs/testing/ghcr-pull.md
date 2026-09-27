@@ -16,7 +16,8 @@
 
 DevSecOps/운영 담당자와 개발 전용 target_id, 접근 방법, 배포 Runtime commit,
 GHCR 테스트 package/revision/digest, 해당 image의 architecture를 확인한다.
-정상 CI smoke에는 아래 값이 필요하다.
+아래 표는 AWS DevSecOps CI smoke 경로에만 필요한 값이다. GCP target의
+직접 Runtime 검증에는 AWS OIDC/S3/SSM 설정이 필요하지 않다.
 
 | 위치 | 설정 |
 |---|---|
@@ -27,6 +28,10 @@ GHCR 테스트 package/revision/digest, 해당 image의 architecture를 확인�
 토큰은 노드에서만 읽는다. kubeconfig·인증값·registry 인증 원문은 결과물에 넣지 않는다.
 CI의 OIDC → S3 staging → SSM → loopback Runtime API 경로와 Scheduler 운영 요청
 경로는 서로 다른 검증이다. 한쪽 성공으로 다른 쪽까지 완료 처리하지 않는다.
+GCP 우선 검증은 `docs/operations/gcp-k3s-recovery.md`의 노드 복구와 디스크
+여유 확인 뒤, GCP target registry와 digest 고정 fixture로 직접 create/poll/delete
+경로를 실행한다. GHCR 인증 실패는 활성 target의 credential을 바꾸지 않고 별도
+개발 target에서 시험한다. 현재 GCP 노드 장애와 SSH 접속 실패로 이 실측은 미실행이다.
 
 K3s의 node-wide registry 인증 또는 사전 구성된 ServiceAccount/Pod imagePullSecret 중
 운영 방식과 회전 주체를 확인한다. Runtime API는 pull credential 입력을 받지 않는다.

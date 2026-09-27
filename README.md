@@ -37,15 +37,14 @@ raw Kubernetes/보안 설정과 제거된 과거 profile 참조 필드는 API �
 |---|---:|---|
 | `PROVISIONER_CLUSTER_REGISTRY` | 없음 | target Registry JSON 파일 경로 |
 | `PROVISIONER_ADDR` | `127.0.0.1:8080` | HTTP 수신 주소 |
-| `PROVISIONER_WORKER_CONCURRENCY` | `4` | Operation Worker 수 |
-| `PROVISIONER_MAX_ATTEMPTS` | `3` | Operation 최대 시도 횟수 |
+| `PROVISIONER_MAX_ATTEMPTS` | `4` | Operation 최대 시도 횟수 |
 | `PROVISIONER_READY_TIMEOUT` | `2m` | 생성 후 Ready 확인 제한 시간 |
 | `PROVISIONER_POLL_INTERVAL` | `1s` | K3s 상태 확인 간격 |
 | `PROVISIONER_ROLLBACK_TIMEOUT` | `30s` | 생성 실패 rollback 제한 시간 |
 | `PROVISIONER_DELETE_TIMEOUT` | `1m` | Namespace 삭제 완료 제한 시간 |
 | `PROVISIONER_WORKER_SHUTDOWN_TIMEOUT` | rollback + `10s` | 종료 시 Worker cleanup 대기 시간 |
-| `PROVISIONER_STORE_MODE` | `memory` | `memory` 또는 운영용 `postgres` |
-| `PROVISIONER_DATABASE_URL` | 없음 | PostgreSQL DSN; postgres 모드에서 필수 |
+| `PROVISIONER_STORE_MODE` | `postgres` | 운영 기본 저장소; 로컬 테스트에서만 `memory`를 명시적으로 선택 |
+| `PROVISIONER_DATABASE_URL` | 없음 | PostgreSQL DSN; 기본 설정 및 postgres 모드에서 필수 |
 | `PROVISIONER_WORKERS` | `10` | lease worker 수 |
 | `PROVISIONER_LEASE_DURATION` | `3m` | 작업 lease 유효 시간 |
 | `PROVISIONER_LEASE_RENEW_INTERVAL` | `1m` | lease 갱신 간격; lease 시간보다 짧아야 함 |
@@ -60,6 +59,12 @@ raw Kubernetes/보안 설정과 제거된 과거 profile 참조 필드는 API �
 token은 서로 달라야 하며 값 변수와 대응하는 파일 변수를 동시에 설정하면 시작을
 거부합니다. 모든 내부 API 요청은 HTTPS 환경에서 `Authorization: Bearer <token>`을
 한 번만 보내야 합니다.
+
+Operation과 Runtime Binding을 재시작 후에도 보존하도록 저장소 기본값은 PostgreSQL입니다.
+`PROVISIONER_DATABASE_URL`이 없으면 서버는 시작하지 않습니다. 로컬 단위 테스트에서만
+`PROVISIONER_STORE_MODE=memory`를 명시적으로 설정할 수 있습니다. 기존 memory 저장소의
+진행 중 Operation과 Binding은 PostgreSQL로 자동 이전되지 않으므로, 전환 전에 잔여
+Namespace와 진행 중 작업을 확인하고 정리해야 합니다.
 
 Registry 예시:
 
@@ -140,6 +145,7 @@ PowerShell 실행 예시:
 ```powershell
 $env:PROVISIONER_CLUSTER_REGISTRY = "C:\secure\clusters.json"
 $env:PROVISIONER_SERVICE_TOKEN = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" # 로컬 테스트 전용
+$env:PROVISIONER_STORE_MODE = "memory" # 로컬 실습 전용; 운영은 PostgreSQL 기본값 사용
 go run ./cmd/provisioner
 ```
 
@@ -199,10 +205,25 @@ CREATE→조회→TTL DELETE 상호작용 검증은 `./scripts/test-mvp-interact
 실행합니다. 실제 AWS/GCP K3s 테스트는 `K3S_INTEGRATION_*` 환경 변수를 명시적으로
 설정한 경우에만 별도로 실행합니다.
 
-기본 `memory` 모드는 로컬 개발용입니다. `postgres` 모드는 Operation lease,
+명시적 `memory` 모드는 로컬 개발용입니다. 기본 `postgres` 모드는 Operation lease,
 CREATE checkpoint, Runtime Binding 및 DELETE 접수를 영속화하며 DELETE 접수와
 Binding 상태 전환을 한 트랜잭션으로 처리합니다. 실제 비공개 문제 이미지의 Registry
 인증·pull 통합 검증은 별도 단계입니다.
+
+PR에서는 `.github/workflows/verify-provisioner.yml`이 PostgreSQL 통합 테스트, Go
+검사와 빌드, 배포 스크립트 회귀 검사를 수행합니다. `dev` 푸시는 배포하지 않으며
+`.github/workflows/deploy-provisioner.yml`의 수동 실행만 배포를 시도합니다. 현재
+배포 워크플로는 고정된 AWS SSH 대상을 사용하므로 GCP target 검증이나 GCP
+Provisioner 배포의 증거로 사용하지 않습니다.
+
+GCP 개발 K3s의 현재 장애와 백업 후 복구·실측 순서는
+[`docs/operations/gcp-k3s-recovery.md`](docs/operations/gcp-k3s-recovery.md)에
+기록했습니다. PWN용 gVisor/PID bootstrap은
+`scripts/configure-gcp-k3s-pwn.sh`가 담당합니다. 이 스크립트는 K3s 서비스와
+Secret API가 정상인 경우에만 설치를 시작하며, 기존 K3s 기본 설정과 containerd
+템플릿을 보존한 채 drop-in을 추가합니다.
+gVisor smoke는 전용 임시 Namespace를 사용하며 기존 Pod나 RuntimeClass를 덮어쓰지
+않습니다. PID 상한의 실제 강제 여부는 GCP 노드 복구 후 별도로 시험해야 합니다.
 
 MVP profile ref는 `name`/`version`뿐이며 Catalog assignment authority가 아닙니다.
 이미지는 반드시 lowercase SHA-256 digest로 고정해 전달합니다. Registry의

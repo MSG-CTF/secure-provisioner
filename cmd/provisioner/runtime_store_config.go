@@ -21,7 +21,7 @@ func loadRuntimeStoreConfig(getenv func(string) string) (runtimeStoreConfig, err
 		return runtimeStoreConfig{}, errors.New("environment reader is required")
 	}
 	config := runtimeStoreConfig{
-		Mode:        strings.ToLower(valueOrDefault(getenv("PROVISIONER_STORE_MODE"), "memory")),
+		Mode:        strings.ToLower(valueOrDefault(getenv("PROVISIONER_STORE_MODE"), "postgres")),
 		DatabaseURL: strings.TrimSpace(getenv("PROVISIONER_DATABASE_URL")),
 		Workers:     10, PollInterval: 200 * time.Millisecond, LeaseDuration: 3 * time.Minute,
 		RenewInterval: time.Minute, RetryBaseDelay: time.Second,
