@@ -38,8 +38,11 @@ export K3S_NETWORK_REQUIRED=true
 go test ./internal/k3s -run '^TestK3sLiveInstanceNetwork$' -count=1 -timeout 16m -v
 ```
 
-일반 단위 테스트 실행에서는 registry 입력이 없으면 skip한다. 전용 CI job은
-`K3S_NETWORK_REQUIRED=true`를 설정해야 환경 누락을 실패로 처리한다. kubeconfig는
+일반 단위 테스트와 `.github/workflows/verify-provisioner.yml`에서는 registry 입력이
+없으면 이 실환경 테스트를 skip한다. 해당 PR CI는 PostgreSQL 통합 테스트, Go vet,
+Linux 빌드를 검증하며 **실제 K3s 네트워크 검증을 통과시킨 결과는 아니다**. 전용
+실환경 실행에서는 `K3S_NETWORK_REQUIRED=true`를 설정해 환경 누락을 실패로
+처리해야 한다. kubeconfig는
 registry의 `kubeconfig_path`를 사용하고 기본 kubectl context를 변경하지 않는다.
 테스트 runner에서 registry의 `public_gateway`와 공개 포트에 도달할 수 있어야 한다.
 
