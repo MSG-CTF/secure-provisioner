@@ -52,11 +52,6 @@ paths:
                         ports: [9000]
                         expose: false
                         run_as_user: 10001
-                    internal_connections:
-                      - source_container: web
-                        destination_container: api
-                        protocol: TCP
-                        port: 9000
                     resource_limits:
                       cpu_millicores: 500
                       memory_mib: 512
@@ -124,7 +119,6 @@ paths:
                         ports: [9000]
                         expose: null
                         run_as_user: 10001
-                    internal_connections: null
                     resource_limits:
                       cpu_millicores: 200
                       memory_mib: 256
@@ -679,13 +673,6 @@ components:
             $ref: "#/components/schemas/RuntimeContainer"
         resource_limits:
           $ref: "#/components/schemas/ResourceLimits"
-        internal_connections:
-          type:
-            - array
-            - "null"
-          default: []
-          items:
-            $ref: "#/components/schemas/InternalConnection"
     RuntimeContainer:
       type: object
       additionalProperties: false
@@ -745,7 +732,7 @@ components:
       enum:
         - WEB
         - PWN
-      description: Scheduler가 선택하는 현행 문제 분류. WEB은 STANDARD@v1 + WEB@v1, PWN은 STANDARD@v1 + PWN@v1으로 해석한다. standard-web, pwn-sandbox, strong-isolation 등의 alias나 세 번째 실행 프로필은 지원하지 않는다.
+      description: Scheduler가 선택하는 현행 문제 분류. WEB은 STANDARD@v2 + WEB@v1, PWN은 STANDARD@v2 + PWN@v1으로 해석한다. standard-web, pwn-sandbox, strong-isolation 등의 alias나 세 번째 실행 프로필은 지원하지 않는다.
     WritablePath:
       type: object
       additionalProperties: false
@@ -762,31 +749,6 @@ components:
           type: integer
           format: int64
           minimum: 1
-    InternalConnection:
-      type: object
-      additionalProperties: false
-      required:
-        - source_container
-        - destination_container
-        - protocol
-        - port
-      properties:
-        source_container:
-          type: string
-          pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
-          maxLength: 63
-        destination_container:
-          type: string
-          pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
-          maxLength: 63
-        protocol:
-          type: string
-          enum:
-            - TCP
-        port:
-          type: integer
-          minimum: 1
-          maximum: 65535
     CreateInstanceRequest:
       type: object
       additionalProperties: false

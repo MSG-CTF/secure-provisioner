@@ -23,11 +23,10 @@ type RuntimeTarget struct {
 }
 
 type RuntimeWorkload struct {
-	Image               string               `json:"image,omitempty"`
-	ContainerPort       int                  `json:"container_port,omitempty"`
-	Containers          []RuntimeContainer   `json:"containers,omitempty"`
-	InternalConnections []InternalConnection `json:"internal_connections,omitempty"`
-	ResourceLimits      ResourceLimits       `json:"resource_limits"`
+	Image          string             `json:"image,omitempty"`
+	ContainerPort  int                `json:"container_port,omitempty"`
+	Containers     []RuntimeContainer `json:"containers,omitempty"`
+	ResourceLimits ResourceLimits     `json:"resource_limits"`
 }
 
 type RuntimeContainer struct {
@@ -93,13 +92,6 @@ func (container RuntimeContainer) MarshalJSON() ([]byte, error) {
 type WritablePath struct {
 	Path    string `json:"path"`
 	SizeMiB int    `json:"size_mib"`
-}
-
-type InternalConnection struct {
-	SourceContainer      string `json:"source_container"`
-	DestinationContainer string `json:"destination_container"`
-	Protocol             string `json:"protocol"`
-	Port                 int    `json:"port"`
 }
 
 type ResourceLimits struct {
@@ -387,8 +379,7 @@ func validImmutableImageReference(value string) bool {
 }
 
 func (request CreateWorkloadRequest) validateIsolation(containers []provisioner.WorkloadContainer) error {
-	portsByContainer := make(map[string]map[int]struct{}, len(containers))
-	for index, container := range containers {
+	for index := range containers {
 		runAsUser := int64(10001)
 		var writablePaths []WritablePath
 		if len(request.Workload.Containers) > 0 {
@@ -410,26 +401,6 @@ func (request CreateWorkloadRequest) validateIsolation(containers []provisioner.
 				}
 			}
 			seenPaths = append(seenPaths, writable.Path)
-		}
-		ports := make(map[int]struct{}, len(container.Ports))
-		for _, port := range container.Ports {
-			ports[port] = struct{}{}
-		}
-		portsByContainer[container.Name] = ports
-	}
-	for _, connection := range request.Workload.InternalConnections {
-		if connection.Protocol != string(isolation.ProtocolTCP) {
-			return fmt.Errorf("internal connection protocol must be TCP")
-		}
-		if _, exists := portsByContainer[connection.SourceContainer]; !exists {
-			return fmt.Errorf("internal connection source container does not exist")
-		}
-		destinationPorts, exists := portsByContainer[connection.DestinationContainer]
-		if !exists {
-			return fmt.Errorf("internal connection destination container does not exist")
-		}
-		if _, exists := destinationPorts[connection.Port]; !exists {
-			return fmt.Errorf("internal connection destination port does not exist")
 		}
 	}
 	return nil
@@ -456,19 +427,9 @@ func (request CreateWorkloadRequest) toPolicyRequest(containers []provisioner.Wo
 			requirements[index].WritablePaths[pathIndex] = isolation.WritablePath{Path: writable.Path, SizeMiB: writable.SizeMiB}
 		}
 	}
-	connections := make([]isolation.InternalConnection, len(request.Workload.InternalConnections))
-	for index, connection := range request.Workload.InternalConnections {
-		connections[index] = isolation.InternalConnection{
-			SourceContainer:      connection.SourceContainer,
-			DestinationContainer: connection.DestinationContainer,
-			Protocol:             isolation.Protocol(connection.Protocol),
-			Port:                 connection.Port,
-		}
-	}
 	return isolation.Request{
-		WorkloadProfile:     isolation.WorkloadProfile(request.IsolationProfile),
-		Containers:          requirements,
-		InternalConnections: connections,
+		WorkloadProfile: isolation.WorkloadProfile(request.IsolationProfile),
+		Containers:      requirements,
 		ResourceLimits: isolation.ResourceLimits{
 			CPUMillicores:       request.Workload.ResourceLimits.CPUMillicores,
 			MemoryMiB:           request.Workload.ResourceLimits.MemoryMiB,
@@ -479,12 +440,11 @@ func (request CreateWorkloadRequest) toPolicyRequest(containers []provisioner.Wo
 
 func unresolvedPolicy(request isolation.Request) isolation.ResolvedPolicy {
 	return isolation.ResolvedPolicy{
-		IsolationRef:        isolation.ProfileRef{Name: "STANDARD", Version: "v1"},
-		WorkloadProfileRef:  isolation.ProfileRef{Name: string(request.WorkloadProfile), Version: "v1"},
-		Containers:          request.Containers,
-		InternalConnections: request.InternalConnections,
-		OutboundMode:        isolation.OutboundNone,
-		ResourceLimits:      request.ResourceLimits,
+		IsolationRef:       isolation.ProfileRef{Name: "STANDARD", Version: "v2"},
+		WorkloadProfileRef: isolation.ProfileRef{Name: string(request.WorkloadProfile), Version: "v1"},
+		Containers:         request.Containers,
+		OutboundMode:       isolation.OutboundNone,
+		ResourceLimits:     request.ResourceLimits,
 	}
 }
 

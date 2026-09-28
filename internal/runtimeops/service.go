@@ -111,11 +111,50 @@ func NewService(
 func (s *Service) EnqueueCreate(command provisioner.CreateWorkloadCommand) (operations.Operation, bool, error) {
 	s.enqueueMu.Lock()
 	defer s.enqueueMu.Unlock()
+	if existing, found, err := s.existingCreateOperation(command); found || err != nil {
+		return existing, false, err
+	}
+	requested := command
 	command, err := s.resolveCreateCommand(command)
 	if err != nil {
 		return operations.Operation{}, false, err
 	}
-	return s.operations.EnqueueCreate(command, s.maxAttempts)
+	operation, created, err := s.operations.EnqueueCreate(command, s.maxAttempts)
+	if errors.Is(err, operations.ErrIdempotencyConflict) {
+		// 다른 버전의 replica가 조회와 INSERT 사이에 같은 요청을 접수할 수 있다.
+		if existing, found, lookupErr := s.existingCreateOperation(requested); found || lookupErr != nil {
+			return existing, false, lookupErr
+		}
+	}
+	return operation, created, err
+}
+
+func (s *Service) existingCreateOperation(command provisioner.CreateWorkloadCommand) (operations.Operation, bool, error) {
+	existing, err := s.operations.GetByRequestID(command.RequestID)
+	if errors.Is(err, operations.ErrOperationNotFound) {
+		return operations.Operation{}, false, nil
+	}
+	if err != nil {
+		return operations.Operation{}, false, err
+	}
+	if existing.Type != operations.OperationTypeCreate || existing.CreateCommand == nil {
+		return operations.Operation{}, false, operations.ErrIdempotencyConflict
+	}
+	// 승인 정책은 서버 소유 값이다. 재전송 입력을 저장된 승인 정책과 비교한다.
+	command.Policy = existing.CreateCommand.Policy
+	command.ResourceLimits = provisioner.ResourceLimits{
+		CPUMillicores:       command.PolicyRequest.ResourceLimits.CPUMillicores,
+		MemoryMiB:           command.PolicyRequest.ResourceLimits.MemoryMiB,
+		EphemeralStorageMiB: command.PolicyRequest.ResourceLimits.EphemeralStorageMiB,
+	}
+	candidate, err := operations.NewCreateOperation(existing.ID, command, s.maxAttempts)
+	if err != nil {
+		return operations.Operation{}, false, err
+	}
+	if !existing.SameRequest(candidate) {
+		return operations.Operation{}, false, operations.ErrIdempotencyConflict
+	}
+	return existing, true, nil
 }
 
 func (s *Service) CreateWorkload(ctx context.Context, command provisioner.CreateWorkloadCommand) (provisioner.CreateWorkloadResult, error) {

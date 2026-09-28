@@ -134,7 +134,7 @@ func TestCreateOperationStoresAppliedIsolationPolicy(t *testing.T) {
 	}
 	wantPolicy := validResolvedPolicyFor(command.PolicyRequest)
 	if binding.NamespaceUID != create.result.NamespaceUID ||
-		binding.IsolationProfile != "STANDARD@v1" || binding.WorkloadProfile != "WEB@v1" ||
+		binding.IsolationProfile != "STANDARD@v2" || binding.WorkloadProfile != "WEB@v1" ||
 		!reflect.DeepEqual(binding.ContainerRequirements, wantPolicy.Containers) ||
 		!reflect.DeepEqual(binding.InternalConnections, wantPolicy.InternalConnections) ||
 		binding.OutboundMode != isolation.OutboundNone || binding.ResourceLimits != wantPolicy.ResourceLimits {
@@ -252,7 +252,7 @@ func TestServiceProcessesCreateAndRecordsBinding(t *testing.T) {
 		binding.Namespace != "ctf-018f3f1e21b87a91a30b63b3400fd001" ||
 		binding.NamespaceUID != create.result.NamespaceUID ||
 		binding.RuntimeWorkloadID != create.result.RuntimeWorkloadID ||
-		binding.IsolationProfile != "STANDARD@v1" || binding.WorkloadProfile != "WEB@v1" ||
+		binding.IsolationProfile != "STANDARD@v2" || binding.WorkloadProfile != "WEB@v1" ||
 		!reflect.DeepEqual(binding.ContainerRequirements, validResolvedPolicy().Containers) ||
 		binding.OutboundMode != isolation.OutboundNone {
 		t.Fatalf("binding = %#v", binding)
@@ -866,9 +866,7 @@ func createPolicyCommand() provisioner.CreateWorkloadCommand {
 			{Name: "web", Ports: []int{8000}, Expose: true, RunAsUser: 101, WritablePaths: []isolation.WritablePath{{Path: "/tmp", SizeMiB: 64}}},
 			{Name: "api", Ports: []int{8080}, RunAsUser: 10001},
 		},
-		InternalConnections: []isolation.InternalConnection{{
-			SourceContainer: "web", DestinationContainer: "api", Protocol: isolation.ProtocolTCP, Port: 8080,
-		}},
+
 		ResourceLimits: isolation.ResourceLimits{
 			CPUMillicores: 200, MemoryMiB: 256, EphemeralStorageMiB: 256,
 		},

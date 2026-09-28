@@ -28,6 +28,9 @@ func buildNetworkPolicies(
 	policy isolation.ResolvedPolicy,
 	policyContainers map[string]isolation.ContainerRequirement,
 ) ([]*networkingv1.NetworkPolicy, bool) {
+	if policy.IsolationRef.Version == "v2" && policy.InternalConnections != nil {
+		return nil, false
+	}
 	connections, valid := approvedInternalConnections(policy.InternalConnections, policyContainers)
 	if !valid {
 		return nil, false
@@ -66,6 +69,12 @@ func buildNetworkPolicies(
 		))
 	}
 
+	if policy.IsolationRef.Version == "v2" {
+		policies = append(policies, buildInstanceInternalNetworkPolicy(namespace, ownerLabels))
+		return policies, true
+	}
+
+	// 기존 v1 snapshot은 저장된 연결 그래프만 재생한다.
 	connectionsBySource := make(map[string][]approvedInternalConnection)
 	connectionsByDestination := make(map[string][]approvedInternalConnection)
 	for _, connection := range connections {
@@ -89,6 +98,26 @@ func buildNetworkPolicies(
 		))
 	}
 	return policies, true
+}
+
+func buildInstanceInternalNetworkPolicy(namespace string, ownerLabels map[string]string) *networkingv1.NetworkPolicy {
+	return &networkingv1.NetworkPolicy{
+		ObjectMeta: networkPolicyMetadata("allow-instance-internal", namespace, ownerLabels),
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{MatchLabels: copyLabels(ownerLabels)},
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress},
+			Ingress: []networkingv1.NetworkPolicyIngressRule{{
+				From: []networkingv1.NetworkPolicyPeer{{
+					PodSelector: &metav1.LabelSelector{MatchLabels: copyLabels(ownerLabels)},
+				}},
+			}},
+			Egress: []networkingv1.NetworkPolicyEgressRule{{
+				To: []networkingv1.NetworkPolicyPeer{{
+					PodSelector: &metav1.LabelSelector{MatchLabels: copyLabels(ownerLabels)},
+				}},
+			}},
+		},
+	}
 }
 
 func buildDNSNetworkPolicy(

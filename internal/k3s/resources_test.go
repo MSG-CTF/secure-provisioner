@@ -77,7 +77,7 @@ func TestBuildResourceSetCreatesOwnedKubernetesResources(t *testing.T) {
 		}
 	}
 
-	const wantSpecHash = "4a1a64eed73e02401973e53a58ecbaca0f5d658eefab7f743973c2d8929630a2"
+	const wantSpecHash = "4a7b8c6f454af6ccb4c7a689ff701363d8b3f17de1523052ca74c679cc209e19"
 	if resources.ExpectedSpecHash != wantSpecHash {
 		t.Fatalf("ExpectedSpecHash = %q, want stable SHA-256", resources.ExpectedSpecHash)
 	}

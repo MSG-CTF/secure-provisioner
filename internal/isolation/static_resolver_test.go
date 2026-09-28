@@ -15,7 +15,7 @@ func TestStaticResolverComposesWebOnStandardWithFixedOutbound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.IsolationRef != (isolation.ProfileRef{Name: "STANDARD", Version: "v1"}) ||
+	if got.IsolationRef != (isolation.ProfileRef{Name: "STANDARD", Version: "v2"}) ||
 		got.WorkloadProfileRef != (isolation.ProfileRef{Name: "WEB", Version: "v1"}) ||
 		got.RuntimeClassName != "" ||
 		got.EndpointProtocol != isolation.EndpointProtocolHTTP ||
@@ -49,7 +49,7 @@ func TestStaticResolverComposesPwnOnStandard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.IsolationRef != (isolation.ProfileRef{Name: "STANDARD", Version: "v1"}) ||
+	if got.IsolationRef != (isolation.ProfileRef{Name: "STANDARD", Version: "v2"}) ||
 		got.WorkloadProfileRef != (isolation.ProfileRef{Name: "PWN", Version: "v1"}) ||
 		got.RuntimeClassName != "gvisor" ||
 		got.EndpointProtocol != isolation.EndpointProtocolTCP ||
@@ -172,27 +172,14 @@ func TestStaticResolverRejectsDuplicateOrNestedWritablePaths(t *testing.T) {
 	}
 }
 
-func TestStaticResolverRejectsInternalConnectionWithUnknownContainerOrPort(t *testing.T) {
-	for _, testCase := range []struct {
-		name   string
-		mutate func(*isolation.Request)
-	}{
-		{name: "source", mutate: func(request *isolation.Request) {
-			request.InternalConnections[0].SourceContainer = "worker"
-		}},
-		{name: "destination", mutate: func(request *isolation.Request) {
-			request.InternalConnections[0].DestinationContainer = "worker"
-		}},
-		{name: "destination port", mutate: func(request *isolation.Request) {
-			request.Containers[1].Ports = []int{8080}
-			request.InternalConnections[0].Port = 9090
-		}},
+func TestStaticResolverRejectsRetiredInternalConnections(t *testing.T) {
+	for _, connections := range [][]isolation.InternalConnection{
+		{},
+		{{SourceContainer: "web", DestinationContainer: "api", Protocol: isolation.ProtocolTCP, Port: 8080}},
 	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			request := validRequest()
-			testCase.mutate(&request)
-			assertRejected(t, request)
-		})
+		request := validRequest()
+		request.InternalConnections = connections
+		assertRejected(t, request)
 	}
 }
 
@@ -218,9 +205,7 @@ func validRequest() isolation.Request {
 			{Name: "web", Ports: []int{8080}, Expose: true, RunAsUser: 101, WritablePaths: []isolation.WritablePath{{Path: "/tmp", SizeMiB: 64}}},
 			{Name: "api", Ports: []int{8080}, RunAsUser: 10001},
 		},
-		InternalConnections: []isolation.InternalConnection{{
-			SourceContainer: "web", DestinationContainer: "api", Protocol: isolation.ProtocolTCP, Port: 8080,
-		}},
+
 		ResourceLimits: isolation.ResourceLimits{CPUMillicores: 350, MemoryMiB: 384, EphemeralStorageMiB: 700},
 	}
 }

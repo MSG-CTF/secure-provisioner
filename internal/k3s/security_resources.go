@@ -24,7 +24,7 @@ func validateResolvedPolicy(
 	containers []provisioner.WorkloadContainer,
 ) (map[string]isolation.ContainerRequirement, bool) {
 	policy := command.Policy
-	if policy.IsolationRef != (isolation.ProfileRef{Name: "STANDARD", Version: "v1"}) ||
+	if !supportedIsolationRef(policy.IsolationRef) ||
 		!canonicalExecutionPolicy(policy) ||
 		policy.OutboundMode != isolation.OutboundNone ||
 		policy.Baseline != requiredSecurityBaseline() ||
@@ -111,6 +111,10 @@ func validateResolvedPolicy(
 		}
 	}
 	return approved, true
+}
+
+func supportedIsolationRef(ref isolation.ProfileRef) bool {
+	return ref.Name == "STANDARD" && (ref.Version == "v1" || ref.Version == "v2")
 }
 
 func canonicalExecutionPolicy(policy isolation.ResolvedPolicy) bool {

@@ -57,7 +57,7 @@ func TestBuildNetworkPoliciesAllowsOnlyConfiguredDNSOverTCPAndUDP53(t *testing.T
 }
 
 func TestBuildNetworkPoliciesAllowsPlatformIngressOnlyToExposedDeclaredPorts(t *testing.T) {
-	command := validMultiCreateCommand("aws-dev")
+	command := legacyNetworkCommand("aws-dev")
 	command.Containers[0].Ports = []int{8443, 8080}
 	command.Policy = resolvedPolicyForCommand(command, "SMALL_MULTI")
 	resources := buildNetworkPolicyResources(t, command)
@@ -90,7 +90,7 @@ func TestBuildNetworkPoliciesAllowsPlatformIngressOnlyToExposedDeclaredPorts(t *
 }
 
 func TestBuildNetworkPoliciesAllowsExternalNodePortIngressOnlyToExposedDeclaredPorts(t *testing.T) {
-	command := validMultiCreateCommand("aws-dev")
+	command := legacyNetworkCommand("aws-dev")
 	command.Containers[0].Ports = []int{8443, 8080}
 	command.Policy = resolvedPolicyForCommand(command, "SMALL_MULTI")
 	cluster := networkPolicyCluster(command.TargetID)
@@ -116,7 +116,8 @@ func TestBuildNetworkPoliciesAllowsExternalNodePortIngressOnlyToExposedDeclaredP
 }
 
 func TestBuildNetworkPoliciesAllowsInternalConnectionInBothAdditiveDirections(t *testing.T) {
-	command := validMultiCreateCommand("aws-dev")
+	command := legacyNetworkCommand("aws-dev")
+	command.Policy.IsolationRef.Version = "v1"
 	command.Policy.InternalConnections = []isolation.InternalConnection{{
 		SourceContainer: "web", DestinationContainer: "internal", Protocol: isolation.ProtocolTCP, Port: 9090,
 	}}
@@ -145,7 +146,8 @@ func TestBuildNetworkPoliciesAllowsInternalConnectionInBothAdditiveDirections(t 
 }
 
 func TestBuildNetworkPoliciesForOutboundNoneHasNoPublicOrCIDREgress(t *testing.T) {
-	command := validMultiCreateCommand("aws-dev")
+	command := legacyNetworkCommand("aws-dev")
+	command.Policy.IsolationRef.Version = "v1"
 	command.Policy.InternalConnections = []isolation.InternalConnection{{
 		SourceContainer: "web", DestinationContainer: "internal", Protocol: isolation.ProtocolTCP, Port: 9090,
 	}}
@@ -191,13 +193,14 @@ func TestBroadEgressAssertionRejectsEmptyAllowAllRule(t *testing.T) {
 }
 
 func TestBuildNetworkPoliciesPreservesInternalPeerPortPairsAcrossGroupedRules(t *testing.T) {
-	command := validMultiCreateCommand("aws-dev")
+	command := legacyNetworkCommand("aws-dev")
 	command.Containers = []provisioner.WorkloadContainer{
 		{Name: "web", Image: "registry.example.invalid/web:latest", Ports: []int{8000}, Expose: true},
 		{Name: "api", Image: "registry.example.invalid/api:latest", Ports: []int{8080, 9090}},
 		{Name: "worker", Image: "registry.example.invalid/worker:latest", Ports: []int{7070}},
 	}
 	command.Policy = resolvedPolicyForCommand(command, "SMALL_MULTI")
+	command.Policy.IsolationRef.Version = "v1"
 	command.Policy.InternalConnections = []isolation.InternalConnection{
 		{SourceContainer: "web", DestinationContainer: "api", Protocol: isolation.ProtocolTCP, Port: 8080},
 		{SourceContainer: "web", DestinationContainer: "worker", Protocol: isolation.ProtocolTCP, Port: 7070},
@@ -219,7 +222,7 @@ func TestBuildNetworkPoliciesPreservesInternalPeerPortPairsAcrossGroupedRules(t 
 }
 
 func TestBuildNetworkPoliciesScopesPodSelectorsToOwningTeamAndInstance(t *testing.T) {
-	first := validMultiCreateCommand("aws-dev")
+	first := legacyNetworkCommand("aws-dev")
 	first.Policy.InternalConnections = []isolation.InternalConnection{{
 		SourceContainer: "web", DestinationContainer: "internal", Protocol: isolation.ProtocolTCP, Port: 9090,
 	}}
@@ -273,7 +276,8 @@ func TestBuildNetworkPoliciesRejectsMalformedInternalConnections(t *testing.T) {
 	}
 	for name, connections := range tests {
 		t.Run(name, func(t *testing.T) {
-			command := validMultiCreateCommand("aws-dev")
+			command := legacyNetworkCommand("aws-dev")
+			command.Policy.IsolationRef.Version = "v1"
 			command.Policy.InternalConnections = connections
 			_, err := BuildResourceSet(networkPolicyCluster("aws-dev"), command)
 			if runtimeErrorCode(t, err) != "INVALID_CREATE_COMMAND" {
@@ -293,7 +297,7 @@ func TestBuildNetworkPoliciesRejectsUntrustedTargetSelectors(t *testing.T) {
 }
 
 func TestBuildNetworkPoliciesUsesDeterministicNamesAndOrder(t *testing.T) {
-	first := validMultiCreateCommand("aws-dev")
+	first := legacyNetworkCommand("aws-dev")
 	first.Containers[1].Expose = true
 	first.Policy.Containers[1].Expose = true
 	first.Policy.InternalConnections = []isolation.InternalConnection{
@@ -521,4 +525,10 @@ func reversePolicyContainers(containers []isolation.ContainerRequirement) []isol
 		reversed[left], reversed[right] = reversed[right], reversed[left]
 	}
 	return reversed
+}
+
+func legacyNetworkCommand(target string) provisioner.CreateWorkloadCommand {
+	command := validMultiCreateCommand(target)
+	command.Policy.IsolationRef.Version = "v1"
+	return command
 }
