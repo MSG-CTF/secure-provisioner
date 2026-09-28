@@ -1,9 +1,6 @@
-name: Deploy Provisioner MVP
+name: Deploy Provisioner MVP (legacy AWS, manual)
 
 on:
-  push:
-    branches:
-      - dev
   workflow_dispatch:
 
 permissions:
@@ -15,6 +12,7 @@ concurrency:
 
 jobs:
   test-build-deploy:
+    if: github.ref == 'refs/heads/dev'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:

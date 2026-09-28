@@ -199,6 +199,11 @@ CREATE→조회→TTL DELETE 상호작용 검증은 `./scripts/test-mvp-interact
 실행합니다. 실제 AWS/GCP K3s 테스트는 `K3S_INTEGRATION_*` 환경 변수를 명시적으로
 설정한 경우에만 별도로 실행합니다.
 
+`.github/workflows/verify-provisioner.yml`은 `dev` 대상 PR과 `dev` 푸시에서
+PostgreSQL 연동 Go 테스트, vet, Linux 빌드를 실행합니다. 실제 K3s 네트워크 시험은
+별도의 개발 Target과 `K3S_NETWORK_*` 입력이 있어야 하며 이 CI 결과에 포함되지
+않습니다. 기존 AWS 서버를 가리키는 배포 워크플로는 수동 실행만 허용합니다.
+
 기본 `memory` 모드는 로컬 개발용입니다. `postgres` 모드는 Operation lease,
 CREATE checkpoint, Runtime Binding 및 DELETE 접수를 영속화하며 DELETE 접수와
 Binding 상태 전환을 한 트랜잭션으로 처리합니다. 실제 비공개 문제 이미지의 Registry
