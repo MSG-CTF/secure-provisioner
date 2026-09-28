@@ -577,7 +577,9 @@ Ready EndpointSlice가 있을 때만 `true`다. `NODE_PORT`에서는 NodePort Se
   합계와 namespaced object 수를 제한한다. `NODE_PORT`에서는 공개 컨테이너의 승인된
   포트 수만큼 `services.nodeports` quota를 허용하고 그 이상은 차단한다.
 - `default-deny-all`을 먼저 두고 DNS egress, 공개 컨테이너로 향하는 ingress,
-  명시적으로 승인된 컨테이너 간 TCP 연결만 NetworkPolicy allowlist로 연다. 현재
+  동일 인스턴스 소유권 label이 일치하는 Pod 간 모든 포트·프로토콜 통신만
+  NetworkPolicy allowlist로 연다. 명시적인 컨테이너 간 TCP 연결 목록은 저장된
+  `STANDARD@v1` snapshot을 재시도할 때만 적용한다. 현재
   `INGRESS_PATH`의 공개 ingress source는 설정된 ingress controller로 제한한다.
   `NODE_PORT`는 외부 source를 허용하되 승인된 공개 포트 목록만 연다. 현재
   outbound는 내부적으로 항상 `NONE`이므로 그 밖의 외부 egress는 열지 않는다.
