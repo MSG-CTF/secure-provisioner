@@ -21,6 +21,12 @@ Provisioner는 `PROVISIONER_IMAGE_POLICIES`가 가리키는 파일을 시작할 
 
 `create_enabled`는 위 digest의 기본 생성 smoke가 통과했다는 운영 게이트다. 팀 간·호스트·metadata 경계의 실제 격리 검증이나 문제 풀이, reset, 데이터 보존까지 승인했다는 뜻이 아니다. 현재 두 GCP Target의 capability `true` 선언도 격리 실측을 대신하지 않는다.
 
+## 2026-10-03 테스트 VM 적용 기록
+
+GCP `provisioner-test-1`에 코드 커밋 `24c5d0490807a1c781a900d518b4394519235188`의 Linux 바이너리(SHA-256 `d812ab3a35a6b1aa116f526fac9898b3395ea9e5114c3f59e8140da36f9bfa92`)와 정책 파일을 함께 배포했다. `/etc/secure-provisioner/web-image-policies.json`은 `root:provisioner` 0640, 환경 파일은 `root:root` 0600이며 서비스와 Nginx가 active다. 배포 스크립트의 인증된 Runtime API 헬스 확인을 통과했다.
+
+미등록 Grade digest와 차단된 Logout digest를 실제 생성 API에 보내 모두 `422 IMAGE_POLICY_REJECTED`를 확인했다. Grade, Daily Point, Open House는 요청에서 `writable_paths`를 빼고 기존 `expose: true`를 보냈다. 세 문제 모두 새 정책으로 생성 성공, Pod Ready·재시작 0회, HTTP 200, 삭제 성공을 확인했다. Grade는 `/login` 5번째, Daily Point는 `/` 첫 번째, Open House는 `/` 8번째 시도에 응답했다. 이 결과는 정책이 새 생성에 적용된 증거이며 팀 간 격리·문제 풀이·reset 검증은 아니다.
+
 ## 공통 격리와 비밀값
 
 이미지별 정책은 공통 `STANDARD@v2`/`WEB` 격리의 예외 권한을 만들지 않는다. Root UID, writable root filesystem, 추가 Linux capability, 외부 egress 허용은 이 파일에서 설정할 수 없다. 격리 프로필은 이미지와 요청이 일치하는지 확인하는 조건이다. Runtime은 root filesystem을 읽기 전용으로 두고, 허용된 디렉터리만 크기가 제한된 `emptyDir`로 마운트한다. `emptyDir` 데이터는 Pod 제거 시 사라지므로 SQLite와 PostgreSQL 문제의 reset 및 재시작 동작을 별도로 확인해야 한다.
