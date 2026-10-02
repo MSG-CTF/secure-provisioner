@@ -39,6 +39,8 @@ raw Kubernetes/보안 설정과 제거된 과거 profile 참조 필드는 API �
 | 환경 변수 | 기본값 | 의미 |
 |---|---:|---|
 | `PROVISIONER_CLUSTER_REGISTRY` | 없음 | target Registry JSON 파일 경로 |
+| `PROVISIONER_IMAGE_POLICIES` | 없음 | 검토된 이미지 digest별 정책 JSON 파일 경로 |
+| `PROVISIONER_FLAG_FILE` | 없음 | 이미지 정책에서 `requires_flag`로 승인한 이미지의 FLAG를 담은 VM 전용 파일 경로 |
 | `PROVISIONER_ADDR` | `127.0.0.1:8080` | HTTP 수신 주소 |
 | `PROVISIONER_WORKER_CONCURRENCY` | `4` | Operation Worker 수 |
 | `PROVISIONER_MAX_ATTEMPTS` | `3` | Operation 최대 시도 횟수 |

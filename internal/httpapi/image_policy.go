@@ -27,10 +27,33 @@ type ImagePolicy struct {
 	IsolationProfile string         `json:"isolation_profile"`
 	Status           string         `json:"status"`
 	BlockedReason    string         `json:"blocked_reason,omitempty"`
+	RequiresFlag     bool           `json:"requires_flag,omitempty"`
 	RunAsUser        int64          `json:"run_as_user"`
 	Ports            []int          `json:"ports"`
 	ExposedPorts     []int          `json:"exposed_ports"`
 	WritablePaths    []WritablePath `json:"writable_paths"`
+}
+
+func (catalog *ImagePolicyCatalog) RequiredFlagImages() []string {
+	if catalog == nil {
+		return nil
+	}
+	images := make([]string, 0)
+	for image, policy := range catalog.images {
+		if policy.RequiresFlag && policy.Status == "create_enabled" {
+			images = append(images, image)
+		}
+	}
+	slices.Sort(images)
+	return images
+}
+
+func (catalog *ImagePolicyCatalog) AllowsFlag(image string) bool {
+	if catalog == nil {
+		return false
+	}
+	policy, found := catalog.images[image]
+	return found && policy.RequiresFlag
 }
 
 type imagePolicyFile struct {

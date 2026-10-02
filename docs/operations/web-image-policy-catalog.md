@@ -15,7 +15,7 @@ Provisioner는 `PROVISIONER_IMAGE_POLICIES`가 가리키는 파일을 시작할 
 | Grade Tampering | `create_enabled` | `web` UID 10001, `/tmp` 32 MiB + `/app/instance` 32 MiB, 외부 8080. 해당 digest의 실제 K3s 생성·HTTP 응답·삭제 확인 |
 | Daily Point | `create_enabled` | `web` UID 10001, `/tmp` 64 MiB + `/app/data` 64 MiB, 외부 8080. 해당 digest의 실제 K3s 생성·HTTP 응답·삭제 확인 |
 | Open House | `create_enabled` | `web` UID 10001, `/tmp` 64 MiB, 외부 8080. 해당 digest의 실제 K3s 생성·HTTP 응답·삭제 확인 |
-| Logout Please | `blocked` | UID 10001, `/tmp` 64 MiB, 8080만 공개하고 9090은 내부 health. 운영 `FLAG` Secret 주입 계약이 없어 생성 차단 |
+| Logout Please | `blocked` | UID 10001, `/tmp` 64 MiB, 8080만 공개하고 9090은 내부 health. `requires_flag: true`로 표시했으며 운영 FLAG 값·Backend hash 일치와 실제 생성 검증 전까지 차단 |
 | Notebook | `blocked` | `web`은 `/tmp` 64 MiB·8080 공개. `db`는 `/tmp` 64 MiB, `/var/lib/postgresql/data` 256 MiB, `/var/run/postgresql` 16 MiB·5432 비공개. DB 이미지의 `PGDATA` 수정과 새 생성 검증 전까지 차단 |
 | AFTERIMAGE | 미발행·차단 | 일곱 이미지 저장소를 관리 대상으로 등록했으며 digest 정책은 아직 없다. indexer의 UID 전환·spool 소유권, 인스턴스별 Secret, bot 자원을 해결하기 전에는 생성하지 않는다 |
 
@@ -31,7 +31,29 @@ GCP `provisioner-test-1`에 코드 커밋 `24c5d0490807a1c781a900d518b4394519235
 
 이미지별 정책은 공통 `STANDARD@v2`/`WEB` 격리의 예외 권한을 만들지 않는다. Root UID, writable root filesystem, 추가 Linux capability, 외부 egress 허용은 이 파일에서 설정할 수 없다. 격리 프로필은 이미지와 요청이 일치하는지 확인하는 조건이다. Runtime은 root filesystem을 읽기 전용으로 두고, 허용된 디렉터리만 크기가 제한된 `emptyDir`로 마운트한다. `emptyDir` 데이터는 Pod 제거 시 사라지므로 SQLite와 PostgreSQL 문제의 reset 및 재시작 동작을 별도로 확인해야 한다.
 
-`FLAG`, `INTERNAL_TOKEN` 등의 값은 이 파일에 넣지 않는다. Logout Please와 AFTERIMAGE를 활성화하려면 인스턴스별 Secret 생성·주입 경로를 별도로 구현하고 검증해야 한다. Notebook의 `PGDATA`는 비밀이 아니므로 DB 이미지에 설정할 수 있지만, 현재 digest의 Pod에 수동 적용한 시험만 통과했다.
+`FLAG`, `INTERNAL_TOKEN` 등의 값은 이 파일에 넣지 않는다. FLAG 주입 경로는 아래처럼 별도 VM 파일을 사용한다. 현재 catalog는 `FLAG`만 처리하며 AFTERIMAGE의 다른 비밀값은 아직 지원하지 않는다. Notebook의 `PGDATA`는 비밀이 아니므로 DB 이미지에 설정할 수 있지만, 현재 digest의 Pod에 수동 적용한 시험만 통과했다.
+
+## FLAG를 VM에서 관리하고 주입하기
+
+운영자가 승인한 이미지의 정책에 `"requires_flag": true`를 넣고, **같은 정확한 digest**의 값을 VM의 `/etc/secure-provisioner/flags.json`에 둔다. 이 파일은 Git·배포 산출물·CI 변수에 넣지 않는다. 아래 값은 형식 예시일 뿐 실제 FLAG가 아니다.
+
+```json
+{
+  "schema_version": 1,
+  "flags": [
+    {
+      "image": "ghcr.io/example/challenge/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "flag": "CTF{replace_with_operator_value}"
+    }
+  ]
+}
+```
+
+파일과 부모 디렉터리는 운영자만 수정할 수 있게 두고, 파일은 `root:provisioner` 소유의 `0640`으로 제한한다. 심볼릭 링크와 다른 사용자가 읽거나 수정할 수 있는 파일은 거절한다. 서비스 환경 파일에는 **값이 아니라 파일 경로만** `PROVISIONER_FLAG_FILE=/etc/secure-provisioner/flags.json`으로 추가한다. `PROVISIONER_IMAGE_POLICIES`도 함께 필요하다. 새 파일로 바꾼 뒤 Provisioner를 재시작한다. 활성화된 이미지에 필요한 FLAG가 빠졌거나, 파일의 digest가 `requires_flag` 정책과 일치하지 않으면 서비스가 시작되지 않는다. FLAG 값은 로그나 에러에 출력하지 않는다.
+
+생성 요청 형식은 바뀌지 않는다. Provisioner worker가 VM 파일에서 해당 digest의 FLAG를 찾아 새 인스턴스 namespace에 변경 불가 Kubernetes Secret `challenge-env`를 만들고, 해당 컨테이너의 `FLAG` 환경변수에 `secretKeyRef`로 연결한다. Secret이 필요한 namespace에만 Secret quota 1개를 허용하고, Secret 생성이나 읽기 확인이 실패하면 Deployment를 만들지 않고 namespace를 롤백한다. namespace 삭제와 함께 Secret도 사라진다. Scheduler와 operation DB에는 FLAG 값이 들어가지 않는다.
+
+이 방식은 **문제당 고정 FLAG**를 각 팀의 별도 인스턴스에 주입한다. Backend의 `flag_hash`가 주입 값과 일치하는지 문제를 풀어 검증해야 한다. FLAG를 바꾸면 새 인스턴스에는 새 값이 적용되지만 기존 인스턴스의 Secret은 변경되지 않는다. Backend hash 전환 시 기존 인스턴스를 정리하거나 채점 전환 계획을 함께 세워야 한다. 이미지 소스에 FLAG가 하드코딩되거나 기본값으로 들어 있으면 그 이미지를 수정·재발행해야 값이 비밀로 유지된다. K3s Secret 저장 시 암호화와 운영자 RBAC도 실제 운영 전에 확인한다.
 
 ## 새 이미지 발행 시
 

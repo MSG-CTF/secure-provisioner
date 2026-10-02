@@ -27,6 +27,7 @@ type AdapterConfig struct {
 	ReadyTimeout    time.Duration
 	PollInterval    time.Duration
 	RollbackTimeout time.Duration
+	Flags           *FlagCatalog
 }
 
 type Adapter struct {
@@ -75,6 +76,9 @@ func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.Create
 	resources, err := BuildResourceSet(cluster, command)
 	if err != nil {
 		return provisioner.CreateWorkloadResult{}, err
+	}
+	if err := addFlagResources(&resources, command, a.config.Flags); err != nil {
+		return provisioner.CreateWorkloadResult{}, newRuntimeError("CONFIG_INVALID", false, nil)
 	}
 	if cluster.Client == nil {
 		return provisioner.CreateWorkloadResult{}, newRuntimeError("K3S_UNAVAILABLE", true, nil)
@@ -203,6 +207,11 @@ func applyResourceSet(ctx context.Context, client kubernetes.Interface, resource
 	if err := applyProtectionResourceSet(ctx, client, resources); err != nil {
 		return appliedResourceSet{}, err
 	}
+	if resources.FlagSecret != nil {
+		if err := applyFlagSecret(ctx, client, resources.FlagSecret); err != nil {
+			return appliedResourceSet{}, err
+		}
+	}
 	applied := appliedResourceSet{
 		Deployments: make([]*appsv1.Deployment, 0, len(resources.Deployments)),
 		Services:    make([]*corev1.Service, 0, len(resources.Services)),
@@ -244,6 +253,13 @@ func preflightResourceSet(ctx context.Context, client kubernetes.Interface, reso
 		return client.CoreV1().ResourceQuotas(resources.ResourceQuota.Namespace).Get(ctx, resources.ResourceQuota.Name, metav1.GetOptions{})
 	}, resources.ResourceQuota); err != nil {
 		return err
+	}
+	if resources.FlagSecret != nil {
+		if err := preflightOwnedResource(func() (metav1.Object, error) {
+			return client.CoreV1().Secrets(resources.FlagSecret.Namespace).Get(ctx, resources.FlagSecret.Name, metav1.GetOptions{})
+		}, resources.FlagSecret); err != nil {
+			return err
+		}
 	}
 	if err := preflightOwnedResource(func() (metav1.Object, error) {
 		return client.CoreV1().LimitRanges(resources.LimitRange.Namespace).Get(ctx, resources.LimitRange.Name, metav1.GetOptions{})

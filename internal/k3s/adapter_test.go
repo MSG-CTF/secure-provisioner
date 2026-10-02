@@ -51,6 +51,60 @@ func TestAdapterDoesNotCreateDeploymentWhenProtectionApplyFails(t *testing.T) {
 	}
 }
 
+func TestAdapterRollsBackWhenFlagSecretCannotBeCreated(t *testing.T) {
+	command := validCreateCommand("aws-dev")
+	client := readyClient(t, command)
+	client.PrependReactor("create", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("Secret create failed")
+	})
+	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
+	catalog, err := ParseFlagCatalog([]byte(testFlagJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter.config.Flags = catalog
+	_, err = adapter.CreateWorkload(context.Background(), command)
+	if runtimeErrorCode(t, err) != "RESOURCE_APPLY_FAILED" {
+		t.Fatalf("error = %v", err)
+	}
+	assertCreateActionCount(t, client, "deployments", 0)
+	assertDeleteActionCount(t, client, "namespaces", 1)
+}
+
+func TestApplyResourceSetCreatesFlagSecretBeforeDeployment(t *testing.T) {
+	command := validCreateCommand("aws-dev")
+	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := ParseFlagCatalog([]byte(testFlagJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := addFlagResources(&resources, command, catalog); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareProtectionHashes(resources); err != nil {
+		t.Fatal(err)
+	}
+	client := fake.NewSimpleClientset(resources.Namespace.DeepCopy())
+	if _, err := applyResourceSet(context.Background(), client, resources); err != nil {
+		t.Fatal(err)
+	}
+	secretPosition, deploymentPosition := -1, -1
+	for index, action := range client.Actions() {
+		if action.GetVerb() == "create" && action.GetResource().Resource == "secrets" {
+			secretPosition = index
+		}
+		if action.GetVerb() == "create" && action.GetResource().Resource == "deployments" {
+			deploymentPosition = index
+		}
+	}
+	if secretPosition < 0 || deploymentPosition <= secretPosition {
+		t.Fatalf("Secret and Deployment create positions = %d, %d", secretPosition, deploymentPosition)
+	}
+}
+
 func TestAdapterClassifiesPermanentAndTransientKubernetesApplyErrors(t *testing.T) {
 	tests := []struct {
 		name      string

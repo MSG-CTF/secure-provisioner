@@ -30,6 +30,19 @@ const testImagePolicies = `{
   }]
 }`
 
+func TestImagePolicyListsOnlyEnabledFlagRequirements(t *testing.T) {
+	withFlag := strings.Replace(testImagePolicies, `"status": "create_enabled",`, `"status": "create_enabled", "requires_flag": true,`, 1)
+	catalog, err := ParseImagePolicies([]byte(withFlag))
+	if err != nil {
+		t.Fatal(err)
+	}
+	images := catalog.RequiredFlagImages()
+	if len(images) != 1 || images[0] != gradePolicyImage || !catalog.AllowsFlag(gradePolicyImage) ||
+		catalog.AllowsFlag("registry.example.invalid/unknown@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") {
+		t.Fatalf("FLAG requirements = %v", images)
+	}
+}
+
 func TestImagePolicyOverridesKnownDigestBeforeValidation(t *testing.T) {
 	catalog, err := ParseImagePolicies([]byte(testImagePolicies))
 	if err != nil {
