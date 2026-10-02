@@ -27,6 +27,8 @@ GCP `provisioner-test-1`에 코드 커밋 `24c5d0490807a1c781a900d518b4394519235
 
 미등록 Grade digest와 차단된 Logout digest를 실제 생성 API에 보내 모두 `422 IMAGE_POLICY_REJECTED`를 확인했다. Grade, Daily Point, Open House는 요청에서 `writable_paths`를 빼고 기존 `expose: true`를 보냈다. 세 문제 모두 새 정책으로 생성 성공, Pod Ready·재시작 0회, HTTP 200, 삭제 성공을 확인했다. Grade는 `/login` 5번째, Daily Point는 `/` 첫 번째, Open House는 `/` 8번째 시도에 응답했다. 이 결과는 정책이 새 생성에 적용된 증거이며 팀 간 격리·문제 풀이·reset 검증은 아니다.
 
+2026-10-03에는 FLAG 주입 코드 커밋 `79a4caa8491c35bd651cf5450daa268c57a7aad4`의 Linux 바이너리(SHA-256 `36edc58afb1382f3f2cc7024ff2bdaa6a4810d11c8a258c59dec373b32e46738`)와 새 정책(SHA-256 `1cc532e5c0780bb83365bf0ef09da9465823f7955bc6f86be54271443c29cec9`)을 같은 VM에 배포했다. `/etc/secure-provisioner/flags.json`은 `root:provisioner` 0640으로 **빈 목록**을 두고 `PROVISIONER_FLAG_FILE` 경로를 연결했다. 서비스·인증 API·두 K3s 연결 검증을 통과했고, Logout 생성 요청은 계속 `422 IMAGE_POLICY_REJECTED`로 차단됐다. 실제 FLAG 값, Backend hash 일치, FLAG Secret이 들어간 문제 생성은 아직 검증하지 않았다.
+
 ## 공통 격리와 비밀값
 
 이미지별 정책은 공통 `STANDARD@v2`/`WEB` 격리의 예외 권한을 만들지 않는다. Root UID, writable root filesystem, 추가 Linux capability, 외부 egress 허용은 이 파일에서 설정할 수 없다. 격리 프로필은 이미지와 요청이 일치하는지 확인하는 조건이다. Runtime은 root filesystem을 읽기 전용으로 두고, 허용된 디렉터리만 크기가 제한된 `emptyDir`로 마운트한다. `emptyDir` 데이터는 Pod 제거 시 사라지므로 SQLite와 PostgreSQL 문제의 reset 및 재시작 동작을 별도로 확인해야 한다.
