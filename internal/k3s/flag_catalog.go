@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"os"
-	"runtime"
 	"strings"
 	"unicode/utf8"
 )
@@ -27,17 +25,9 @@ type flagFile struct {
 }
 
 func LoadFlagCatalog(filename string) (*FlagCatalog, error) {
-	info, err := os.Lstat(filename)
+	contents, err := readTrustedFlagFile(filename)
 	if err != nil {
-		return nil, errors.New("FLAG file cannot be inspected")
-	}
-	if !info.Mode().IsRegular() || info.Size() > 1<<20 ||
-		(runtime.GOOS != "windows" && info.Mode().Perm()&0o027 != 0) {
-		return nil, errors.New("FLAG file must be a private regular file under 1 MiB")
-	}
-	contents, err := os.ReadFile(filename)
-	if err != nil {
-		return nil, errors.New("FLAG file cannot be read")
+		return nil, err
 	}
 	return ParseFlagCatalog(contents)
 }

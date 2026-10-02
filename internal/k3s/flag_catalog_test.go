@@ -51,12 +51,28 @@ func TestFlagCatalogRejectsMalformedAndDuplicateEntriesWithoutLeakingValues(t *t
 }
 
 func TestLoadFlagCatalogRejectsWorldReadableFileAndSymlink(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "flags.json")
+	directory := t.TempDir()
+	if runtime.GOOS == "linux" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Fatal(err)
+		}
+		directory, err = os.MkdirTemp(home, "flag-catalog-test-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(directory) })
+	}
+	path := filepath.Join(directory, "flags.json")
 	if err := os.WriteFile(path, []byte(testFlagJSON), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadFlagCatalog(path); err != nil {
-		t.Fatal(err)
+	if _, err := LoadFlagCatalog(path); runtime.GOOS != "linux" || os.Geteuid() == 0 {
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else if err == nil {
+		t.Fatal("non-root-owned FLAG file accepted")
 	}
 	if runtime.GOOS != "windows" {
 		if err := os.Chmod(path, 0o644); err != nil {

@@ -53,7 +53,7 @@ GCP `provisioner-test-1`에 코드 커밋 `24c5d0490807a1c781a900d518b4394519235
 }
 ```
 
-파일과 부모 디렉터리는 운영자만 수정할 수 있게 두고, 파일은 `root:provisioner` 소유의 `0640`으로 제한한다. 심볼릭 링크와 다른 사용자가 읽거나 수정할 수 있는 파일은 거절한다. 서비스 환경 파일에는 **값이 아니라 파일 경로만** `PROVISIONER_FLAG_FILE=/etc/secure-provisioner/flags.json`으로 추가한다. `PROVISIONER_IMAGE_POLICIES`도 함께 필요하다. 새 파일로 바꾼 뒤 Provisioner를 재시작한다. 활성화된 이미지에 필요한 FLAG가 빠졌거나, 파일의 digest가 `requires_flag` 정책과 일치하지 않으면 서비스가 시작되지 않는다. FLAG 값은 로그나 에러에 출력하지 않는다.
+파일은 `root:provisioner` 소유의 `0640`으로 제한하고, `/`부터 파일의 부모 디렉터리까지 모두 root 소유이며 그룹·전체 사용자에게 쓰기 권한이 없어야 한다. Linux에서는 심볼릭 링크를 따라가지 않고 열린 파일 자체의 소유자·권한·크기를 검사한 뒤 같은 파일에서 값을 읽는다. 서비스 환경 파일에는 **값이 아니라 파일 경로만** `PROVISIONER_FLAG_FILE=/etc/secure-provisioner/flags.json`으로 추가한다. `PROVISIONER_IMAGE_POLICIES`도 함께 필요하다. 새 파일로 바꾼 뒤 Provisioner를 재시작한다. 활성화된 이미지에 필요한 FLAG가 빠졌거나, 파일의 digest가 `requires_flag` 정책과 일치하지 않으면 서비스가 시작되지 않는다. FLAG 값은 로그나 에러에 출력하지 않는다.
 
 생성 요청 형식은 바뀌지 않는다. Provisioner worker가 VM 파일에서 해당 digest의 FLAG를 찾아 새 인스턴스 namespace에 변경 불가 Kubernetes Secret `challenge-env`를 만들고, 해당 컨테이너의 `FLAG` 환경변수에 `secretKeyRef`로 연결한다. Secret이 필요한 namespace에만 Secret quota 1개를 허용하고, Secret 생성이나 읽기 확인이 실패하면 Deployment를 만들지 않고 namespace를 롤백한다. namespace 삭제와 함께 Secret도 사라진다. Scheduler와 operation DB에는 FLAG 값이 들어가지 않는다.
 
