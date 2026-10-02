@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -134,13 +135,31 @@ func TestNewApplicationRequiresConfiguredFlagForEnabledImage(t *testing.T) {
 	if _, err := newApplication(config, fakeClientFactory{}); err == nil {
 		t.Fatal("enabled image started without its required FLAG")
 	}
-	flagPath := filepath.Join(directory, "flags.json")
+	flagDirectory := directory
+	if runtime.GOOS == "linux" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Fatal(err)
+		}
+		flagDirectory, err = os.MkdirTemp(home, "provisioner-flag-test-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(flagDirectory) })
+	}
+	flagPath := filepath.Join(flagDirectory, "flags.json")
 	flagJSON := `{"schema_version":1,"flags":[{"image":"` + image + `","flag":"CTF{test_only}"}]}`
 	if err := os.WriteFile(flagPath, []byte(flagJSON), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	config.FlagFilePath = flagPath
 	app, err := newApplication(config, fakeClientFactory{})
+	if runtime.GOOS == "linux" && os.Geteuid() != 0 {
+		if err == nil {
+			t.Fatal("application accepted non-root-owned FLAG file")
+		}
+		return
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
