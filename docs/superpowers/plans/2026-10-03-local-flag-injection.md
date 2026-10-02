@@ -51,4 +51,4 @@
 
 - [x] Document file format, ownership, deployment, rotation, backend hash alignment, and limitations of hard-coded flags.
 - [x] Mark images requiring FLAG without committing values.
-- [ ] Verify code, build, and deploy a test binary if existing VM access and policy permit; run an actual create/delete check only with a verified value.
+- [x] Verify code, build, and deploy a test binary; create, inspect, and delete an instance with a disposable FLAG, then restore the test policy and empty FLAG file.
