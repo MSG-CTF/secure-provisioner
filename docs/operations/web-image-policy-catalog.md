@@ -31,6 +31,8 @@ GCP `provisioner-test-1`에 코드 커밋 `24c5d0490807a1c781a900d518b4394519235
 
 임시 시험에서는 이미 K3s 실행이 확인된 공개 Nginx digest에만 `requires_flag` 정책과 **시험용 FLAG**를 추가했다. `broker-test2`에서 인스턴스 `80c641c8-7974-4aba-8857-6debebdf71d5`의 생성 Operation `SUCCEEDED`, Runtime `READY`·endpoint ready를 확인했다. K3s에서 namespace Secret의 값과 변경 불가 설정, Deployment의 `FLAG` → `secretKeyRef` 연결을 직접 조회해 일치 여부를 확인했고, 삭제 Operation도 `SUCCEEDED`였다. 이후 임시 정책·값을 복구했으며 원래 정책의 SHA-256, 빈 FLAG 파일, 서비스 active, Logout 422를 다시 확인했다. 운영 FLAG 값과 Backend hash 일치, 실제 문제 풀이 및 채점은 검증하지 않았다.
 
+코드 검토에서 파일 소유권과 부모 경로 검사 누락을 발견해 `acc75e52d5d2784b6e465951a54bc661b618065a`에서 수정했다. 수정 바이너리 SHA-256 `0f8a78bfdcfb61a3de520fe4a8ea912d076bdd124d22047882d4cf7537368ead`를 같은 VM에 재배포했다. `verify.sh`의 서비스·인증 API·두 K3s 연결, 공개 HTTPS 무인증 `401`, 정책 체크섬 불변, `root:provisioner` 0640 FLAG 파일의 빈 목록(0개)을 확인했다. 앞 문단의 임시 생성·삭제 시험은 이전 바이너리에서 진행했으며 보안 수정 이후에는 반복하지 않았다.
+
 ## 공통 격리와 비밀값
 
 이미지별 정책은 공통 `STANDARD@v2`/`WEB` 격리의 예외 권한을 만들지 않는다. Root UID, writable root filesystem, 추가 Linux capability, 외부 egress 허용은 이 파일에서 설정할 수 없다. 격리 프로필은 이미지와 요청이 일치하는지 확인하는 조건이다. Runtime은 root filesystem을 읽기 전용으로 두고, 허용된 디렉터리만 크기가 제한된 `emptyDir`로 마운트한다. `emptyDir` 데이터는 Pod 제거 시 사라지므로 SQLite와 PostgreSQL 문제의 reset 및 재시작 동작을 별도로 확인해야 한다.
