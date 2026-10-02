@@ -36,6 +36,7 @@ type ResourceSet struct {
 	ResourceQuota      *corev1.ResourceQuota
 	LimitRange         *corev1.LimitRange
 	NetworkPolicies    []*networkingv1.NetworkPolicy
+	FlagSecret         *corev1.Secret
 	Deployments        []*appsv1.Deployment
 	Services           []*corev1.Service
 	Ingress            *networkingv1.Ingress

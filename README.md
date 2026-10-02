@@ -18,9 +18,12 @@ CTF 문제 인스턴스의 K3s 워크로드 생성·삭제와 상태 조회를 �
 - `STANDARD@v2` 격리 baseline, non-root UID, 제한된 writable path,
   동일 인스턴스 내부 통신 허용과 기본 `NONE` outbound 정책 적용
 - 적용된 격리/workload profile, resolver 승인 요구사항과 Namespace UID를 Runtime Binding에 기록
+- 선택적으로 운영자가 관리하는 이미지 digest별 쓰기 경로·공개 포트·UID 정책을 적용
 
 API 계약은 [런타임 API 명세](docs/api/runtime-operations.md)와
 [OpenAPI](docs/api/secure-provisioner.openapi.yaml)에 정리되어 있습니다.
+[WEB 이미지별 런타임 정책](docs/operations/web-image-policy-catalog.md)은
+`info.yaml`을 수정하지 않고 운영 설정을 고정하는 방법과 현재 이미지별 상태를 설명합니다.
 
 Scheduler는 생성 요청에 `isolation_profile`을 `WEB` 또는 `PWN`으로 지정합니다.
 Provisioner는 공통 `STANDARD@v2` baseline에 선택한 workload profile을 합성하고,
@@ -36,6 +39,8 @@ raw Kubernetes/보안 설정과 제거된 과거 profile 참조 필드는 API �
 | 환경 변수 | 기본값 | 의미 |
 |---|---:|---|
 | `PROVISIONER_CLUSTER_REGISTRY` | 없음 | target Registry JSON 파일 경로 |
+| `PROVISIONER_IMAGE_POLICIES` | 없음 | 검토된 이미지 digest별 정책 JSON 파일 경로 |
+| `PROVISIONER_FLAG_FILE` | 없음 | 이미지 정책에서 `requires_flag`로 승인한 이미지의 FLAG를 담은 VM 전용 파일 경로 |
 | `PROVISIONER_ADDR` | `127.0.0.1:8080` | HTTP 수신 주소 |
 | `PROVISIONER_WORKER_CONCURRENCY` | `4` | Operation Worker 수 |
 | `PROVISIONER_MAX_ATTEMPTS` | `3` | Operation 최대 시도 횟수 |
