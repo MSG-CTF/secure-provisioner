@@ -29,7 +29,7 @@ func TestLoadConfigRequiresRegistryAndUsesSafeDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Address != "127.0.0.1:8080" || config.RegistryPath != "clusters.json" ||
+	if config.Address != "127.0.0.1:8080" || config.RegistryPath != "clusters.json" || config.ImagePoliciesPath != "" ||
 		config.WorkerConcurrency != 10 || config.MaxAttempts != 4 ||
 		config.ReadyTimeout != 2*time.Minute || config.PollInterval != time.Second ||
 		config.RollbackTimeout != 30*time.Second || config.DeleteTimeout != time.Minute ||
@@ -43,6 +43,7 @@ func TestLoadConfigParsesRuntimeSettingsAndRejectsInvalidValues(t *testing.T) {
 	config, err := loadConfig(environment(map[string]string{
 		"PROVISIONER_ADDR":                    "0.0.0.0:9090",
 		"PROVISIONER_CLUSTER_REGISTRY":        "clusters.json",
+		"PROVISIONER_IMAGE_POLICIES":          " /etc/secure-provisioner/web-image-policies.json ",
 		"PROVISIONER_SERVICE_TOKEN":           validCurrentServiceToken,
 		"PROVISIONER_WORKERS":                 "2",
 		"PROVISIONER_MAX_ATTEMPTS":            "5",
@@ -55,7 +56,7 @@ func TestLoadConfigParsesRuntimeSettingsAndRejectsInvalidValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Address != "0.0.0.0:9090" || config.WorkerConcurrency != 2 ||
+	if config.Address != "0.0.0.0:9090" || config.ImagePoliciesPath != "/etc/secure-provisioner/web-image-policies.json" || config.WorkerConcurrency != 2 ||
 		config.MaxAttempts != 5 || config.ReadyTimeout != 90*time.Second ||
 		config.PollInterval != 250*time.Millisecond || config.RollbackTimeout != 20*time.Second ||
 		config.DeleteTimeout != 45*time.Second || config.WorkerShutdownTimeout != 35*time.Second {

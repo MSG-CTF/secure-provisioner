@@ -16,18 +16,23 @@ type API struct {
 	createWorkload provisioner.CreateWorkloadUseCase
 	runtime        RuntimeUseCase
 	directResolver isolation.Resolver
+	imagePolicies  *ImagePolicyCatalog
 }
 
 func NewHandler(createWorkload provisioner.CreateWorkloadUseCase, authConfig ServiceAuthConfig) http.Handler {
-	return newHandler(createWorkload, nil, authConfig)
+	return newHandler(createWorkload, nil, authConfig, nil)
 }
 
 func NewHandlerWithRuntime(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase, authConfig ServiceAuthConfig) http.Handler {
-	return newHandler(createWorkload, runtime, authConfig)
+	return newHandler(createWorkload, runtime, authConfig, nil)
 }
 
-func newHandler(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase, authConfig ServiceAuthConfig) http.Handler {
-	api := &API{createWorkload: createWorkload, runtime: runtime}
+func NewHandlerWithRuntimePolicies(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase, authConfig ServiceAuthConfig, policies *ImagePolicyCatalog) http.Handler {
+	return newHandler(createWorkload, runtime, authConfig, policies)
+}
+
+func newHandler(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase, authConfig ServiceAuthConfig, policies *ImagePolicyCatalog) http.Handler {
+	api := &API{createWorkload: createWorkload, runtime: runtime, imagePolicies: policies}
 	if runtime == nil {
 		api.directResolver = isolation.NewStaticResolver()
 	}
@@ -51,6 +56,10 @@ func (api *API) handleCreateInstance(writer http.ResponseWriter, request *http.R
 	var createRequest CreateWorkloadRequest
 	if err := decodeJSON(request, &createRequest); err != nil {
 		writeAPIError(writer, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON request body")
+		return
+	}
+	if err := api.imagePolicies.Apply(&createRequest); err != nil {
+		writeAPIError(writer, http.StatusUnprocessableEntity, "IMAGE_POLICY_REJECTED", err.Error())
 		return
 	}
 	if err := createRequest.Validate(); err != nil {

@@ -18,9 +18,12 @@ CTF 문제 인스턴스의 K3s 워크로드 생성·삭제와 상태 조회를 �
 - `STANDARD@v2` 격리 baseline, non-root UID, 제한된 writable path,
   동일 인스턴스 내부 통신 허용과 기본 `NONE` outbound 정책 적용
 - 적용된 격리/workload profile, resolver 승인 요구사항과 Namespace UID를 Runtime Binding에 기록
+- 선택적으로 운영자가 관리하는 이미지 digest별 쓰기 경로·공개 포트·UID 정책을 적용
 
 API 계약은 [런타임 API 명세](docs/api/runtime-operations.md)와
 [OpenAPI](docs/api/secure-provisioner.openapi.yaml)에 정리되어 있습니다.
+[WEB 이미지별 런타임 정책](docs/operations/web-image-policy-catalog.md)은
+`info.yaml`을 수정하지 않고 운영 설정을 고정하는 방법과 현재 이미지별 상태를 설명합니다.
 
 Scheduler는 생성 요청에 `isolation_profile`을 `WEB` 또는 `PWN`으로 지정합니다.
 Provisioner는 공통 `STANDARD@v2` baseline에 선택한 workload profile을 합성하고,
