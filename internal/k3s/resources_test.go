@@ -36,12 +36,12 @@ func TestBuildResourceSetCreatesOwnedKubernetesResources(t *testing.T) {
 		"msgctf.io/instance-id":        command.InstanceID,
 		"msgctf.io/team-id":            "00000000-0000-4000-8000-000000000042",
 	}
-	for resource, labels := range map[string]map[string]string{
-		"namespace": resources.Namespace.Labels,
-		"ingress":   resources.Ingress.Labels,
-	} {
-		assertExactOwnershipLabels(t, resource, labels, wantOwnerLabels)
+	wantNamespaceLabels := copyLabels(wantOwnerLabels)
+	for _, mode := range []string{"enforce", "audit", "warn"} {
+		wantNamespaceLabels["pod-security.kubernetes.io/"+mode] = "restricted"
 	}
+	assertExactOwnershipLabels(t, "namespace", resources.Namespace.Labels, wantNamespaceLabels)
+	assertExactOwnershipLabels(t, "ingress", resources.Ingress.Labels, wantOwnerLabels)
 	wantContainerLabels := copyLabels(wantOwnerLabels)
 	wantContainerLabels[containerNameLabel] = resourceName
 	for resource, labels := range map[string]map[string]string{
@@ -100,6 +100,28 @@ func TestBuildResourceSetCreatesOwnedKubernetesResources(t *testing.T) {
 	}
 	if path.Backend.Service.Name != resourceName || path.Backend.Service.Port.Number != int32(command.Containers[0].Ports[0]) {
 		t.Fatalf("ingress backend = %#v, want challenge:%d", path.Backend.Service, command.Containers[0].Ports[0])
+	}
+}
+
+func TestBuildResourceSetEnforcesRestrictedPodSecurity(t *testing.T) {
+	resources, err := BuildResourceSet(validCluster("aws-dev"), validCreateCommand("aws-dev"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"enforce", "audit", "warn"} {
+		key := "pod-security.kubernetes.io/" + mode
+		if got := resources.Namespace.Labels[key]; got != "restricted" {
+			t.Fatalf("Namespace label %q = %q, want restricted", key, got)
+		}
+	}
+	for _, resourceLabels := range []map[string]string{
+		resources.ServiceAccount.Labels,
+		resources.Deployment.Labels,
+		resources.Deployment.Spec.Template.Labels,
+	} {
+		if _, found := resourceLabels["pod-security.kubernetes.io/enforce"]; found {
+			t.Fatal("Pod Security Admission labels must only be on the Namespace")
+		}
 	}
 }
 

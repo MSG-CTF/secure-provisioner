@@ -600,6 +600,16 @@ func TestAdapterAppliesProtectionInExactOrderBeforeMultiContainerWorkload(t *tes
 		t.Fatal(err)
 	}
 	client := readyMultiContainerClient(t, command)
+	client.PrependReactor("create", "namespaces", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		namespace := action.(k8stesting.CreateAction).GetObject().(*corev1.Namespace)
+		for _, mode := range []string{"enforce", "audit", "warn"} {
+			key := "pod-security.kubernetes.io/" + mode
+			if got := namespace.Labels[key]; got != "restricted" {
+				t.Fatalf("initial Namespace create label %q = %q, want restricted before child resources", key, got)
+			}
+		}
+		return false, nil, nil
+	})
 	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
 
 	if _, err := adapter.CreateWorkload(context.Background(), command); err != nil {
@@ -693,6 +703,50 @@ func TestAdapterRollsBackNamespaceWhenCreateResponseHasUnapprovedMetadata(t *tes
 	}
 	assertNoChildResourceMutations(t, client.Actions())
 	assertDeleteActionCount(t, client, "namespaces", 1)
+}
+
+func TestAdapterRollsBackNamespaceWhenCreateResponseChangesPodSecurityLabels(t *testing.T) {
+	for _, mode := range []string{"enforce", "audit", "warn"} {
+		for _, mutation := range []string{"removed", "weakened"} {
+			t.Run(mode+"/"+mutation, func(t *testing.T) {
+				command := validCreateCommand("aws-dev")
+				client := readyClient(t, command)
+				createdUID := types.UID("psa-created-namespace-uid")
+				const createdResourceVersion = "17"
+				client.PrependReactor("create", "namespaces", func(action k8stesting.Action) (bool, runtime.Object, error) {
+					namespace := action.(k8stesting.CreateAction).GetObject().(*corev1.Namespace).DeepCopy()
+					namespace.UID = createdUID
+					namespace.ResourceVersion = createdResourceVersion
+					key := "pod-security.kubernetes.io/" + mode
+					if mutation == "removed" {
+						delete(namespace.Labels, key)
+					} else {
+						namespace.Labels[key] = "baseline"
+					}
+					if err := client.Tracker().Create(action.GetResource(), namespace, ""); err != nil {
+						t.Fatal(err)
+					}
+					return true, namespace.DeepCopy(), nil
+				})
+				client.PrependReactor("delete", "namespaces", func(action k8stesting.Action) (bool, runtime.Object, error) {
+					preconditions := action.(k8stesting.DeleteAction).GetDeleteOptions().Preconditions
+					if preconditions == nil || preconditions.UID == nil || *preconditions.UID != createdUID ||
+						preconditions.ResourceVersion == nil || *preconditions.ResourceVersion != createdResourceVersion {
+						t.Fatalf("rollback preconditions = %#v, want created UID %q and ResourceVersion %q", preconditions, createdUID, createdResourceVersion)
+					}
+					return false, nil, nil
+				})
+				adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
+
+				_, err := adapter.CreateWorkload(context.Background(), command)
+				if runtimeErrorCode(t, err) != "RESOURCE_APPLY_FAILED" {
+					t.Fatalf("code = %q, want RESOURCE_APPLY_FAILED", runtimeErrorCode(t, err))
+				}
+				assertNoChildResourceMutations(t, client.Actions())
+				assertDeleteActionCount(t, client, "namespaces", 1)
+			})
+		}
+	}
 }
 
 func TestAdapterRoutesEachTargetToItsOwnClient(t *testing.T) {
@@ -1323,6 +1377,46 @@ func TestAdapterRejectsNamespaceReplacementAtFinalReadback(t *testing.T) {
 		t.Fatalf("code = %q, want RUNTIME_IDENTITY_MISMATCH", runtimeErrorCode(t, err))
 	}
 	assertDeleteActionCount(t, client, "namespaces", 0)
+}
+
+func TestAdapterRejectsPodSecurityLabelDriftAtFinalNamespaceReadbackWithoutDeletion(t *testing.T) {
+	for _, mode := range []string{"enforce", "audit", "warn"} {
+		for _, mutation := range []string{"removed", "weakened"} {
+			t.Run(mode+"/"+mutation, func(t *testing.T) {
+				command := validCreateCommand("aws-dev")
+				client := readyClient(t, command)
+				installNamespaceCreateMetadata(t, client, "created-namespace-uid", "11")
+				client.PrependReactor("get", "namespaces", func(action k8stesting.Action) (bool, runtime.Object, error) {
+					get := action.(k8stesting.GetAction)
+					object, err := client.Tracker().Get(action.GetResource(), "", get.GetName())
+					if err != nil {
+						return false, nil, nil
+					}
+					namespace := object.(*corev1.Namespace).DeepCopy()
+					key := "pod-security.kubernetes.io/" + mode
+					if mutation == "removed" {
+						delete(namespace.Labels, key)
+					} else {
+						namespace.Labels[key] = "baseline"
+					}
+					namespace.ResourceVersion = "12"
+					if err := client.Tracker().Update(action.GetResource(), namespace, ""); err != nil {
+						t.Fatal(err)
+					}
+					return true, namespace, nil
+				})
+				adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
+
+				_, err := adapter.CreateWorkload(context.Background(), command)
+				if runtimeErrorCode(t, err) != "RESOURCE_OWNERSHIP_CONFLICT" {
+					t.Fatalf("code = %q, want RESOURCE_OWNERSHIP_CONFLICT", runtimeErrorCode(t, err))
+				}
+				// Metadata drift preserves the conservative no-delete ownership-conflict behavior,
+				// even when the Namespace UID is unchanged.
+				assertDeleteActionCount(t, client, "namespaces", 0)
+			})
+		}
+	}
 }
 
 func TestAdapterWaitsForLatestRevisionPodAndItsEndpoint(t *testing.T) {

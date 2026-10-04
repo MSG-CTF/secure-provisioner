@@ -94,9 +94,15 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 	}
 	pathType := networkingv1.PathTypePrefix
 	replicas := int32(1)
+	namespaceLabels := copyLabels(labels)
+	// PSA rejects noncompliant Pods only when enforce is set on the Namespace.
+	// Namespace creation precedes all workload and protection resources.
+	namespaceLabels["pod-security.kubernetes.io/enforce"] = "restricted"
+	namespaceLabels["pod-security.kubernetes.io/audit"] = "restricted"
+	namespaceLabels["pod-security.kubernetes.io/warn"] = "restricted"
 	resources := ResourceSet{
 		Namespace: &corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{Name: namespace, Labels: copyLabels(labels)},
+			ObjectMeta: metav1.ObjectMeta{Name: namespace, Labels: namespaceLabels},
 		},
 		ServiceAccount:     buildRuntimeServiceAccount(namespace, labels),
 		ResourceQuota:      buildRuntimeResourceQuota(namespace, labels, command.Policy, len(containers), nodePortQuota(cluster.Config.ExposureMode, containers)),
