@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -219,7 +220,7 @@ func TestPublishedWebImagePoliciesKeepUnverifiedChallengesBlocked(t *testing.T) 
 		{gradePolicyImage, true},
 		{"ghcr.io/msg-ctf/challenges/web-daily-point/web@sha256:98c98088662fd5ff538ae9e163fb4a68ad73580e0f4f703624b0650d4a2b499a", true},
 		{"ghcr.io/msg-ctf/challenges/web-open-house/web@sha256:6a3ab6373bdee16229dfda362d41dd10bd59ede5b05249557d332a3d5d22b8bd", true},
-		{"ghcr.io/msg-ctf/challenges/web-logout-please/service@sha256:c4407d4218a5f4261152e60c45813af2d1fa4e16917b4aea2e7241600a8ab702", false},
+		{"ghcr.io/msg-ctf/challenges/web-logout-please/service@sha256:c4407d4218a5f4261152e60c45813af2d1fa4e16917b4aea2e7241600a8ab702", true},
 		{"ghcr.io/msg-ctf/challenges/web-notebook/db@sha256:7a40ab203a9f16d06269a4506f1f99b770e2991bb0d5c4ee072fddaea722cea0", false},
 	} {
 		policy, found := catalog.images[test.image]
@@ -235,7 +236,10 @@ func TestPublishedWebImagePoliciesKeepUnverifiedChallengesBlocked(t *testing.T) 
 		Name: "service", Image: "ghcr.io/msg-ctf/challenges/web-logout-please/service@sha256:c4407d4218a5f4261152e60c45813af2d1fa4e16917b4aea2e7241600a8ab702",
 		Ports: []int{8080, 9090}, Expose: true, RunAsUser: 10001,
 	}}
-	if err := catalog.Apply(&request); err == nil {
-		t.Fatal("unverified Logout Please image was accepted")
+	if err := catalog.Apply(&request); err != nil {
+		t.Fatalf("Logout Please image policy rejected: %v", err)
+	}
+	if policy := catalog.images[request.Workload.Containers[0].Image]; !policy.RequiresFlag || !slices.Equal(policy.ExposedPorts, []int{8080}) {
+		t.Fatalf("Logout Please FLAG and exposure policy = %+v", policy)
 	}
 }

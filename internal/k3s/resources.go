@@ -161,7 +161,11 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 				Limits:   quantities.DeepCopy(),
 			},
 		}
-		podSpec := corev1.PodSpec{Containers: []corev1.Container{podContainer}}
+		// Service-link variables can collide with challenge settings such as SERVICE_PORT.
+		podSpec := corev1.PodSpec{
+			Containers:         []corev1.Container{podContainer},
+			EnableServiceLinks: boolPointer(false),
+		}
 		applyPodSecurityBaseline(&podSpec, &podSpec.Containers[0], requirement)
 		if command.Policy.RuntimeClassName != "" {
 			runtimeClassName := command.Policy.RuntimeClassName

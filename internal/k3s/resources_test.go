@@ -103,6 +103,19 @@ func TestBuildResourceSetCreatesOwnedKubernetesResources(t *testing.T) {
 	}
 }
 
+func TestBuildResourceSetDisablesServiceLinkEnvironmentForEveryPod(t *testing.T) {
+	resources, err := BuildResourceSet(validCluster("aws-dev"), validMultiCreateCommand("aws-dev"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, deployment := range resources.Deployments {
+		serviceLinks := deployment.Spec.Template.Spec.EnableServiceLinks
+		if serviceLinks == nil || *serviceLinks {
+			t.Fatalf("deployment %q enables Kubernetes service environment variables: %v", deployment.Name, serviceLinks)
+		}
+	}
+}
+
 func TestBuildResourceSetEnforcesRestrictedPodSecurity(t *testing.T) {
 	resources, err := BuildResourceSet(validCluster("aws-dev"), validCreateCommand("aws-dev"))
 	if err != nil {
