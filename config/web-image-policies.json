@@ -53,7 +53,7 @@
       "writable_paths": [{"path": "/tmp", "size_mib": 64}]
     },
     {
-      "image": "ghcr.io/msg-ctf/challenges/web-logout-please/service@sha256:c4407d4218a5f4261152e60c45813af2d1fa4e16917b4aea2e7241600a8ab702",
+      "image": "ghcr.io/msg-ctf/challenges/web-logout-please/service@sha256:c1736999c957b408c09dda518d49eecbfcb37ffae0d9227e6a378a666f931909",
       "container": "service",
       "isolation_profile": "WEB",
       "status": "create_enabled",
