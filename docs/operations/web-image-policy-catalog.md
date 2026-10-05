@@ -15,11 +15,17 @@ Provisioner는 `PROVISIONER_IMAGE_POLICIES`가 가리키는 파일을 시작할 
 | Grade Tampering | `create_enabled` | `web` UID 10001, `/tmp` 32 MiB + `/app/instance` 32 MiB, 외부 8080. 해당 digest의 실제 K3s 생성·HTTP 응답·삭제 확인 |
 | Daily Point | `create_enabled` | `web` UID 10001, `/tmp` 64 MiB + `/app/data` 64 MiB, 외부 8080. 해당 digest의 실제 K3s 생성·HTTP 응답·삭제 확인 |
 | Open House | `create_enabled` | `web` UID 10001, `/tmp` 64 MiB, 외부 8080. 해당 digest의 실제 K3s 생성·HTTP 응답·삭제 확인 |
-| Logout Please | `blocked` | UID 10001, `/tmp` 64 MiB, 8080만 공개하고 9090은 내부 health. `requires_flag: true`로 표시했으며 운영 FLAG 값·Backend hash 일치와 실제 생성 검증 전까지 차단 |
+| Logout Please | `create_enabled` | 최신 발행 digest `c1736999…931909`, UID 10001, `/tmp` 64 MiB, 8080만 공개하고 9090은 내부 health. `requires_flag: true`이며 VM의 비공개 FLAG 목록에서 Kubernetes Secret으로 주입. 생성·HTTP·공식 풀이·삭제 확인 |
 | Notebook | `blocked` | `web`은 `/tmp` 64 MiB·8080 공개. `db`는 `/tmp` 64 MiB, `/var/lib/postgresql/data` 256 MiB, `/var/run/postgresql` 16 MiB·5432 비공개. DB 이미지의 `PGDATA` 수정과 새 생성 검증 전까지 차단 |
 | AFTERIMAGE | 미발행·차단 | 일곱 이미지 저장소를 관리 대상으로 등록했으며 digest 정책은 아직 없다. indexer의 UID 전환·spool 소유권, 인스턴스별 Secret, bot 자원을 해결하기 전에는 생성하지 않는다 |
 
-`create_enabled`는 위 digest의 기본 생성 smoke가 통과했다는 운영 게이트다. 팀 간·호스트·metadata 경계의 실제 격리 검증이나 문제 풀이, reset, 데이터 보존까지 승인했다는 뜻이 아니다. 현재 두 GCP Target의 capability `true` 선언도 격리 실측을 대신하지 않는다.
+`create_enabled`는 위 digest의 기본 생성 smoke가 통과했다는 운영 게이트다. Logout Please는 아래에 적은 공식 풀이도 통과했다. 다른 문제의 풀이, 팀 간·호스트·metadata 경계의 실제 격리 검증, reset, 데이터 보존까지 승인했다는 뜻은 아니다. 현재 두 GCP Target의 capability `true` 선언도 격리 실측을 대신하지 않는다.
+
+## 2026-10-05 Logout Please 최신 이미지 시험
+
+문제 저장소 `2026_MSG_CTF`의 발행 산출물(소스 커밋 `f146e2011c0f602771a01749c944847671ddd20a`)에서 `service@sha256:c1736999c957b408c09dda518d49eecbfcb37ffae0d9227e6a378a666f931909`를 확인했다. 이전 정책의 `c4407d42…8ab702`는 이전 소스 이미지라 현재 공식 풀이가 HTTP 404로 실패했다. 테스트 VM의 바이너리는 `83227e8a2e98c5d1e81b7251e6185fa27d8032a5`에서 빌드한 버전이며, Pod의 `enableServiceLinks: false`로 Kubernetes가 주입하는 `SERVICE_PORT` 환경변수와 문제의 숫자 포트 설정이 충돌하지 않게 했다. 새 정책 커밋은 `055768f5dcf2870f62c8dfe815a85004d13441c7`이다.
+
+`info.yaml`의 FLAG와 VM 비공개 FLAG 목록 값이 일치함을 값 출력 없이 확인했다. 이미지 digest와 FLAG 목록의 키를 함께 새 digest로 교체하고 서비스 재시작·무인증 `401`을 확인했다. `broker-test-3`에 새 인스턴스 `699ec681-5686-4225-b388-855dfaa36611`을 생성한 Operation `a0f59c36aceec09c06d84418de77bda0`은 `SUCCEEDED`였다. Pod는 `READY`, 재시작 0회, 사설·공개 URL 모두 HTTP 200이었다. `FLAG`는 변경 불가 namespace Secret `challenge-env`에서 `service` 키로 주입됐고, NodePort 서비스는 8080만 공개했다. 최신 소스의 공식 풀이가 주입된 FLAG와 정확히 일치했다. 삭제 Operation `eff591326fd0c7c7519580b0bd2355f8`은 `SUCCEEDED`이고 namespace 조회는 `404`였다. 시험 URL은 삭제 후 사용하지 않는다. Backend 채점 hash와 reset, 여러 팀 사이 격리는 이 시험에 포함되지 않았다.
 
 ## 2026-10-03 테스트 VM 적용 기록
 
