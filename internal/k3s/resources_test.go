@@ -1,6 +1,7 @@
 package k3s
 
 import (
+	"encoding/json"
 	"math"
 	"reflect"
 	"strings"
@@ -113,6 +114,21 @@ func TestBuildResourceSetDisablesServiceLinkEnvironmentForEveryPod(t *testing.T)
 		if serviceLinks == nil || *serviceLinks {
 			t.Fatalf("deployment %q enables Kubernetes service environment variables: %v", deployment.Name, serviceLinks)
 		}
+	}
+}
+
+func TestBuildResourceSetWaitsForTrustedHTTPReadiness(t *testing.T) {
+	command := validCreateCommand("aws-dev")
+	if err := json.Unmarshal([]byte(`{"ReadinessHTTP":{"Path":"/","Port":8080}}`), &command.Containers[0]); err != nil {
+		t.Fatal(err)
+	}
+	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe := resources.Deployment.Spec.Template.Spec.Containers[0].ReadinessProbe
+	if probe == nil || probe.HTTPGet == nil || probe.HTTPGet.Path != "/" || probe.HTTPGet.Port.IntVal != 8080 {
+		t.Fatalf("trusted HTTP readiness probe = %#v", probe)
 	}
 }
 

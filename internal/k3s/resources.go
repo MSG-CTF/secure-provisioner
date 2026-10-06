@@ -161,6 +161,16 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 				Limits:   quantities.DeepCopy(),
 			},
 		}
+		if container.ReadinessHTTP != nil {
+			podContainer.ReadinessProbe = &corev1.Probe{
+				ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{
+					Path:   container.ReadinessHTTP.Path,
+					Port:   intstr.FromInt(container.ReadinessHTTP.Port),
+					Scheme: corev1.URISchemeHTTP,
+				}},
+				TimeoutSeconds: 2, PeriodSeconds: 2, SuccessThreshold: 1, FailureThreshold: 3,
+			}
+		}
 		// Service-link variables can collide with challenge settings such as SERVICE_PORT.
 		podSpec := corev1.PodSpec{
 			Containers:         []corev1.Container{podContainer},
@@ -452,6 +462,14 @@ func validWorkloadCommand(
 				return false
 			}
 			ports[port] = struct{}{}
+		}
+		if container.ReadinessHTTP != nil {
+			if _, declared := ports[container.ReadinessHTTP.Port]; !declared ||
+				!strings.HasPrefix(container.ReadinessHTTP.Path, "/") ||
+				strings.ContainsAny(container.ReadinessHTTP.Path, "?#\r\n\x00") ||
+				len(container.ReadinessHTTP.Path) > 256 {
+				return false
+			}
 		}
 		if !isolation.ValidPublicPorts(container.Ports, container.Expose, container.ExposedPorts) {
 			return false

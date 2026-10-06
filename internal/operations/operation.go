@@ -118,6 +118,10 @@ func copyCreateCommand(command provisioner.CreateWorkloadCommand) provisioner.Cr
 		copied.Containers[index] = container
 		copied.Containers[index].Ports = slices.Clone(container.Ports)
 		copied.Containers[index].ExposedPorts = slices.Clone(container.ExposedPorts)
+		if container.ReadinessHTTP != nil {
+			readiness := *container.ReadinessHTTP
+			copied.Containers[index].ReadinessHTTP = &readiness
+		}
 	}
 	copied.PolicyRequest = copyPolicyRequest(command.PolicyRequest)
 	copied.Policy = copyResolvedPolicy(command.Policy)
@@ -142,6 +146,7 @@ func sameCreateCommand(first, second provisioner.CreateWorkloadCommand) bool {
 		if firstContainer.Name != secondContainer.Name ||
 			firstContainer.Image != secondContainer.Image ||
 			firstContainer.Expose != secondContainer.Expose ||
+			!reflect.DeepEqual(firstContainer.ReadinessHTTP, secondContainer.ReadinessHTTP) ||
 			!slices.Equal(firstContainer.ExposedPorts, secondContainer.ExposedPorts) ||
 			!slices.Equal(firstContainer.Ports, secondContainer.Ports) {
 			return false

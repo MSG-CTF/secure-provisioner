@@ -69,6 +69,27 @@ func TestImagePolicyOverridesKnownDigestBeforeValidation(t *testing.T) {
 	}
 }
 
+func TestImagePolicyCarriesTrustedHTTPReadinessIntoCreateCommand(t *testing.T) {
+	withReadiness := strings.Replace(testImagePolicies, `"status": "create_enabled",`, `"status": "create_enabled", "readiness_http": {"path": "/", "port": 8080},`, 1)
+	catalog, err := ParseImagePolicies([]byte(withReadiness))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := validCreateWorkloadRequest()
+	request.Workload.Containers = []RuntimeContainer{{Name: "web", Image: gradePolicyImage, Ports: []int{8080}, Expose: true, RunAsUser: 10001}}
+	if err := catalog.Apply(&request); err != nil {
+		t.Fatal(err)
+	}
+	command := request.ToCommand()
+	encoded, err := json.Marshal(command.Containers[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"ReadinessHTTP":{"Path":"/","Port":8080}`) {
+		t.Fatalf("trusted readiness was not carried into command: %s", encoded)
+	}
+}
+
 func TestImagePolicyRejectsUnreviewedDigestAndWrongContainer(t *testing.T) {
 	catalog, err := ParseImagePolicies([]byte(testImagePolicies))
 	if err != nil {

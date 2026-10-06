@@ -37,6 +37,7 @@ type RuntimeContainer struct {
 	ExposedPorts  []int          `json:"exposed_ports,omitempty"`
 	RunAsUser     int64          `json:"run_as_user"`
 	WritablePaths []WritablePath `json:"writable_paths,omitempty"`
+	readinessHTTP *provisioner.HTTPReadiness
 }
 
 func (container *RuntimeContainer) UnmarshalJSON(data []byte) error {
@@ -331,6 +332,10 @@ func (request CreateWorkloadRequest) normalizedContainers() ([]provisioner.Workl
 		}
 		normalized := provisioner.WorkloadContainer{
 			Name: container.Name, Image: container.Image, Ports: ports, Expose: container.Expose,
+		}
+		if container.readinessHTTP != nil {
+			readiness := *container.readinessHTTP
+			normalized.ReadinessHTTP = &readiness
 		}
 		if container.ExposedPorts != nil {
 			// Use declared port order and preserve the legacy representation for

@@ -13,10 +13,12 @@ import (
 )
 
 type API struct {
-	createWorkload provisioner.CreateWorkloadUseCase
-	runtime        RuntimeUseCase
-	directResolver isolation.Resolver
-	imagePolicies  *ImagePolicyCatalog
+	createWorkload  provisioner.CreateWorkloadUseCase
+	runtime         RuntimeUseCase
+	directResolver  isolation.Resolver
+	imagePolicies   *ImagePolicyCatalog
+	ciSmokeTeamID   provisioner.TeamID
+	ciSmokeTargetID string
 }
 
 func NewHandler(createWorkload provisioner.CreateWorkloadUseCase, authConfig ServiceAuthConfig) http.Handler {
@@ -32,7 +34,7 @@ func NewHandlerWithRuntimePolicies(createWorkload provisioner.CreateWorkloadUseC
 }
 
 func newHandler(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase, authConfig ServiceAuthConfig, policies *ImagePolicyCatalog) http.Handler {
-	api := &API{createWorkload: createWorkload, runtime: runtime, imagePolicies: policies}
+	api := &API{createWorkload: createWorkload, runtime: runtime, imagePolicies: policies, ciSmokeTeamID: authConfig.CISmokeTeamID, ciSmokeTargetID: authConfig.CISmokeTargetID}
 	if runtime == nil {
 		api.directResolver = isolation.NewStaticResolver()
 	}
@@ -56,6 +58,10 @@ func (api *API) handleCreateInstance(writer http.ResponseWriter, request *http.R
 	var createRequest CreateWorkloadRequest
 	if err := decodeJSON(request, &createRequest); err != nil {
 		writeAPIError(writer, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON request body")
+		return
+	}
+	if isCISmokeRequest(request) && !api.allowsCISmokeCreate(createRequest) {
+		writeAPIError(writer, http.StatusForbidden, "FORBIDDEN", "CI smoke token cannot create this workload")
 		return
 	}
 	if err := api.imagePolicies.Apply(&createRequest); err != nil {
