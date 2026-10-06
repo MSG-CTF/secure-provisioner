@@ -1,5 +1,7 @@
 # PSA restricted 적용 및 검증 — 2026-10-04
 
+> 이 문서는 10월 4일의 시험 기록이다. 이후 10월 6일 두 K3s 노드의 kubelet `podPidsLimit`을 256으로 변경했고, Runtime 시험 배포 커밋은 `d806276e328a6e58611ebb875c2e186dd79448b7`이다. 아래 `podPidsLimit=-1` 및 배포 커밋은 당시의 값이다. PID 변경과 남은 운영 조건의 현재 상태는 작업 공간의 `docs/k3s-runtime-target-installation-final.md`를 참고한다.
+
 ## 적용한 변경
 
 Provisioner가 새 문제 Namespace를 만들 때 다음 세 라벨을 함께 설정한다.

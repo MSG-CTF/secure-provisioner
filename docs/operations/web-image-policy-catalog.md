@@ -6,6 +6,16 @@
 
 Provisioner는 `PROVISIONER_IMAGE_POLICIES`가 가리키는 파일을 시작할 때 읽는다. 설정이 없으면 기존 Runtime API 동작을 유지한다. 설정이 있으면 목록에 있는 GHCR 저장소의 미등록 digest, 다른 컨테이너 이름·포트·격리 프로필, `blocked` 이미지를 생성 전에 거절한다. 등록된 digest의 요청값 중 `run_as_user`, `writable_paths`, `exposed_ports`는 이 파일의 값으로 교체한 뒤 기존 Runtime 요청 검증과 격리 resolver를 다시 통과시킨다. 이는 임의 경로 자동 탐색 기능이 아니다.
 
+## 2026-10-06 시험 배포와 CI smoke 계약
+
+GCP `provisioner-test-1`에 코드 커밋 `d806276e328a6e58611ebb875c2e186dd79448b7`에서 빌드한 Linux/AMD64 바이너리(SHA-256 `ebcf206bcce299a45632c1a836ae7e6e7051f251a09f900e3b50ba9a6a910577`)와 정책 파일(SHA-256 `73ec68ba29e84800cb429b7c1e8a76b66e79bcac70d4bf475f5fb299b61959c7`)을 함께 배포했다. VM의 `/opt/secure-provisioner/release.json`이 이 값을 기록한다. 서비스는 active다. 기존 FLAG 파일의 값은 변경하지 않았다.
+
+정책 파일의 `readiness_http`는 해당 digest의 컨테이너에 HTTP readiness probe를 붙인다. 현재 Grade Tampering, Daily Point, Open House, Logout Please의 8080 `/`에 적용한다. 생성 Operation의 `SUCCEEDED`는 이 probe와 EndpointSlice 준비를 통과한 뒤 반환한다. 앱의 모든 기능·풀이 경로가 정상이라는 뜻은 아니다. CI 전용 이미지 허용 표시는 `ci_smoke_enabled`이며 Grade Tampering, Daily Point, Open House 세 digest에만 켰다. FLAG가 필요한 Logout Please는 제외했다.
+
+CI용 토큰은 `/etc/secure-provisioner/ci-smoke-token`에 `root:provisioner` 0640으로 저장한다. 서비스 환경 파일은 `PROVISIONER_CI_SMOKE_TOKEN_FILE`, `PROVISIONER_CI_SMOKE_TEAM_ID`, `PROVISIONER_CI_SMOKE_TARGET_ID`로 토큰 경로와 전용 팀·Target을 연결한다. 시험 배포의 전용 팀은 `c0a720f9-4301-4a1f-804f-222769cf90b2`, Target은 `broker-test2`의 `b794d71b-51ef-45fd-87c1-9721e2999e79`다. GitHub Actions에서 호출할 때는 토큰 원문을 해당 테스트 저장소의 GitHub Secret `RUNTIME_API_TOKEN`에 등록하고 `Authorization: Bearer`로 전송한다. **아직 Secret 등록 저장소가 확정되지 않았고 GitHub 호스팅 러너 호출은 검증하지 않았다.** CI용 토큰은 기존 전체 권한 서비스 토큰 및 노드의 GHCR pull 인증과 별개다.
+
+CI 토큰은 전용 팀·Target에서 위 세 WEB digest 중 하나의 단일 컨테이너 생성만 허용한다. 요청 상한은 CPU 500m, 메모리 512 MiB, 임시 저장공간 1024 MiB다. 해당 팀·Target의 Runtime 상태·Operation 조회와 정확한 인스턴스 삭제만 허용한다. 시험에서는 이 토큰으로 Grade 생성 Operation `fd659e37e6ab661b94b1d9b44fa90807`이 `SUCCEEDED`, 상태 `READY`와 `endpoint_ready=true`, Pod HTTP readiness probe `/`:8080, 공개 `/login` HTTP 200을 확인했다. 삭제 Operation `74d732227f054993421ec873f21d953e`는 `SUCCEEDED`이고 Namespace가 제거됐다. 다른 팀의 상태·Operation 조회, 다른 팀 생성, FLAG가 필요한 이미지 생성은 각각 HTTP 403이었다. 이 시험은 VM 내부에서 했으며 GitHub Actions, Scheduler reset, 다중 문제 동시 부하는 별도 시험이다.
+
 예시 서버 설치 위치는 `/etc/secure-provisioner/web-image-policies.json`이다. 서비스 환경 파일에 `PROVISIONER_IMAGE_POLICIES=/etc/secure-provisioner/web-image-policies.json`을 추가하고 서비스 계정이 정책 파일을 읽을 수 있어야 한다. 새 파일과 바이너리를 함께 배포하고 서비스를 재시작한다. 정책 파일은 Git에서 검토·버전 관리하며 VM에서만 수동 수정하지 않는다. 같은 digest의 정책을 바꾸면 새 인스턴스나 재생성에 다른 사양이 적용될 수 있으므로, 변경 이유와 영향을 검토하고 이미 실행 중인 인스턴스의 생성 기록을 확인한다.
 
 ## 현재 이미지별 판정
