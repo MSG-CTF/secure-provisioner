@@ -36,6 +36,7 @@ type ResourceSet struct {
 	ResourceQuota      *corev1.ResourceQuota
 	LimitRange         *corev1.LimitRange
 	NetworkPolicies    []*networkingv1.NetworkPolicy
+	FlagSecret         *corev1.Secret
 	Deployments        []*appsv1.Deployment
 	Services           []*corev1.Service
 	Ingress            *networkingv1.Ingress
@@ -93,9 +94,15 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 	}
 	pathType := networkingv1.PathTypePrefix
 	replicas := int32(1)
+	namespaceLabels := copyLabels(labels)
+	// PSA rejects noncompliant Pods only when enforce is set on the Namespace.
+	// Namespace creation precedes all workload and protection resources.
+	namespaceLabels["pod-security.kubernetes.io/enforce"] = "restricted"
+	namespaceLabels["pod-security.kubernetes.io/audit"] = "restricted"
+	namespaceLabels["pod-security.kubernetes.io/warn"] = "restricted"
 	resources := ResourceSet{
 		Namespace: &corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{Name: namespace, Labels: copyLabels(labels)},
+			ObjectMeta: metav1.ObjectMeta{Name: namespace, Labels: namespaceLabels},
 		},
 		ServiceAccount:     buildRuntimeServiceAccount(namespace, labels),
 		ResourceQuota:      buildRuntimeResourceQuota(namespace, labels, command.Policy, len(containers), nodePortQuota(cluster.Config.ExposureMode, containers)),
@@ -154,7 +161,21 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 				Limits:   quantities.DeepCopy(),
 			},
 		}
-		podSpec := corev1.PodSpec{Containers: []corev1.Container{podContainer}}
+		if container.ReadinessHTTP != nil {
+			podContainer.ReadinessProbe = &corev1.Probe{
+				ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{
+					Path:   container.ReadinessHTTP.Path,
+					Port:   intstr.FromInt(container.ReadinessHTTP.Port),
+					Scheme: corev1.URISchemeHTTP,
+				}},
+				TimeoutSeconds: 2, PeriodSeconds: 2, SuccessThreshold: 1, FailureThreshold: 3,
+			}
+		}
+		// Service-link variables can collide with challenge settings such as SERVICE_PORT.
+		podSpec := corev1.PodSpec{
+			Containers:         []corev1.Container{podContainer},
+			EnableServiceLinks: boolPointer(false),
+		}
 		applyPodSecurityBaseline(&podSpec, &podSpec.Containers[0], requirement)
 		if command.Policy.RuntimeClassName != "" {
 			runtimeClassName := command.Policy.RuntimeClassName
@@ -441,6 +462,12 @@ func validWorkloadCommand(
 				return false
 			}
 			ports[port] = struct{}{}
+		}
+		if container.ReadinessHTTP != nil {
+			if _, declared := ports[container.ReadinessHTTP.Port]; !declared ||
+				!provisioner.ValidHTTPReadinessPath(container.ReadinessHTTP.Path) {
+				return false
+			}
 		}
 		if !isolation.ValidPublicPorts(container.Ports, container.Expose, container.ExposedPorts) {
 			return false

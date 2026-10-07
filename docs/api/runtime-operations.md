@@ -669,6 +669,7 @@ Scheduler가 처리한 비동기 Operation의 최종 실패는 서로 다른 계
 | `POST /internal/v1/instances` | 409 | `REQUEST_ID_CONFLICT` | `request_id`가 다른 명령에 이미 사용됨 | 접수 거절; 기존 Operation은 그대로 유지 |
 | `POST /internal/v1/instances` | 415 | `UNSUPPORTED_MEDIA_TYPE` | `Content-Type`이 `application/json`이 아님 | 접수 거절; Operation/Worker 없음 |
 | `POST /internal/v1/instances` | 422 | `ISOLATION_POLICY_REJECTED` | 형식은 유효하지만 trusted resolver가 profile 또는 요구사항을 승인하지 않음 | 접수 거절; Operation/Worker/Binding 없음 |
+| `POST /internal/v1/instances` | 422 | `IMAGE_POLICY_REJECTED` | 운영자가 관리하는 이미지 저장소의 digest가 미등록·차단 상태이거나 컨테이너 이름·포트·격리 프로필이 정책과 다름 | 접수 거절; Operation/Worker/Binding 없음 |
 | `POST /internal/v1/instances` | 502 | `CREATE_QUEUE_FAILED` | 생성 Operation을 queue에 기록하지 못함 | 접수 거절; Worker 실행 없음 |
 | `DELETE /internal/v1/instances/{instance_id}` | 400 | `INVALID_REQUEST` | JSON, 경로/본문 값, enum 또는 필수 필드가 유효하지 않음 | 접수 거절; Operation/Worker 없음 |
 | `DELETE /internal/v1/instances/{instance_id}` | 404 | `INSTANCE_NOT_FOUND` | Instance Binding이 없음 | 접수 거절; Operation/Worker 없음 |

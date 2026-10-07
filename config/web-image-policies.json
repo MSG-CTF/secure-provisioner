@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "managed_repositories": [
+    "ghcr.io/msg-ctf/challenges/web-grade-tampering/web",
+    "ghcr.io/msg-ctf/challenges/web-daily-point/web",
+    "ghcr.io/msg-ctf/challenges/web-open-house/web",
+    "ghcr.io/msg-ctf/challenges/web-logout-please/service",
+    "ghcr.io/msg-ctf/challenges/web-notebook/web",
+    "ghcr.io/msg-ctf/challenges/web-notebook/db",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/portal",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/core",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/bot",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/exporter",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/inventory-metadata",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/indexer",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/case-vault"
+  ],
+  "images": [
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web-grade-tampering/web@sha256:9ffbf4761b09e0d182e444bb8793343cdc9633b72692aa516b777cf9c750956d",
+      "container": "web",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "ci_smoke_enabled": true,
+      "readiness_http": {"path": "/", "port": 8080},
+      "run_as_user": 10001,
+      "ports": [8080],
+      "exposed_ports": [8080],
+      "writable_paths": [
+        {"path": "/tmp", "size_mib": 32},
+        {"path": "/app/instance", "size_mib": 32}
+      ]
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web-daily-point/web@sha256:98c98088662fd5ff538ae9e163fb4a68ad73580e0f4f703624b0650d4a2b499a",
+      "container": "web",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "ci_smoke_enabled": true,
+      "readiness_http": {"path": "/", "port": 8080},
+      "run_as_user": 10001,
+      "ports": [8080],
+      "exposed_ports": [8080],
+      "writable_paths": [
+        {"path": "/tmp", "size_mib": 64},
+        {"path": "/app/data", "size_mib": 64}
+      ]
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web-open-house/web@sha256:6a3ab6373bdee16229dfda362d41dd10bd59ede5b05249557d332a3d5d22b8bd",
+      "container": "web",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "ci_smoke_enabled": true,
+      "readiness_http": {"path": "/", "port": 8080},
+      "run_as_user": 10001,
+      "ports": [8080],
+      "exposed_ports": [8080],
+      "writable_paths": [{"path": "/tmp", "size_mib": 64}]
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web-logout-please/service@sha256:c1736999c957b408c09dda518d49eecbfcb37ffae0d9227e6a378a666f931909",
+      "container": "service",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "readiness_http": {"path": "/", "port": 8080},
+      "requires_flag": true,
+      "run_as_user": 10001,
+      "ports": [8080, 9090],
+      "exposed_ports": [8080],
+      "writable_paths": [{"path": "/tmp", "size_mib": 64}]
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web-notebook/web@sha256:0a9297f98efc2502b9df85fcde8954190a6f2d132bb98bf49bc12efb6f45cde3",
+      "container": "web",
+      "isolation_profile": "WEB",
+      "status": "blocked",
+      "blocked_reason": "database image requires PGDATA update and fresh create validation",
+      "run_as_user": 10001,
+      "ports": [8080],
+      "exposed_ports": [8080],
+      "writable_paths": [{"path": "/tmp", "size_mib": 64}]
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web-notebook/db@sha256:7a40ab203a9f16d06269a4506f1f99b770e2991bb0d5c4ee072fddaea722cea0",
+      "container": "db",
+      "isolation_profile": "WEB",
+      "status": "blocked",
+      "blocked_reason": "database image requires PGDATA update and fresh create validation",
+      "run_as_user": 10001,
+      "ports": [5432],
+      "exposed_ports": [],
+      "writable_paths": [
+        {"path": "/tmp", "size_mib": 64},
+        {"path": "/var/lib/postgresql/data", "size_mib": 256},
+        {"path": "/var/run/postgresql", "size_mib": 16}
+      ]
+    }
+  ]
+}

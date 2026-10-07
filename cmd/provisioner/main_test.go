@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -29,7 +30,7 @@ func TestLoadConfigRequiresRegistryAndUsesSafeDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Address != "127.0.0.1:8080" || config.RegistryPath != "clusters.json" ||
+	if config.Address != "127.0.0.1:8080" || config.RegistryPath != "clusters.json" || config.ImagePoliciesPath != "" ||
 		config.WorkerConcurrency != 10 || config.MaxAttempts != 4 ||
 		config.ReadyTimeout != 2*time.Minute || config.PollInterval != time.Second ||
 		config.RollbackTimeout != 30*time.Second || config.DeleteTimeout != time.Minute ||
@@ -43,6 +44,8 @@ func TestLoadConfigParsesRuntimeSettingsAndRejectsInvalidValues(t *testing.T) {
 	config, err := loadConfig(environment(map[string]string{
 		"PROVISIONER_ADDR":                    "0.0.0.0:9090",
 		"PROVISIONER_CLUSTER_REGISTRY":        "clusters.json",
+		"PROVISIONER_IMAGE_POLICIES":          " /etc/secure-provisioner/web-image-policies.json ",
+		"PROVISIONER_FLAG_FILE":               " /etc/secure-provisioner/flags.json ",
 		"PROVISIONER_SERVICE_TOKEN":           validCurrentServiceToken,
 		"PROVISIONER_WORKERS":                 "2",
 		"PROVISIONER_MAX_ATTEMPTS":            "5",
@@ -55,7 +58,7 @@ func TestLoadConfigParsesRuntimeSettingsAndRejectsInvalidValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Address != "0.0.0.0:9090" || config.WorkerConcurrency != 2 ||
+	if config.Address != "0.0.0.0:9090" || config.ImagePoliciesPath != "/etc/secure-provisioner/web-image-policies.json" || config.FlagFilePath != "/etc/secure-provisioner/flags.json" || config.WorkerConcurrency != 2 ||
 		config.MaxAttempts != 5 || config.ReadyTimeout != 90*time.Second ||
 		config.PollInterval != 250*time.Millisecond || config.RollbackTimeout != 20*time.Second ||
 		config.DeleteTimeout != 45*time.Second || config.WorkerShutdownTimeout != 35*time.Second {
@@ -90,6 +93,78 @@ func TestLoadConfigParsesRuntimeSettingsAndRejectsInvalidValues(t *testing.T) {
 		"PROVISIONER_WORKER_SHUTDOWN_TIMEOUT": "20s",
 	})); err == nil {
 		t.Fatal("loadConfig() accepts worker shutdown shorter than rollback")
+	}
+	if _, err := loadConfig(environment(map[string]string{
+		"PROVISIONER_CLUSTER_REGISTRY": "clusters.json",
+		"PROVISIONER_SERVICE_TOKEN":    validCurrentServiceToken,
+		"PROVISIONER_FLAG_FILE":        "flags.json",
+	})); err == nil {
+		t.Fatal("loadConfig() accepts FLAG file without image policy")
+	}
+	if _, err := loadConfig(environment(map[string]string{
+		"PROVISIONER_CLUSTER_REGISTRY": "clusters.json",
+		"PROVISIONER_IMAGE_POLICIES":   "policies.json",
+		"PROVISIONER_SERVICE_TOKEN":    validCurrentServiceToken,
+		"PROVISIONER_FLAG_FILE":        "flags.json",
+	})); err == nil {
+		t.Fatal("loadConfig() accepts relative FLAG path")
+	}
+}
+
+func TestNewApplicationRequiresConfiguredFlagForEnabledImage(t *testing.T) {
+	directory := t.TempDir()
+	registryPath := filepath.Join(directory, "clusters.json")
+	registryJSON := `{"clusters":[{"target_id":"aws-dev","provider":"AWS","region":"ap-northeast-2","architecture":"amd64","kubeconfig_path":"unused","public_gateway":"https://gateway.example.test","ingress_class":"traefik","enabled":true,"security_capabilities":{"network_policy_enforced":true,"supplemental_groups_policy_strict":true,"pod_pid_limit_enforced":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}}]}`
+	if err := os.WriteFile(registryPath, []byte(registryJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const image = "registry.example.test/challenge@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	policyPath := filepath.Join(directory, "image-policies.json")
+	policyJSON := `{"schema_version":1,"managed_repositories":["registry.example.test/challenge"],"images":[{"image":"` + image + `","container":"challenge","isolation_profile":"WEB","status":"create_enabled","requires_flag":true,"run_as_user":10001,"ports":[8080],"exposed_ports":[8080],"writable_paths":[{"path":"/tmp","size_mib":64}]}]}`
+	if err := os.WriteFile(policyPath, []byte(policyJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config, err := loadConfig(environment(map[string]string{
+		"PROVISIONER_CLUSTER_REGISTRY": registryPath,
+		"PROVISIONER_IMAGE_POLICIES":   policyPath,
+		"PROVISIONER_SERVICE_TOKEN":    validCurrentServiceToken,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newApplication(config, fakeClientFactory{}); err == nil {
+		t.Fatal("enabled image started without its required FLAG")
+	}
+	flagDirectory := directory
+	if runtime.GOOS == "linux" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Fatal(err)
+		}
+		flagDirectory, err = os.MkdirTemp(home, "provisioner-flag-test-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(flagDirectory) })
+	}
+	flagPath := filepath.Join(flagDirectory, "flags.json")
+	flagJSON := `{"schema_version":1,"flags":[{"image":"` + image + `","flag":"CTF{test_only}"}]}`
+	if err := os.WriteFile(flagPath, []byte(flagJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config.FlagFilePath = flagPath
+	app, err := newApplication(config, fakeClientFactory{})
+	if runtime.GOOS == "linux" && os.Geteuid() != 0 {
+		if err == nil {
+			t.Fatal("application accepted non-root-owned FLAG file")
+		}
+		return
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if app.close != nil {
+		_ = app.close()
 	}
 }
 

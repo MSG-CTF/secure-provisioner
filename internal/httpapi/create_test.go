@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -38,6 +39,63 @@ func TestCreateWorkloadRequestDecodesSimplifiedMultiContainerContract(t *testing
 		t.Fatalf("policy request = %#v; unresolved policy = %#v", command.PolicyRequest, command.Policy)
 	}
 
+}
+
+func TestCreateWorkloadRequestCarriesNamedHTTPHealthcheckOnPrivatePort(t *testing.T) {
+	body := strings.Replace(validCreateRequestJSON(), `"resource_limits":`,
+		`"healthcheck":{"container":"api","port":9000,"path":"/healthz"},"resource_limits":`, 1)
+	var request CreateWorkloadRequest
+	if err := json.Unmarshal([]byte(body), &request); err != nil {
+		t.Fatal(err)
+	}
+	if err := request.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	containers := request.ToCommand().Containers
+	if containers[0].ReadinessHTTP != nil || containers[1].ReadinessHTTP == nil ||
+		containers[1].ReadinessHTTP.Port != 9000 || containers[1].ReadinessHTTP.Path != "/healthz" {
+		t.Fatalf("readiness = %#v", containers)
+	}
+}
+
+func TestCreateWorkloadRequestMatchesSchedulerHealthcheckPathRules(t *testing.T) {
+	for _, path := range []string{"/ready?mode=full#v1", "/" + strings.Repeat("a", 1023)} {
+		t.Run(path[:min(len(path), 20)], func(t *testing.T) {
+			body := strings.Replace(validCreateRequestJSON(), `"resource_limits":`,
+				`"healthcheck":{"container":"api","port":9000,"path":`+strconv.Quote(path)+`},"resource_limits":`, 1)
+			var request CreateWorkloadRequest
+			if err := json.Unmarshal([]byte(body), &request); err != nil {
+				t.Fatal(err)
+			}
+			if err := request.Validate(); err != nil {
+				t.Fatalf("valid Scheduler path rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestCreateWorkloadRequestRejectsInvalidHTTPHealthchecks(t *testing.T) {
+	for _, test := range []struct{ name, check string }{
+		{"missing container", `{"port":9000,"path":"/ready"}`},
+		{"unknown container", `{"container":"missing","port":9000,"path":"/ready"}`},
+		{"wrong container port", `{"container":"api","port":8080,"path":"/ready"}`},
+		{"relative path", `{"container":"api","port":9000,"path":"ready"}`},
+		{"space", `{"container":"api","port":9000,"path":"/not ready"}`},
+		{"control", `{"container":"api","port":9000,"path":"/ready\n"}`},
+		{"too long", `{"container":"api","port":9000,"path":"/` + strings.Repeat("a", 1024) + `"}`},
+		{"unknown field", `{"container":"api","port":9000,"path":"/ready","timeout":2}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			body := strings.Replace(validCreateRequestJSON(), `"resource_limits":`,
+				`"healthcheck":`+test.check+`,"resource_limits":`, 1)
+			var request CreateWorkloadRequest
+			if err := json.Unmarshal([]byte(body), &request); err == nil {
+				if err := request.Validate(); err == nil {
+					t.Fatal("invalid healthcheck accepted")
+				}
+			}
+		})
+	}
 }
 
 func TestCreateWorkloadRequestMapsExactIsolationProfiles(t *testing.T) {

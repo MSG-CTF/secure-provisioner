@@ -287,6 +287,7 @@ func (s *Service) GetRuntimeStatus(ctx context.Context, instanceID string) (k3s.
 	if binding.State == runtimebinding.StateDeleted {
 		return k3s.RuntimeStatus{
 			InstanceID:        binding.InstanceID,
+			TeamID:            binding.TeamID,
 			TargetID:          binding.TargetID,
 			RuntimeWorkloadID: binding.RuntimeWorkloadID,
 			Phase:             "TERMINATED",

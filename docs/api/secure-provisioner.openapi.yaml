@@ -52,6 +52,10 @@ paths:
                         ports: [9000]
                         expose: false
                         run_as_user: 10001
+                    healthcheck:
+                      container: api
+                      port: 9000
+                      path: /healthz
                     resource_limits:
                       cpu_millicores: 500
                       memory_mib: 512
@@ -165,7 +169,7 @@ paths:
                       code: UNSUPPORTED_MEDIA_TYPE
                       message: Content-Type must be application/json
         "422":
-          description: The syntactically valid isolation request was rejected by the trusted policy resolver
+          description: The syntactically valid request was rejected by the trusted isolation resolver or operator-owned image policy
           content:
             application/json:
               schema:
@@ -176,6 +180,11 @@ paths:
                     error:
                       code: ISOLATION_POLICY_REJECTED
                       message: isolation policy was rejected
+                ImagePolicyRejected:
+                  value:
+                    error:
+                      code: IMAGE_POLICY_REJECTED
+                      message: "image policy rejected: image digest has no reviewed policy"
         "502":
           description: Create operation could not be queued
           content:
@@ -671,8 +680,31 @@ components:
                     minItems: 1
           items:
             $ref: "#/components/schemas/RuntimeContainer"
+        healthcheck:
+          $ref: "#/components/schemas/RuntimeHTTPHealthcheck"
         resource_limits:
           $ref: "#/components/schemas/ResourceLimits"
+    RuntimeHTTPHealthcheck:
+      type: object
+      additionalProperties: false
+      description: >-
+        Optional HTTP readiness check. The named container and port must be declared
+        in this workload. This request value overrides an image policy readiness_http
+        for the same container. Readiness must pass before the create operation succeeds;
+        a readiness timeout fails it with WORKLOAD_NOT_READY.
+      required: [container, port, path]
+      properties:
+        container:
+          type: string
+          minLength: 1
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        path:
+          type: string
+          pattern: '^/'
+          maxLength: 1024
     RuntimeContainer:
       type: object
       additionalProperties: false

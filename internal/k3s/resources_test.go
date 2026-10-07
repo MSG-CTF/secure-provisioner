@@ -1,6 +1,7 @@
 package k3s
 
 import (
+	"encoding/json"
 	"math"
 	"reflect"
 	"strings"
@@ -36,12 +37,12 @@ func TestBuildResourceSetCreatesOwnedKubernetesResources(t *testing.T) {
 		"msgctf.io/instance-id":        command.InstanceID,
 		"msgctf.io/team-id":            "00000000-0000-4000-8000-000000000042",
 	}
-	for resource, labels := range map[string]map[string]string{
-		"namespace": resources.Namespace.Labels,
-		"ingress":   resources.Ingress.Labels,
-	} {
-		assertExactOwnershipLabels(t, resource, labels, wantOwnerLabels)
+	wantNamespaceLabels := copyLabels(wantOwnerLabels)
+	for _, mode := range []string{"enforce", "audit", "warn"} {
+		wantNamespaceLabels["pod-security.kubernetes.io/"+mode] = "restricted"
 	}
+	assertExactOwnershipLabels(t, "namespace", resources.Namespace.Labels, wantNamespaceLabels)
+	assertExactOwnershipLabels(t, "ingress", resources.Ingress.Labels, wantOwnerLabels)
 	wantContainerLabels := copyLabels(wantOwnerLabels)
 	wantContainerLabels[containerNameLabel] = resourceName
 	for resource, labels := range map[string]map[string]string{
@@ -100,6 +101,57 @@ func TestBuildResourceSetCreatesOwnedKubernetesResources(t *testing.T) {
 	}
 	if path.Backend.Service.Name != resourceName || path.Backend.Service.Port.Number != int32(command.Containers[0].Ports[0]) {
 		t.Fatalf("ingress backend = %#v, want challenge:%d", path.Backend.Service, command.Containers[0].Ports[0])
+	}
+}
+
+func TestBuildResourceSetDisablesServiceLinkEnvironmentForEveryPod(t *testing.T) {
+	resources, err := BuildResourceSet(validCluster("aws-dev"), validMultiCreateCommand("aws-dev"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, deployment := range resources.Deployments {
+		serviceLinks := deployment.Spec.Template.Spec.EnableServiceLinks
+		if serviceLinks == nil || *serviceLinks {
+			t.Fatalf("deployment %q enables Kubernetes service environment variables: %v", deployment.Name, serviceLinks)
+		}
+	}
+}
+
+func TestBuildResourceSetUsesHTTPReadinessAndProbeDefaults(t *testing.T) {
+	command := validCreateCommand("aws-dev")
+	if err := json.Unmarshal([]byte(`{"ReadinessHTTP":{"Path":"/healthz","Port":8080}}`), &command.Containers[0]); err != nil {
+		t.Fatal(err)
+	}
+	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe := resources.Deployment.Spec.Template.Spec.Containers[0].ReadinessProbe
+	if probe == nil || probe.HTTPGet == nil || probe.HTTPGet.Path != "/healthz" || probe.HTTPGet.Port.IntVal != 8080 ||
+		probe.TimeoutSeconds != 2 || probe.PeriodSeconds != 2 || probe.FailureThreshold != 3 {
+		t.Fatalf("HTTP readiness probe = %#v", probe)
+	}
+}
+
+func TestBuildResourceSetEnforcesRestrictedPodSecurity(t *testing.T) {
+	resources, err := BuildResourceSet(validCluster("aws-dev"), validCreateCommand("aws-dev"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"enforce", "audit", "warn"} {
+		key := "pod-security.kubernetes.io/" + mode
+		if got := resources.Namespace.Labels[key]; got != "restricted" {
+			t.Fatalf("Namespace label %q = %q, want restricted", key, got)
+		}
+	}
+	for _, resourceLabels := range []map[string]string{
+		resources.ServiceAccount.Labels,
+		resources.Deployment.Labels,
+		resources.Deployment.Spec.Template.Labels,
+	} {
+		if _, found := resourceLabels["pod-security.kubernetes.io/enforce"]; found {
+			t.Fatal("Pod Security Admission labels must only be on the Namespace")
+		}
 	}
 }
 

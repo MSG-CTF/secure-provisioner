@@ -28,8 +28,8 @@ func TestBuildResourceSetAppliesNonNegotiablePodBaseline(t *testing.T) {
 	if resources.ServiceAccount.AutomountServiceAccountToken == nil || *resources.ServiceAccount.AutomountServiceAccountToken {
 		t.Fatal("service account token automount must be false")
 	}
-	if !reflect.DeepEqual(resources.ServiceAccount.Labels, resources.Namespace.Labels) {
-		t.Fatalf("service account labels = %#v, namespace labels = %#v", resources.ServiceAccount.Labels, resources.Namespace.Labels)
+	if !reflect.DeepEqual(resources.ServiceAccount.Labels, ownershipLabels(command)) {
+		t.Fatalf("service account labels = %#v, owner labels = %#v", resources.ServiceAccount.Labels, ownershipLabels(command))
 	}
 
 	deployment := resources.Deployments[0]
@@ -212,7 +212,7 @@ func TestBuildResourceSetCreatesQuotaAndLimitRangeFromSingleContainerPolicy(t *t
 	if resources.ResourceQuota.Namespace != resources.Namespace.Name || resources.LimitRange.Namespace != resources.Namespace.Name {
 		t.Fatalf("protection namespaces = %q/%q, want %q", resources.ResourceQuota.Namespace, resources.LimitRange.Namespace, resources.Namespace.Name)
 	}
-	if !reflect.DeepEqual(resources.ResourceQuota.Labels, resources.Namespace.Labels) || !reflect.DeepEqual(resources.LimitRange.Labels, resources.Namespace.Labels) {
+	if !reflect.DeepEqual(resources.ResourceQuota.Labels, ownershipLabels(command)) || !reflect.DeepEqual(resources.LimitRange.Labels, ownershipLabels(command)) {
 		t.Fatal("quota and limit range must carry exact ownership labels")
 	}
 

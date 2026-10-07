@@ -111,6 +111,10 @@ func (api *API) handleRuntimeStatus(writer http.ResponseWriter, request *http.Re
 		writeAPIError(writer, http.StatusBadGateway, "RUNTIME_STATUS_FAILED", "runtime status lookup failed")
 		return
 	}
+	if isCISmokeRequest(request) && (status.TeamID != api.ciSmokeTeamID || status.TargetID != api.ciSmokeTargetID) {
+		writeAPIError(writer, http.StatusForbidden, "FORBIDDEN", "CI smoke token cannot read this instance")
+		return
+	}
 	writeJSON(writer, http.StatusOK, newRuntimeStatusResponse(status))
 }
 
@@ -156,6 +160,10 @@ func (api *API) handleDeleteInstance(writer http.ResponseWriter, request *http.R
 		writeAPIError(writer, http.StatusConflict, "INSTANCE_BINDING_MISMATCH", "request does not match the stored runtime binding")
 		return
 	}
+	if isCISmokeRequest(request) && (deleteRequest.TeamID != api.ciSmokeTeamID || deleteRequest.Target.TargetID != api.ciSmokeTargetID) {
+		writeAPIError(writer, http.StatusForbidden, "FORBIDDEN", "CI smoke token cannot delete this instance")
+		return
+	}
 
 	operation, created, err := api.runtime.EnqueueDelete(deleteRequest.ToCommand())
 	if err != nil {
@@ -173,6 +181,10 @@ func (api *API) handleGetOperation(writer http.ResponseWriter, request *http.Req
 			return
 		}
 		writeAPIError(writer, http.StatusInternalServerError, "OPERATION_LOOKUP_FAILED", "operation lookup failed")
+		return
+	}
+	if isCISmokeRequest(request) && !api.allowsCISmokeOperation(operation) {
+		writeAPIError(writer, http.StatusForbidden, "FORBIDDEN", "CI smoke token cannot read this operation")
 		return
 	}
 	if operationNeedsPolling(operation.Status) {
