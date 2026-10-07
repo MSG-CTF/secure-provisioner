@@ -23,10 +23,17 @@ type RuntimeTarget struct {
 }
 
 type RuntimeWorkload struct {
-	Image          string             `json:"image,omitempty"`
-	ContainerPort  int                `json:"container_port,omitempty"`
-	Containers     []RuntimeContainer `json:"containers,omitempty"`
-	ResourceLimits ResourceLimits     `json:"resource_limits"`
+	Image          string              `json:"image,omitempty"`
+	ContainerPort  int                 `json:"container_port,omitempty"`
+	Containers     []RuntimeContainer  `json:"containers,omitempty"`
+	Healthcheck    *RuntimeHealthcheck `json:"healthcheck,omitempty"`
+	ResourceLimits ResourceLimits      `json:"resource_limits"`
+}
+
+type RuntimeHealthcheck struct {
+	Container string `json:"container"`
+	Port      int    `json:"port"`
+	Path      string `json:"path"`
 }
 
 type RuntimeContainer struct {
@@ -287,12 +294,12 @@ func (request CreateWorkloadRequest) normalizedContainers() ([]provisioner.Workl
 		if !validPort(request.Workload.ContainerPort) {
 			return nil, fmt.Errorf("container_port must be between 1 and 65535")
 		}
-		return []provisioner.WorkloadContainer{{
+		return request.withHealthcheck([]provisioner.WorkloadContainer{{
 			Name:   "challenge",
 			Image:  request.Workload.Image,
 			Ports:  []int{request.Workload.ContainerPort},
 			Expose: true,
-		}}, nil
+		}})
 	}
 
 	containers := make([]provisioner.WorkloadContainer, 0, len(request.Workload.Containers))
@@ -360,7 +367,30 @@ func (request CreateWorkloadRequest) normalizedContainers() ([]provisioner.Workl
 	if !hasExposed {
 		return nil, fmt.Errorf("at least one container must be exposed")
 	}
-	return containers, nil
+	return request.withHealthcheck(containers)
+}
+
+func (request CreateWorkloadRequest) withHealthcheck(containers []provisioner.WorkloadContainer) ([]provisioner.WorkloadContainer, error) {
+	check := request.Workload.Healthcheck
+	if check == nil {
+		return containers, nil
+	}
+	if !validHTTPReadinessPath(check.Path) {
+		return nil, fmt.Errorf("healthcheck path must start with / and be a valid HTTP path")
+	}
+	for index := range containers {
+		if containers[index].Name != check.Container {
+			continue
+		}
+		for _, port := range containers[index].Ports {
+			if port == check.Port {
+				containers[index].ReadinessHTTP = &provisioner.HTTPReadiness{Path: check.Path, Port: check.Port}
+				return containers, nil
+			}
+		}
+		return nil, fmt.Errorf("healthcheck port must be declared on its container")
+	}
+	return nil, fmt.Errorf("healthcheck container must be declared")
 }
 
 func validImmutableImageReference(value string) bool {

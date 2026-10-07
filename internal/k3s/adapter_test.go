@@ -2600,6 +2600,10 @@ func TestAdapterRollsBackOwnedNamespaceWhenReadinessTimesOut(t *testing.T) {
 	if runtimeErrorCode(t, err) != "WORKLOAD_NOT_READY" {
 		t.Fatalf("code = %q, want WORKLOAD_NOT_READY", runtimeErrorCode(t, err))
 	}
+	var runtimeErr *RuntimeError
+	if !errors.As(err, &runtimeErr) || runtimeErr.Retryable() {
+		t.Fatalf("readiness timeout must be a final failure: %v", err)
+	}
 	assertDeleteActionCount(t, client, "namespaces", 1)
 }
 

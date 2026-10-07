@@ -247,7 +247,7 @@ func (catalog *ImagePolicyCatalog) Apply(request *CreateWorkloadRequest) error {
 }
 
 func validHTTPReadinessPath(value string) bool {
-	return strings.HasPrefix(value, "/") && !strings.ContainsAny(value, "?#\r\n\x00") && len(value) <= 256
+	return provisioner.ValidHTTPReadinessPath(value)
 }
 
 func imageRepository(image string) string {

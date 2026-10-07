@@ -1001,7 +1001,7 @@ func failureWithoutRollback(code string, cause error) error {
 	if errors.As(cause, &runtimeErr) {
 		return runtimeErr
 	}
-	retryable := code == "WORKLOAD_NOT_READY" || code == "OPERATION_CANCELLED"
+	retryable := code == "OPERATION_CANCELLED"
 	if code == "RESOURCE_APPLY_FAILED" {
 		retryable = kubernetesErrorRetryable(cause)
 	}

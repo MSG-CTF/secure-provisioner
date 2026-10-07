@@ -90,6 +90,31 @@ func TestImagePolicyCarriesTrustedHTTPReadinessIntoCreateCommand(t *testing.T) {
 	}
 }
 
+func TestRequestedHealthcheckOverridesPolicyReadinessForNamedContainer(t *testing.T) {
+	withReadiness := strings.Replace(testImagePolicies, `"status": "create_enabled",`,
+		`"status": "create_enabled", "readiness_http": {"path": "/", "port": 8080},`, 1)
+	withReadiness = strings.Replace(withReadiness, `"ports": [8080],`, `"ports": [8080, 9090],`, 1)
+	catalog, err := ParseImagePolicies([]byte(withReadiness))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := validCreateWorkloadRequest()
+	request.Workload.Containers = []RuntimeContainer{{
+		Name: "web", Image: gradePolicyImage, Ports: []int{8080, 9090}, Expose: true, RunAsUser: 10001,
+	}}
+	request.Workload.Healthcheck = &RuntimeHealthcheck{Container: "web", Port: 9090, Path: "/healthz"}
+	if err := catalog.Apply(&request); err != nil {
+		t.Fatal(err)
+	}
+	if err := request.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	check := request.ToCommand().Containers[0].ReadinessHTTP
+	if check == nil || check.Path != "/healthz" || check.Port != 9090 {
+		t.Fatalf("requested healthcheck was overridden by policy: %#v", check)
+	}
+}
+
 func TestImagePolicyRejectsUnreviewedDigestAndWrongContainer(t *testing.T) {
 	catalog, err := ParseImagePolicies([]byte(testImagePolicies))
 	if err != nil {

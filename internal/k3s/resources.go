@@ -465,9 +465,7 @@ func validWorkloadCommand(
 		}
 		if container.ReadinessHTTP != nil {
 			if _, declared := ports[container.ReadinessHTTP.Port]; !declared ||
-				!strings.HasPrefix(container.ReadinessHTTP.Path, "/") ||
-				strings.ContainsAny(container.ReadinessHTTP.Path, "?#\r\n\x00") ||
-				len(container.ReadinessHTTP.Path) > 256 {
+				!provisioner.ValidHTTPReadinessPath(container.ReadinessHTTP.Path) {
 				return false
 			}
 		}

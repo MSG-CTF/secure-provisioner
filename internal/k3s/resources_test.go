@@ -117,9 +117,9 @@ func TestBuildResourceSetDisablesServiceLinkEnvironmentForEveryPod(t *testing.T)
 	}
 }
 
-func TestBuildResourceSetWaitsForTrustedHTTPReadiness(t *testing.T) {
+func TestBuildResourceSetUsesHTTPReadinessAndProbeDefaults(t *testing.T) {
 	command := validCreateCommand("aws-dev")
-	if err := json.Unmarshal([]byte(`{"ReadinessHTTP":{"Path":"/","Port":8080}}`), &command.Containers[0]); err != nil {
+	if err := json.Unmarshal([]byte(`{"ReadinessHTTP":{"Path":"/healthz","Port":8080}}`), &command.Containers[0]); err != nil {
 		t.Fatal(err)
 	}
 	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
@@ -127,8 +127,9 @@ func TestBuildResourceSetWaitsForTrustedHTTPReadiness(t *testing.T) {
 		t.Fatal(err)
 	}
 	probe := resources.Deployment.Spec.Template.Spec.Containers[0].ReadinessProbe
-	if probe == nil || probe.HTTPGet == nil || probe.HTTPGet.Path != "/" || probe.HTTPGet.Port.IntVal != 8080 {
-		t.Fatalf("trusted HTTP readiness probe = %#v", probe)
+	if probe == nil || probe.HTTPGet == nil || probe.HTTPGet.Path != "/healthz" || probe.HTTPGet.Port.IntVal != 8080 ||
+		probe.TimeoutSeconds != 2 || probe.PeriodSeconds != 2 || probe.FailureThreshold != 3 {
+		t.Fatalf("HTTP readiness probe = %#v", probe)
 	}
 }
 
