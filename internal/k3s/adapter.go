@@ -24,16 +24,18 @@ import (
 )
 
 type AdapterConfig struct {
-	ReadyTimeout    time.Duration
-	PollInterval    time.Duration
-	RollbackTimeout time.Duration
-	Flags           *FlagCatalog
+	ReadyTimeout       time.Duration
+	PollInterval       time.Duration
+	RollbackTimeout    time.Duration
+	Secrets            SecretResolver
+	RequiredFlagImages []string
 }
 
 type Adapter struct {
-	registry      *Registry
-	config        AdapterConfig
-	workloadLocks *workloadLockSet
+	registry           *Registry
+	config             AdapterConfig
+	workloadLocks      *workloadLockSet
+	requiredFlagImages map[string]bool
 }
 
 type appliedResourceSet struct {
@@ -53,12 +55,23 @@ func NewAdapter(registry *Registry, config AdapterConfig) (*Adapter, error) {
 	if config.RollbackTimeout == 0 {
 		config.RollbackTimeout = defaultRollbackTimeout
 	}
-	return &Adapter{registry: registry, config: config, workloadLocks: newWorkloadLockSet()}, nil
+	requiredFlags := make(map[string]bool, len(config.RequiredFlagImages))
+	for _, image := range config.RequiredFlagImages {
+		requiredFlags[image] = true
+	}
+	config.RequiredFlagImages = append([]string(nil), config.RequiredFlagImages...)
+	return &Adapter{registry: registry, config: config, workloadLocks: newWorkloadLockSet(), requiredFlagImages: requiredFlags}, nil
 }
 
 func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.CreateWorkloadCommand) (provisioner.CreateWorkloadResult, error) {
 	if err := ctx.Err(); err != nil {
 		return provisioner.CreateWorkloadResult{}, operationCancelledError(err)
+	}
+	// HTTP admission is bypassed when a queued command is replayed after an upgrade.
+	for _, container := range normalizedCommandContainers(command) {
+		if a.requiredFlagImages[container.Image] && (!container.RequiresFlag || container.SecretRef == "") {
+			return provisioner.CreateWorkloadResult{}, newRuntimeError("SECRET_RESOLUTION_FAILED", false, nil)
+		}
 	}
 	release, err := a.workloadLocks.acquire(ctx, workloadLockKey(command.TargetID, command.InstanceID))
 	if err != nil {
@@ -77,8 +90,8 @@ func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.Create
 	if err != nil {
 		return provisioner.CreateWorkloadResult{}, err
 	}
-	if err := addFlagResources(&resources, command, a.config.Flags); err != nil {
-		return provisioner.CreateWorkloadResult{}, newRuntimeError("CONFIG_INVALID", false, nil)
+	if err := addSecretResources(ctx, &resources, command, a.config.Secrets); err != nil {
+		return provisioner.CreateWorkloadResult{}, err
 	}
 	if cluster.Client == nil {
 		return provisioner.CreateWorkloadResult{}, newRuntimeError("K3S_UNAVAILABLE", true, nil)
@@ -207,8 +220,8 @@ func applyResourceSet(ctx context.Context, client kubernetes.Interface, resource
 	if err := applyProtectionResourceSet(ctx, client, resources); err != nil {
 		return appliedResourceSet{}, err
 	}
-	if resources.FlagSecret != nil {
-		if err := applyFlagSecret(ctx, client, resources.FlagSecret); err != nil {
+	if resources.EnvSecret != nil {
+		if err := applyEnvSecret(ctx, client, resources.EnvSecret); err != nil {
 			return appliedResourceSet{}, err
 		}
 	}
@@ -254,10 +267,10 @@ func preflightResourceSet(ctx context.Context, client kubernetes.Interface, reso
 	}, resources.ResourceQuota); err != nil {
 		return err
 	}
-	if resources.FlagSecret != nil {
+	if resources.EnvSecret != nil {
 		if err := preflightOwnedResource(func() (metav1.Object, error) {
-			return client.CoreV1().Secrets(resources.FlagSecret.Namespace).Get(ctx, resources.FlagSecret.Name, metav1.GetOptions{})
-		}, resources.FlagSecret); err != nil {
+			return client.CoreV1().Secrets(resources.EnvSecret.Namespace).Get(ctx, resources.EnvSecret.Name, metav1.GetOptions{})
+		}, resources.EnvSecret); err != nil {
 			return err
 		}
 	}

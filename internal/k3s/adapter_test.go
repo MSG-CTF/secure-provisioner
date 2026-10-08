@@ -51,19 +51,16 @@ func TestAdapterDoesNotCreateDeploymentWhenProtectionApplyFails(t *testing.T) {
 	}
 }
 
-func TestAdapterRollsBackWhenFlagSecretCannotBeCreated(t *testing.T) {
+func TestAdapterRollsBackWhenEnvSecretCannotBeCreated(t *testing.T) {
 	command := validCreateCommand("aws-dev")
 	client := readyClient(t, command)
 	client.PrependReactor("create", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, errors.New("Secret create failed")
 	})
 	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
-	catalog, err := ParseFlagCatalog([]byte(testFlagJSON))
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter.config.Flags = catalog
-	_, err = adapter.CreateWorkload(context.Background(), command)
+	command.Containers[0].SecretRef = testBackendSecretRef
+	adapter.config.Secrets = fixedTestSecretResolver{values: map[string]string{"FLAG": testBackendFlag}}
+	_, err := adapter.CreateWorkload(context.Background(), command)
 	if runtimeErrorCode(t, err) != "RESOURCE_APPLY_FAILED" {
 		t.Fatalf("error = %v", err)
 	}
@@ -71,17 +68,14 @@ func TestAdapterRollsBackWhenFlagSecretCannotBeCreated(t *testing.T) {
 	assertDeleteActionCount(t, client, "namespaces", 1)
 }
 
-func TestApplyResourceSetCreatesFlagSecretBeforeDeployment(t *testing.T) {
+func TestApplyResourceSetCreatesEnvSecretBeforeDeployment(t *testing.T) {
 	command := validCreateCommand("aws-dev")
 	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
 	if err != nil {
 		t.Fatal(err)
 	}
-	catalog, err := ParseFlagCatalog([]byte(testFlagJSON))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := addFlagResources(&resources, command, catalog); err != nil {
+	command.Containers[0].SecretRef = testBackendSecretRef
+	if err := addSecretResources(context.Background(), &resources, command, fixedTestSecretResolver{values: map[string]string{"FLAG": testBackendFlag}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := prepareProtectionHashes(resources); err != nil {
@@ -1430,12 +1424,15 @@ func TestAdapterWaitsForLatestRevisionPodAndItsEndpoint(t *testing.T) {
 	client := fake.NewSimpleClientset(oldPod, oldEndpoint)
 	installNamespaceCreateMetadata(t, client, "test-namespace-uid", "1")
 	installDeploymentController(client, true)
-	podListed := make(chan struct{})
+	podListed := make(chan struct{}, 1)
 	firstListRelease := make(chan struct{})
 	listCount := 0
 	client.PrependReactor("list", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
 		listCount++
-		podListed <- struct{}{}
+		select {
+		case podListed <- struct{}{}:
+		default:
+		}
 		if listCount == 1 {
 			<-firstListRelease
 		}

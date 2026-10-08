@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -45,7 +44,8 @@ func TestLoadConfigParsesRuntimeSettingsAndRejectsInvalidValues(t *testing.T) {
 		"PROVISIONER_ADDR":                    "0.0.0.0:9090",
 		"PROVISIONER_CLUSTER_REGISTRY":        "clusters.json",
 		"PROVISIONER_IMAGE_POLICIES":          " /etc/secure-provisioner/web-image-policies.json ",
-		"PROVISIONER_FLAG_FILE":               " /etc/secure-provisioner/flags.json ",
+		"PROVISIONER_BACKEND_SECRET_URL":      " https://backend.example.test ",
+		"PROVISIONER_BACKEND_SECRET_TOKEN":    validCurrentServiceToken,
 		"PROVISIONER_SERVICE_TOKEN":           validCurrentServiceToken,
 		"PROVISIONER_WORKERS":                 "2",
 		"PROVISIONER_MAX_ATTEMPTS":            "5",
@@ -58,7 +58,7 @@ func TestLoadConfigParsesRuntimeSettingsAndRejectsInvalidValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Address != "0.0.0.0:9090" || config.ImagePoliciesPath != "/etc/secure-provisioner/web-image-policies.json" || config.FlagFilePath != "/etc/secure-provisioner/flags.json" || config.WorkerConcurrency != 2 ||
+	if config.Address != "0.0.0.0:9090" || config.ImagePoliciesPath != "/etc/secure-provisioner/web-image-policies.json" || config.BackendSecretURL != "https://backend.example.test" || config.BackendSecretToken != validCurrentServiceToken || config.WorkerConcurrency != 2 ||
 		config.MaxAttempts != 5 || config.ReadyTimeout != 90*time.Second ||
 		config.PollInterval != 250*time.Millisecond || config.RollbackTimeout != 20*time.Second ||
 		config.DeleteTimeout != 45*time.Second || config.WorkerShutdownTimeout != 35*time.Second {
@@ -111,7 +111,7 @@ func TestLoadConfigParsesRuntimeSettingsAndRejectsInvalidValues(t *testing.T) {
 	}
 }
 
-func TestNewApplicationRequiresConfiguredFlagForEnabledImage(t *testing.T) {
+func TestNewApplicationRequiresBackendResolverForFlagImages(t *testing.T) {
 	directory := t.TempDir()
 	registryPath := filepath.Join(directory, "clusters.json")
 	registryJSON := `{"clusters":[{"target_id":"aws-dev","provider":"AWS","region":"ap-northeast-2","architecture":"amd64","kubeconfig_path":"unused","public_gateway":"https://gateway.example.test","ingress_class":"traefik","enabled":true,"security_capabilities":{"network_policy_enforced":true,"supplemental_groups_policy_strict":true,"pod_pid_limit_enforced":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"}}}]}`
@@ -135,37 +135,17 @@ func TestNewApplicationRequiresConfiguredFlagForEnabledImage(t *testing.T) {
 	if _, err := newApplication(config, fakeClientFactory{}); err == nil {
 		t.Fatal("enabled image started without its required FLAG")
 	}
-	flagDirectory := directory
-	if runtime.GOOS == "linux" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			t.Fatal(err)
-		}
-		flagDirectory, err = os.MkdirTemp(home, "provisioner-flag-test-")
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = os.RemoveAll(flagDirectory) })
-	}
-	flagPath := filepath.Join(flagDirectory, "flags.json")
-	flagJSON := `{"schema_version":1,"flags":[{"image":"` + image + `","flag":"CTF{test_only}"}]}`
-	if err := os.WriteFile(flagPath, []byte(flagJSON), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	config.FlagFilePath = flagPath
+
+	config.BackendSecretURL = "http://127.0.0.1:18125"
+	config.BackendSecretToken = validCurrentServiceToken
 	app, err := newApplication(config, fakeClientFactory{})
-	if runtime.GOOS == "linux" && os.Geteuid() != 0 {
-		if err == nil {
-			t.Fatal("application accepted non-root-owned FLAG file")
-		}
-		return
-	}
 	if err != nil {
 		t.Fatal(err)
 	}
 	if app.close != nil {
 		_ = app.close()
 	}
+
 }
 
 func TestNewApplicationQueuesCreateThroughRuntimeService(t *testing.T) {

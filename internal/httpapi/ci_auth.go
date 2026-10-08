@@ -12,7 +12,8 @@ func (api *API) allowsCISmokeCreate(request CreateWorkloadRequest) bool {
 		request.Workload.ResourceLimits.EphemeralStorageMiB > 1024 {
 		return false
 	}
-	return api.imagePolicies.AllowsCISmoke(request.Workload.Containers[0].Image)
+	return request.Workload.Containers[0].SecretRef == "" &&
+		api.imagePolicies.AllowsCISmoke(request.Workload.Containers[0].Image)
 }
 
 func (api *API) allowsCISmokeOperation(operation operations.Operation) bool {

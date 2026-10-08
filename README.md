@@ -40,7 +40,8 @@ raw Kubernetes/보안 설정과 제거된 과거 profile 참조 필드는 API �
 |---|---:|---|
 | `PROVISIONER_CLUSTER_REGISTRY` | 없음 | target Registry JSON 파일 경로 |
 | `PROVISIONER_IMAGE_POLICIES` | 없음 | 검토된 이미지 digest별 정책 JSON 파일 경로 |
-| `PROVISIONER_FLAG_FILE` | 없음 | 이미지 정책에서 `requires_flag`로 승인한 이미지의 FLAG를 담은 VM 전용 파일 경로 |
+| `PROVISIONER_BACKEND_SECRET_URL` | 없음 | 비밀값 조회용 Backend origin, 운영 HTTPS 필수 |
+| `PROVISIONER_BACKEND_SECRET_TOKEN` | 없음 | Backend의 Runtime worker 전용 조회 토큰 |
 | `PROVISIONER_ADDR` | `127.0.0.1:8080` | HTTP 수신 주소 |
 | `PROVISIONER_WORKER_CONCURRENCY` | `4` | Operation Worker 수 |
 | `PROVISIONER_MAX_ATTEMPTS` | `3` | Operation 최대 시도 횟수 |
@@ -228,3 +229,5 @@ Node를 capable로 선언하거나 승인하면 안 됩니다. Kubernetes v1.33 
 K3s 버전의 지원을 보장한다는 의미가 아닙니다. 실제 NetworkPolicy 격리 효과와
 resident-node/metadata host boundary는 각각 `#11`, `#32`의 검증이 끝날 때까지
 production 완료로 간주하지 않습니다.
+
+실행 설정 전환: [백엔드 비밀값 주입](docs/operations/backend-secret-injection.md)
