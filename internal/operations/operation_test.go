@@ -9,6 +9,33 @@ import (
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 )
 
+func TestExecutionEnvironmentIsCopiedAndIncludedInIdempotency(t *testing.T) {
+	command := provisioner.CreateWorkloadCommand{RequestID: "env-fixture", Containers: []provisioner.WorkloadContainer{{Name: "web", Env: map[string]string{"APP_MODE": "ctf"}, SecretRef: "152839e6-6c28-4ad7-b109-378df7d0092c"}}}
+	operation, err := NewCreateOperation("env-operation", command, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command.Containers[0].Env["APP_MODE"] = "changed"
+	if operation.CreateCommand.Containers[0].Env["APP_MODE"] != "ctf" {
+		t.Fatal("stored command aliases caller env")
+	}
+	for _, mutate := range []func(*provisioner.CreateWorkloadCommand){
+		func(c *provisioner.CreateWorkloadCommand) { c.Containers[0].Env["APP_MODE"] = "different" },
+		func(c *provisioner.CreateWorkloadCommand) { c.Containers[0].SecretRef = "different" },
+		func(c *provisioner.CreateWorkloadCommand) { c.Containers[0].RequiresFlag = true },
+	} {
+		changed := copyCreateCommand(*operation.CreateCommand)
+		mutate(&changed)
+		other, err := NewCreateOperation("other-env-operation", changed, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if operation.SameRequest(other) {
+			t.Fatal("changed execution settings reused the idempotency key")
+		}
+	}
+}
+
 func TestNewCreateOperation(t *testing.T) {
 	command := provisioner.CreateWorkloadCommand{
 		RequestID:   "req-1",

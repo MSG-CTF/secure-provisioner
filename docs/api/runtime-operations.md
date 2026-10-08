@@ -8,6 +8,14 @@
   `docs/superpowers/specs/2026-07-28-async-runtime-operations-status-design.md`
   및 `docs/superpowers/specs/2026-09-09-instance-network-policy-design.md`
 
+## 실행 환경변수와 비밀값
+
+workload.containers의 env는 일반 문자열 값, secret_ref는 백엔드 릴리스 컨테이너 UUID입니다
+런타임은 비밀값 원문을 생성 요청으로 받지 않고 worker 전용 API로 조회합니다
+조회·검증 실패는 SECRET_RESOLUTION_FAILED로 처리하며 Pod를 만들지 않습니다
+CI smoke 토큰에는 secret_ref 사용 권한이 없습니다
+상세 계약과 전환 순서: [백엔드 비밀값 주입](../operations/backend-secret-injection.md)
+
 ## 공통 규칙
 
 - 생성과 삭제는 비동기 Operation으로 접수한다.

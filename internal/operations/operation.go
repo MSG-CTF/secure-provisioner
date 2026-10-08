@@ -2,6 +2,7 @@ package operations
 
 import (
 	"errors"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -116,6 +117,7 @@ func copyCreateCommand(command provisioner.CreateWorkloadCommand) provisioner.Cr
 	copied.Containers = make([]provisioner.WorkloadContainer, len(command.Containers))
 	for index, container := range command.Containers {
 		copied.Containers[index] = container
+		copied.Containers[index].Env = maps.Clone(container.Env)
 		copied.Containers[index].Ports = slices.Clone(container.Ports)
 		copied.Containers[index].ExposedPorts = slices.Clone(container.ExposedPorts)
 		if container.ReadinessHTTP != nil {
@@ -144,6 +146,9 @@ func sameCreateCommand(first, second provisioner.CreateWorkloadCommand) bool {
 		firstContainer := first.Containers[index]
 		secondContainer := second.Containers[index]
 		if firstContainer.Name != secondContainer.Name ||
+			firstContainer.SecretRef != secondContainer.SecretRef ||
+			firstContainer.RequiresFlag != secondContainer.RequiresFlag ||
+			!maps.Equal(firstContainer.Env, secondContainer.Env) ||
 			firstContainer.Image != secondContainer.Image ||
 			firstContainer.Expose != secondContainer.Expose ||
 			!reflect.DeepEqual(firstContainer.ReadinessHTTP, secondContainer.ReadinessHTTP) ||

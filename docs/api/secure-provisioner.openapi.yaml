@@ -739,6 +739,22 @@ components:
           format: int64
           minimum: 1
           description: Approved non-root numeric UID; this is not a Kubernetes securityContext.
+        env:
+          type: object
+          maxProperties: 32
+          propertyNames:
+            pattern: "^[A-Z_][A-Z0-9_]{0,63}$"
+          additionalProperties:
+            type: string
+            maxLength: 4096
+          description: 일반 환경변수 문자열을 그대로 주입한다. NUL과 비밀값 이름은 거절하며 값당 UTF-8 4096바이트, 이름과 값의 합계 16384바이트를 제한한다. 조회된 비밀값을 합친 한도도 검사한다.
+        secret_ref:
+          type: string
+          format: uuid
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          not:
+            const: "00000000-0000-0000-0000-000000000000"
+          description: Backend의 승인된 릴리스 컨테이너 참조. 생략하면 비밀값이 없으며 null·빈 문자열은 거절한다. Runtime worker 전용 조회로 Secret을 주입하며 CI smoke 토큰은 사용할 수 없다.
         writable_paths:
           type:
             - array
