@@ -119,6 +119,10 @@ Registry 예시:
 
 각 `target_id`는 독립 Kubernetes·Metrics 클라이언트와 연결됩니다. 상태
 조회 대상은 노드가 정확히 하나인 K3s여야 합니다.
+자체 호스팅 K3s는 `provider: "LOCAL"`로 등록합니다. `region`에는 운영자가
+구분할 위치 이름을 넣고, `public_gateway`에는 실제 이용자가 접근할 수 있는
+주소를 지정합니다. Registry의 보안 capability 값은 설치 및 검증 결과에 맞게
+설정해야 합니다.
 `NODE_PORT`는 공개 Service의 Kubernetes 할당 포트를 공인 IP와 조합하고,
 `INGRESS_PATH`는 기존 Ingress 경로를 사용합니다. `exposure_mode`를 생략하면
 `INGRESS_PATH`로 동작합니다.

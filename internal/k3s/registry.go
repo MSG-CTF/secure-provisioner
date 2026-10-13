@@ -105,7 +105,7 @@ func validateClusterConfig(config ClusterConfig, seenTargetIDs map[string]struct
 	if _, exists := seenTargetIDs[config.TargetID]; exists {
 		return ClusterConfig{}, newRuntimeError("CONFIG_INVALID", false, nil)
 	}
-	if config.Provider != ProviderAWS && config.Provider != ProviderGCP && config.Provider != ProviderNCP {
+	if config.Provider != ProviderAWS && config.Provider != ProviderGCP && config.Provider != ProviderNCP && config.Provider != ProviderLocal {
 		return ClusterConfig{}, newRuntimeError("CONFIG_INVALID", false, nil)
 	}
 	if config.ExposureMode == "" {
