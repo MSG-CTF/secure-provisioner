@@ -23,6 +23,21 @@ func writeRegistryFile(t *testing.T, content string) string {
 
 const completeSecurityCapabilitiesJSON = `{"network_policy_enforced":true,"supplemental_groups_policy_strict":true,"pod_pid_limit_enforced":true,"network_policy_provider":"kube-router","dns_namespace":"kube-system","dns_pod_selector":{"k8s-app":"kube-dns"},"ingress_namespace":"kube-system","ingress_pod_selector":{"app.kubernetes.io/name":"traefik"},"runtime_classes":["gvisor"]}`
 
+func TestLoadClusterConfigsAcceptsSelfHostedLocalK3sTarget(t *testing.T) {
+	path := writeRegistryFile(t, `{"clusters":[{"target_id":"local-k3s-test","provider":"LOCAL","region":"self-hosted","architecture":"amd64","kubeconfig_path":"/etc/rancher/k3s/k3s.yaml","public_gateway":"http://203.0.113.10","exposure_mode":"NODE_PORT","enabled":true,"security_capabilities":`+completeSecurityCapabilitiesJSON+`}]}`)
+	registry, err := LoadRegistry(path, &sequenceFactory{clients: []kubernetes.Interface{fake.NewSimpleClientset()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cluster, err := registry.LookupForCreate("local-k3s-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cluster.Config.Provider != ProviderLocal || cluster.Config.ExposureMode != ExposureModeNodePort || cluster.Client == nil || cluster.Metrics == nil {
+		t.Fatalf("local target config = %#v, clients = %T/%T", cluster.Config, cluster.Client, cluster.Metrics)
+	}
+}
+
 func TestLoadClusterConfigsAcceptsCompleteIsolationCapability(t *testing.T) {
 	path := writeRegistryFile(t, `{"clusters":[{"target_id":"lab","provider":"AWS","region":"ap-northeast-2","architecture":"amd64","kubeconfig_path":"lab.yaml","public_gateway":"https://lab.example","enabled":true,"security_capabilities":`+completeSecurityCapabilitiesJSON+`}]}`)
 	client := fake.NewSimpleClientset()
