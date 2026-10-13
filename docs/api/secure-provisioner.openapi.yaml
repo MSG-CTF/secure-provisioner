@@ -741,7 +741,7 @@ components:
           description: Approved non-root numeric UID; this is not a Kubernetes securityContext.
         env:
           type: object
-          maxProperties: 32
+          maxProperties: 128
           propertyNames:
             pattern: "^[A-Z_][A-Z0-9_]{0,63}$"
           additionalProperties:
