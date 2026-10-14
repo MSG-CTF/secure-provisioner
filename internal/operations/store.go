@@ -29,10 +29,10 @@ type LegacyStore interface {
 	Next(context.Context) (Operation, error)
 	MarkRunning(string) (Operation, error)
 	CheckpointCreateResult(string, provisioner.CreateWorkloadResult) (Operation, error)
-	MarkRetrying(string, string) (Operation, error)
+	MarkRetrying(string, Failure) (Operation, error)
 	Requeue(string) error
 	MarkSucceeded(string, OperationResult) (Operation, error)
-	MarkFailed(string, string) (Operation, error)
+	MarkFailed(string, Failure) (Operation, error)
 }
 
 type LeaseStore interface {
@@ -40,10 +40,10 @@ type LeaseStore interface {
 	Claim(context.Context, ClaimOptions) (ClaimedOperation, bool, error)
 	RenewLease(context.Context, ClaimedOperation, time.Time) (ClaimedOperation, error)
 	CheckpointLeaseCreateResult(ClaimedOperation, provisioner.CreateWorkloadResult, time.Time) (ClaimedOperation, error)
-	MarkLeaseRetrying(ClaimedOperation, string, time.Time, time.Time) (Operation, error)
+	MarkLeaseRetrying(ClaimedOperation, Failure, time.Time, time.Time) (Operation, error)
 	ReleaseLease(ClaimedOperation, time.Time) error
 	MarkLeaseSucceeded(ClaimedOperation, OperationResult, time.Time) (Operation, error)
-	MarkLeaseFailed(ClaimedOperation, string, time.Time) (Operation, error)
+	MarkLeaseFailed(ClaimedOperation, Failure, time.Time) (Operation, error)
 }
 
 type IDGenerator func() (string, error)

@@ -191,6 +191,30 @@ type bindingCreateAdapter struct {
 	createdBindings *createdBindingRecorder
 }
 
+func (a *bindingCreateAdapter) CleanupFailedCreate(ctx context.Context, command provisioner.CreateWorkloadCommand, cleanup provisioner.CreateCleanup) error {
+	if cleanup.RuntimeWorkloadID != "" {
+		namespace, err := k3s.NamespaceForInstance(command.InstanceID)
+		if err != nil {
+			return err
+		}
+		binding := createdBinding(command, provisioner.CreateWorkloadResult{RuntimeWorkloadID: cleanup.RuntimeWorkloadID, NamespaceUID: cleanup.NamespaceUID}, namespace, a.createdBindings.now().UTC())
+		err = a.createdBindings.cleanup.DeleteWorkload(ctx, provisioner.DeleteWorkloadCommand{
+			RequestID: command.RequestID, InstanceID: command.InstanceID, TeamID: command.TeamID,
+			RuntimeType: command.RuntimeType, TargetID: command.TargetID, RuntimeWorkloadID: cleanup.RuntimeWorkloadID,
+			Reason: provisioner.DeleteReasonCreateFailedCleanup,
+		}, binding)
+		if err != nil {
+			return provisioner.WithCreateCleanupPending(operations.NewExecutionError("ROLLBACK_FAILED", isRetryableCleanupError(err), err), cleanup)
+		}
+		return provisioner.WithCreateCleanupCompleted(operations.NewExecutionError(cleanup.FailureCode, false, nil))
+	}
+	cleaner, ok := a.inner.(k3s.FailedCreateCleaner)
+	if !ok {
+		return operations.NewExecutionError("ROLLBACK_FAILED", false, nil)
+	}
+	return cleaner.CleanupFailedCreate(ctx, command, cleanup)
+}
+
 func (a *bindingCreateAdapter) CreateWorkload(ctx context.Context, command provisioner.CreateWorkloadCommand) (provisioner.CreateWorkloadResult, error) {
 	return a.inner.CreateWorkload(ctx, command)
 }
@@ -233,13 +257,13 @@ func (r *createdBindingRecorder) Save(
 			Reason:            provisioner.DeleteReasonCreateFailedCleanup,
 		}, binding)
 		if cleanupErr != nil {
-			return operations.NewExecutionError(
+			return provisioner.WithCreateCleanupPending(operations.NewExecutionError(
 				"ROLLBACK_FAILED",
 				isRetryableCleanupError(cleanupErr),
 				errors.Join(saveErr, cleanupErr),
-			)
+			), provisioner.CreateCleanup{NamespaceUID: result.NamespaceUID, RuntimeWorkloadID: result.RuntimeWorkloadID, FailureCode: "RUNTIME_BINDING_SAVE_FAILED"})
 		}
-		return operations.NewExecutionError("RUNTIME_BINDING_SAVE_FAILED", false, saveErr)
+		return provisioner.WithCreateCleanupCompleted(operations.NewExecutionError("RUNTIME_BINDING_SAVE_FAILED", false, saveErr))
 	}
 	return nil
 }

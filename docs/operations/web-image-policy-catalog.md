@@ -30,10 +30,42 @@ CI 토큰은 전용 팀·Target에서 위 세 WEB digest 중 하나의 단일 �
 | Daily Point | `create_enabled` | `web` UID 10001, `/tmp` 64 MiB + `/app/data` 64 MiB, 외부 8080. 해당 digest의 실제 K3s 생성·HTTP 응답·삭제 확인 |
 | Open House | `create_enabled` | `web` UID 10001, `/tmp` 64 MiB, 외부 8080. 해당 digest의 실제 K3s 생성·HTTP 응답·삭제 확인 |
 | Logout Please | `create_enabled` | 최신 발행 digest `c1736999…931909`, UID 10001, `/tmp` 64 MiB, 8080만 공개하고 9090은 내부 health. `requires_flag: true`이며 백엔드의 승인된 비밀값 참조로 Kubernetes Secret에 주입. 기존 VM 방식에서 생성·HTTP·삭제 확인, 백엔드 전환은 추가 검증 필요 |
-| Notebook | `blocked` | `web`은 `/tmp` 64 MiB·8080 공개. `db`는 `/tmp` 64 MiB, `/var/lib/postgresql/data` 256 MiB, `/var/run/postgresql` 16 MiB·5432 비공개. DB 이미지의 `PGDATA` 수정과 새 생성 검증 전까지 차단 |
+| Notebook | 최신 발행본 생성 가능, 이전 digest 차단 유지 | web d4249f02…1db3, db 396878dd…c872 검증 완료. web UID 10001·8080 공개, DB UID 70·5432 비공개. 배포 버전에 PGDATA=/var/lib/postgresql/data/pgdata 설정 필요. 아래 10월 14일 검증 참조 |
 | AFTERIMAGE | 미발행·차단 | 일곱 이미지 저장소를 관리 대상으로 등록했으며 digest 정책은 아직 없다. indexer의 UID 전환·spool 소유권, 인스턴스별 Secret, bot 자원을 해결하기 전에는 생성하지 않는다 |
 
 `create_enabled`는 위 digest의 기본 생성 smoke가 통과했다는 운영 게이트다. Logout Please는 아래에 적은 공식 풀이도 통과했다. 다른 문제의 풀이, 팀 간·호스트·metadata 경계의 실제 격리 검증, reset, 데이터 보존까지 승인했다는 뜻은 아니다. 현재 두 GCP Target의 capability `true` 선언도 격리 실측을 대신하지 않는다.
+
+## 2026-10-14 Notebook 웹·DB 로컬 검증
+
+발행 revision 460의 GHCR 이미지를 그대로 내려받아 로컬 K3s에서 실행했습니다
+소스 커밋은 1dea73b652f9eeb98204c1fda7f66b9afb89505d이며 문제 이미지와 코드는 수정하지 않았습니다
+
+관리자에서 출제자의 환경변수를 불러오고 DB 비밀번호는 백엔드 비밀값 참조로 저장했습니다
+추가한 설정은 DB의 PGDATA=/var/lib/postgresql/data/pgdata입니다
+DB는 이미지의 postgres 사용자 UID 70으로 실행합니다
+쓰기 경로는 /tmp 64 MiB, /var/lib/postgresql/data 256 MiB, /var/run/postgresql 16 MiB만 허용합니다
+데이터 경로를 마운트 바로 아래의 하위 디렉터리로 지정해야 비root 프로세스가 소유권을 설정할 수 있습니다
+
+관리자 배포 테스트에서 백엔드 → Scheduler → Runtime → K3s로 생성과 종료를 확인했습니다
+
+| 확인 항목 | 결과 |
+| --- | --- |
+| 실제 프로세스 환경변수 | 저장한 일반값·비밀값과 일치, 비밀값은 secretKeyRef로 주입 |
+| 웹·DB 기능 | DB 연결, 임시 테이블 쓰기·읽기, 초기 스키마 확인, DB health 200 |
+| 외부 웹 요청 | 메인 화면 200, 존재하지 않는 계정의 로그인 401 |
+| DB 접근 범위 | 5432는 ClusterIP만 사용, 다른 namespace에서 Service IP·Pod IP 접근 차단 |
+| 실행 권한 | 비root, 읽기 전용 root filesystem 유지 |
+| 종료 | 웹·DB namespace 삭제와 Scheduler 예약 연결 해제 확인 |
+| DB 기동 실패 | 웹만 준비된 상태에서 성공 처리하지 않음, 두 컨테이너 삭제 후 CLEANED |
+
+반복 검증 중 내부 DB에 readiness probe가 없어 짧은 프로세스 실행을 성공으로 오인하는 경우를 재현했습니다
+HTTP healthcheck가 없는 컨테이너에는 첫 선언 포트의 TCP readiness를 적용했습니다
+DB 경로가 잘못된 배포에서는 웹만 준비돼도 생성이 실패하며, 삭제 재시도 후 정리 완료를 확인했습니다
+실패 시험 인스턴스는 f97d8c11-97c7-4633-93d6-15e9390cf69a입니다
+
+정상 시험 인스턴스는 3a4cf2d4-78ec-46c8-b6f8-aaed37dde2c3입니다
+기존 참가자 인스턴스와 활성 배포 버전은 변경하지 않았습니다
+이 검증은 로컬 K3s 기준이며 공식 풀이·채점, 운영 클러스터의 이미지 다운로드, 데이터 보존 검증은 포함하지 않습니다
 
 ## 2026-10-05 Logout Please 최신 이미지 시험
 
@@ -59,7 +91,9 @@ GCP `provisioner-test-1`에 코드 커밋 `24c5d0490807a1c781a900d518b4394519235
 
 FLAG와 INTERNAL_TOKEN 등의 값은 이 파일에 넣지 않습니다
 백엔드가 릴리스에 고정한 비밀값 참조를 사용합니다
-AFTERIMAGE의 인스턴스별 값 생성은 여전히 미지원입니다 Notebook의 `PGDATA`는 비밀이 아니므로 DB 이미지에 설정할 수 있지만, 현재 digest의 Pod에 수동 적용한 시험만 통과했다.
+AFTERIMAGE의 인스턴스별 값 생성은 여전히 미지원입니다
+Notebook의 PGDATA는 비밀값이 아니므로 관리자에서 배포 버전의 일반 환경변수로 설정합니다
+10월 14일 검증은 이 설정으로 새 인스턴스를 생성한 결과입니다
 
 ## 현재 FLAG 주입 경로
 

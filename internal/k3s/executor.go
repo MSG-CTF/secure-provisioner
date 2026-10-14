@@ -17,6 +17,10 @@ type CreateAdapterFinalizer interface {
 	FinalizeCreate(context.Context, provisioner.CreateWorkloadCommand, provisioner.CreateWorkloadResult) error
 }
 
+type FailedCreateCleaner interface {
+	CleanupFailedCreate(context.Context, provisioner.CreateWorkloadCommand, provisioner.CreateCleanup) error
+}
+
 type DeleteWorkloadAdapter interface {
 	DeleteWorkload(context.Context, provisioner.DeleteWorkloadCommand, runtimebinding.Binding) error
 }
@@ -50,6 +54,13 @@ func (e *Executor) Execute(ctx context.Context, operation operations.Operation) 
 	case operations.OperationTypeCreate:
 		if operation.CreateCommand == nil {
 			return operations.OperationResult{}, operations.NewExecutionError("UNSUPPORTED_OPERATION", false, nil)
+		}
+		if operation.Result.CreateCleanup != nil {
+			cleaner, ok := e.create.(FailedCreateCleaner)
+			if !ok {
+				return operations.OperationResult{}, operations.NewExecutionError("ROLLBACK_FAILED", false, nil)
+			}
+			return operations.OperationResult{}, classifyRuntimeExecutionError(cleaner.CleanupFailedCreate(ctx, *operation.CreateCommand, *operation.Result.CreateCleanup))
 		}
 		result, err := e.create.CreateWorkload(ctx, *operation.CreateCommand)
 		if err != nil {
@@ -93,7 +104,7 @@ func (e *Executor) FinalizeCreate(ctx context.Context, operation operations.Oper
 func classifyRuntimeExecutionError(err error) error {
 	var executionErr *operations.ExecutionError
 	if errors.As(err, &executionErr) {
-		return executionErr
+		return err
 	}
 	var runtimeErr *RuntimeError
 	if errors.As(err, &runtimeErr) {

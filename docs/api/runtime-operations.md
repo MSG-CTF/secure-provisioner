@@ -356,6 +356,11 @@ Retry-After: 2
 
 `QUEUED`, `RUNNING`, `RETRYING` 응답에는 `Retry-After`를 포함한다.
 
+HTTP healthcheck를 지정한 컨테이너는 해당 응답으로 준비 상태를 확인합니다
+그 외 컨테이너는 첫 번째 선언 포트에 TCP 연결이 두 번 연속 성공해야 준비된 것으로 처리합니다
+내부 DB에도 같은 기준을 적용하며 모든 컨테이너와 Service endpoint가 준비되어야 생성 성공을 반환합니다
+TCP 확인은 포트 연결 여부만 보므로 DB 쿼리와 같은 서비스 기능은 별도 검증이 필요합니다
+
 ### 생성 성공
 
 ```json
@@ -466,6 +471,20 @@ Pwn 성공 결과는 endpoint의 `protocol`이 `TCP`이고 주소가
   "last_error_code": "TARGET_TEMPORARILY_UNAVAILABLE"
 }
 ```
+
+생성은 실패했지만 해당 namespace의 삭제까지 확인했으면 응답에
+cleanup_completed: true를 추가합니다
+Scheduler는 이때 인스턴스를 CLEANED로 전환하고 예약 자원을 반납할 수 있습니다
+이 필드가 없거나 false인 경우, 또는 runtime-status가 404인 경우에는 정리 완료로 판단하지 않습니다
+
+삭제가 지연되면 namespace UID와 원래 실패 원인을 저장하고 다음 시도에서 삭제를 이어갑니다
+같은 CREATE를 다시 실행하지 않으며, 이름이 같아도 UID가 다른 namespace는 지우지 않습니다
+Worker 종료로 삭제가 중단된 경우에도 이 정보를 유지합니다
+만료된 CREATE lease를 다른 Worker가 가져간 경우에는 이전 Worker의 작업이 남아 있을 수 있어 정리 완료를 확정하지 않습니다
+최대 재시도 횟수를 넘겼거나 소유권을 확인할 수 없는 건은 별도 확인이 필요합니다
+
+배포할 때는 003_create_cleanup_proof.sql을 포함한 Runtime을 먼저 적용하고 Scheduler를 갱신합니다
+기존 실패 기록에는 정리 완료 값을 소급해서 넣지 않습니다
 
 ## 런타임 상태 조회
 

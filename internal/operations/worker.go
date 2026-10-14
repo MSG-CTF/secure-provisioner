@@ -191,23 +191,23 @@ func (w *Worker) processLeased(ctx context.Context, claimed ClaimedOperation) er
 	if executeErr == nil {
 		_, err := w.leaseStore.MarkLeaseSucceeded(claimed, result, now)
 		if errors.Is(err, ErrInvalidOperationResult) {
-			_, err = w.leaseStore.MarkLeaseFailed(claimed, invalidOperationResultErrorCode, now)
+			_, err = w.leaseStore.MarkLeaseFailed(claimed, Failure{Code: invalidOperationResultErrorCode}, now)
 		}
 		return err
 	}
 	if errors.Is(executeErr, ErrInvalidOperationResult) {
-		_, err := w.leaseStore.MarkLeaseFailed(claimed, invalidOperationResultErrorCode, now)
+		_, err := w.leaseStore.MarkLeaseFailed(claimed, Failure{Code: invalidOperationResultErrorCode}, now)
 		return err
 	}
-	if ctx.Err() != nil && isContextError(executeErr) {
+	if ctx.Err() != nil && isContextError(executeErr) && executionFailure(claimed.Operation, executeErr).CreateCleanup == nil {
 		return w.leaseStore.ReleaseLease(claimed, now)
 	}
-	code, retryable := ClassifyExecutionError(executeErr)
+	_, retryable := ClassifyExecutionError(executeErr)
 	if !retryable || claimed.Operation.Attempt >= claimed.Operation.MaxAttempts {
-		_, err := w.leaseStore.MarkLeaseFailed(claimed, code, now)
+		_, err := w.leaseStore.MarkLeaseFailed(claimed, executionFailure(claimed.Operation, executeErr), now)
 		return err
 	}
-	_, err := w.leaseStore.MarkLeaseRetrying(claimed, code, now.Add(w.backoff(claimed.Operation.Attempt)), now)
+	_, err := w.leaseStore.MarkLeaseRetrying(claimed, executionFailure(claimed.Operation, executeErr), now.Add(w.backoff(claimed.Operation.Attempt)), now)
 	return err
 }
 
@@ -231,7 +231,7 @@ func (w *Worker) renewLease(ctx context.Context, claimed ClaimedOperation, stop 
 
 func (w *Worker) executeLeased(ctx context.Context, claimed ClaimedOperation) (OperationResult, error) {
 	operation := claimed.Operation
-	if operation.Type != OperationTypeCreate {
+	if operation.Type != OperationTypeCreate || operation.Result.CreateCleanup != nil {
 		return w.executor.Execute(ctx, operation)
 	}
 	if operation.CreateCheckpoint == nil {
@@ -273,23 +273,23 @@ func (w *Worker) process(ctx context.Context, operation Operation) error {
 	if err == nil {
 		_, err = w.legacyStore.MarkSucceeded(running.ID, result)
 		if errors.Is(err, ErrInvalidOperationResult) {
-			_, err = w.legacyStore.MarkFailed(running.ID, invalidOperationResultErrorCode)
+			_, err = w.legacyStore.MarkFailed(running.ID, Failure{Code: invalidOperationResultErrorCode})
 		}
 		return err
 	}
 	if errors.Is(err, ErrInvalidOperationResult) {
-		_, err = w.legacyStore.MarkFailed(running.ID, invalidOperationResultErrorCode)
+		_, err = w.legacyStore.MarkFailed(running.ID, Failure{Code: invalidOperationResultErrorCode})
 		return err
 	}
-	if ctx.Err() != nil && isContextError(err) {
+	if ctx.Err() != nil && isContextError(err) && executionFailure(running, err).CreateCleanup == nil {
 		return w.legacyStore.Requeue(running.ID)
 	}
-	code, retryable := ClassifyExecutionError(err)
+	_, retryable := ClassifyExecutionError(err)
 	if !retryable || running.Attempt >= running.MaxAttempts {
-		_, markErr := w.legacyStore.MarkFailed(running.ID, code)
+		_, markErr := w.legacyStore.MarkFailed(running.ID, executionFailure(running, err))
 		return markErr
 	}
-	if _, err := w.legacyStore.MarkRetrying(running.ID, code); err != nil {
+	if _, err := w.legacyStore.MarkRetrying(running.ID, executionFailure(running, err)); err != nil {
 		return err
 	}
 	if err := w.sleep(ctx, w.backoff(running.Attempt)); err != nil {
@@ -302,7 +302,7 @@ func (w *Worker) process(ctx context.Context, operation Operation) error {
 }
 
 func (w *Worker) execute(ctx context.Context, running Operation) (OperationResult, error) {
-	if running.Type != OperationTypeCreate {
+	if running.Type != OperationTypeCreate || running.Result.CreateCleanup != nil {
 		return w.executor.Execute(ctx, running)
 	}
 

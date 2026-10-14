@@ -155,6 +155,27 @@ func TestBuildResourceSetEnforcesRestrictedPodSecurity(t *testing.T) {
 	}
 }
 
+func TestBuildResourceSetRequiresListeningPortsForContainersWithoutHTTPReadiness(t *testing.T) {
+	command := validMultiCreateCommand("aws-dev")
+	command.Containers[0].ReadinessHTTP = &provisioner.HTTPReadiness{Path: "/healthz", Port: command.Containers[0].Ports[0]}
+	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, deployment := range resources.Deployments {
+		probe := deployment.Spec.Template.Spec.Containers[0].ReadinessProbe
+		if index == 0 {
+			if probe == nil || probe.HTTPGet == nil || probe.HTTPGet.Path != "/healthz" || probe.TCPSocket != nil {
+				t.Fatal("explicit HTTP health check was replaced")
+			}
+			continue
+		}
+		if probe == nil || probe.TCPSocket == nil || probe.TCPSocket.Port.IntValue() != command.Containers[index].Ports[0] || probe.SuccessThreshold < 2 {
+			t.Fatalf("container %s can become ready without a stable listening port", deployment.Name)
+		}
+	}
+}
+
 func TestBuildResourceSetSpecHashTracksSpecButNotRequestMetadata(t *testing.T) {
 	command := validCreateCommand("aws-dev")
 	first, err := BuildResourceSet(validCluster("aws-dev"), command)

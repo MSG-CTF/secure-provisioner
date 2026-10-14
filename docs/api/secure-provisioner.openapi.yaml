@@ -954,6 +954,12 @@ components:
           type: boolean
         last_error_code:
           type: string
+        cleanup_completed:
+          type: boolean
+          description: >-
+            Present as true only for a terminal FAILED CREATE whose owned namespace
+            has been removed. Absence or false does not prove that resources are gone.
+            Never confirmed after reclaiming an expired CREATE worker lease.
         result:
           oneOf:
             - $ref: "#/components/schemas/CreateOperationResult"
