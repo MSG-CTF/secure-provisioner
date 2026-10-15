@@ -260,6 +260,11 @@ func (request *CreateWorkloadRequest) Validate() error {
 	if err != nil {
 		return err
 	}
+	for _, container := range containers {
+		if len(container.PublicPorts()) > 1 && container.ReadinessHTTP == nil {
+			return fmt.Errorf("containers exposing multiple ports require an HTTP healthcheck")
+		}
+	}
 	if request.Workload.ResourceLimits.CPUMillicores <= 0 {
 		return fmt.Errorf("cpu_millicores must be positive")
 	}

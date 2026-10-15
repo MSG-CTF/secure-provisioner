@@ -109,3 +109,78 @@ func TestWorkerRetainsCleanupCheckpointWhenShutdownInterruptsRollback(t *testing
 		}
 	}
 }
+
+func TestWorkerShutdownDuringCheckpointedCleanupDoesNotConsumeAttempt(t *testing.T) {
+	for _, leased := range []bool{false, true} {
+		store := NewMemoryStore(sequenceIDs("op-checkpointed-cleanup"))
+		op, _, err := store.EnqueueCreate(validCreateCommand("req-checkpointed-cleanup"), 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pendingCleanup := provisioner.CreateCleanup{NamespaceUID: "owned-namespace", FailureCode: "WORKLOAD_NOT_READY"}
+		firstFailure := provisioner.WithCreateCleanupPending(
+			NewExecutionError("ROLLBACK_FAILED", true, nil), pendingCleanup,
+		)
+		firstWorker, err := NewWorker(store, &scriptedExecutor{results: []execution{{err: firstFailure}}}, WorkerConfig{
+			Concurrency: 1, Backoff: noBackoff, Sleep: sleepWithContext,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if leased {
+			firstWorker.leaseStore = store
+			firstWorker.renewInterval = time.Second
+			claimed, ok, err := store.Claim(context.Background(), ClaimOptions{WorkerID: "first", Now: time.Now(), LeaseDuration: time.Minute})
+			if err != nil || !ok {
+				t.Fatalf("leased=%v first claim: ok=%v err=%v", leased, ok, err)
+			}
+			err = firstWorker.processLeased(context.Background(), claimed)
+		} else {
+			err = firstWorker.process(context.Background(), op)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkpointed, err := store.Get(op.ID)
+		if err != nil || checkpointed.Attempt != 1 || checkpointed.Result.CreateCleanup == nil {
+			t.Fatalf("leased=%v first cleanup checkpoint: %#v err=%v", leased, checkpointed, err)
+		}
+
+		for shutdown := range 3 {
+			ctx, cancel := context.WithCancel(context.Background())
+			worker, err := NewWorker(store, interruptedCleanupExecutor{cancel: cancel}, WorkerConfig{
+				Concurrency: 1, Backoff: noBackoff, Sleep: sleepWithContext,
+			})
+			if err != nil {
+				cancel()
+				t.Fatal(err)
+			}
+			if leased {
+				worker.leaseStore = store
+				worker.renewInterval = time.Second
+				claimed, ok, err := store.Claim(ctx, ClaimOptions{WorkerID: "cleanup", Now: time.Now().Add(time.Second), LeaseDuration: time.Minute})
+				if err != nil || !ok {
+					cancel()
+					t.Fatalf("leased=%v shutdown=%d claim: ok=%v err=%v", leased, shutdown, ok, err)
+				}
+				err = worker.processLeased(ctx, claimed)
+			} else {
+				queued, nextErr := store.Next(ctx)
+				if nextErr != nil {
+					cancel()
+					t.Fatal(nextErr)
+				}
+				err = worker.process(ctx, queued)
+			}
+			cancel()
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := store.Get(op.ID)
+			if err != nil || got.Status != OperationStatusQueued || got.Attempt != 1 ||
+				got.Result.CreateCleanup == nil || got.Result.CreateCleanup.NamespaceUID != "owned-namespace" {
+				t.Fatalf("leased=%v shutdown=%d consumed attempt or lost checkpoint: %#v err=%v", leased, shutdown, got, err)
+			}
+		}
+	}
+}

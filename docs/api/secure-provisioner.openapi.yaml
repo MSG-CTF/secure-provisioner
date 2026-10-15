@@ -619,6 +619,9 @@ components:
     Workload:
       type: object
       additionalProperties: false
+      description: >-
+        A container exposing multiple public ports requires an HTTP healthcheck
+        for that container. Without one, creation is rejected with INVALID_REQUEST.
       required:
         - resource_limits
       oneOf:

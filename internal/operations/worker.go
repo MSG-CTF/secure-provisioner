@@ -199,15 +199,16 @@ func (w *Worker) processLeased(ctx context.Context, claimed ClaimedOperation) er
 		_, err := w.leaseStore.MarkLeaseFailed(claimed, Failure{Code: invalidOperationResultErrorCode}, now)
 		return err
 	}
-	if ctx.Err() != nil && isContextError(executeErr) && executionFailure(claimed.Operation, executeErr).CreateCleanup == nil {
+	failure := executionFailure(claimed.Operation, executeErr)
+	if ctx.Err() != nil && isContextError(executeErr) && noUncheckpointedCleanup(claimed.Operation, failure) {
 		return w.leaseStore.ReleaseLease(claimed, now)
 	}
 	_, retryable := ClassifyExecutionError(executeErr)
 	if !retryable || claimed.Operation.Attempt >= claimed.Operation.MaxAttempts {
-		_, err := w.leaseStore.MarkLeaseFailed(claimed, executionFailure(claimed.Operation, executeErr), now)
+		_, err := w.leaseStore.MarkLeaseFailed(claimed, failure, now)
 		return err
 	}
-	_, err := w.leaseStore.MarkLeaseRetrying(claimed, executionFailure(claimed.Operation, executeErr), now.Add(w.backoff(claimed.Operation.Attempt)), now)
+	_, err := w.leaseStore.MarkLeaseRetrying(claimed, failure, now.Add(w.backoff(claimed.Operation.Attempt)), now)
 	return err
 }
 
@@ -281,15 +282,16 @@ func (w *Worker) process(ctx context.Context, operation Operation) error {
 		_, err = w.legacyStore.MarkFailed(running.ID, Failure{Code: invalidOperationResultErrorCode})
 		return err
 	}
-	if ctx.Err() != nil && isContextError(err) && executionFailure(running, err).CreateCleanup == nil {
+	failure := executionFailure(running, err)
+	if ctx.Err() != nil && isContextError(err) && noUncheckpointedCleanup(running, failure) {
 		return w.legacyStore.Requeue(running.ID)
 	}
 	_, retryable := ClassifyExecutionError(err)
 	if !retryable || running.Attempt >= running.MaxAttempts {
-		_, markErr := w.legacyStore.MarkFailed(running.ID, executionFailure(running, err))
+		_, markErr := w.legacyStore.MarkFailed(running.ID, failure)
 		return markErr
 	}
-	if _, err := w.legacyStore.MarkRetrying(running.ID, executionFailure(running, err)); err != nil {
+	if _, err := w.legacyStore.MarkRetrying(running.ID, failure); err != nil {
 		return err
 	}
 	if err := w.sleep(ctx, w.backoff(running.Attempt)); err != nil {
@@ -299,6 +301,13 @@ func (w *Worker) process(ctx context.Context, operation Operation) error {
 		return err
 	}
 	return w.legacyStore.Requeue(running.ID)
+}
+
+func noUncheckpointedCleanup(operation Operation, failure Failure) bool {
+	if failure.CreateCleanup == nil {
+		return true
+	}
+	return operation.Result.CreateCleanup != nil && *operation.Result.CreateCleanup == *failure.CreateCleanup
 }
 
 func (w *Worker) execute(ctx context.Context, running Operation) (OperationResult, error) {

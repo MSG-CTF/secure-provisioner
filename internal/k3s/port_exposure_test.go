@@ -131,6 +131,7 @@ func TestMixedPortResourcesReturnOneURLPerPublicPort(t *testing.T) {
 			command := mixedPortCommand()
 			command.Containers[0].Ports = []int{8080, 9000, 9090}
 			command.Containers[0].ExposedPorts = []int{8080, 9090}
+			command.Containers[0].ReadinessHTTP = &provisioner.HTTPReadiness{Path: "/healthz", Port: 8080}
 			command.Policy.Containers[0].Ports = []int{8080, 9000, 9090}
 			command.Policy.Containers[0].ExposedPorts = []int{8080, 9090}
 			cluster := validCluster("aws-dev")

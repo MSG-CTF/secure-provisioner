@@ -8,6 +8,7 @@ import (
 
 	"github.com/MSG-CTF/secure-provisioner/internal/operations"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
@@ -50,21 +51,64 @@ func TestFailedCreateRetriesCleanupWithoutCreatingAgain(t *testing.T) {
 }
 
 func TestFailedCreateCleanupPreservesReplacementNamespace(t *testing.T) {
+	for _, disabled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "enabled", true: "disabled"}[disabled], func(t *testing.T) {
+			command := validCreateCommand("aws-dev")
+			resources, err := BuildResourceSet(validCluster("aws-dev"), command)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resources.Namespace.UID = "replacement"
+			client := fake.NewSimpleClientset(resources.Namespace)
+			config := validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")
+			config.Enabled = !disabled
+			adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{config}, client))
+			failure := adapter.CleanupFailedCreate(t.Context(), command, provisioner.CreateCleanup{NamespaceUID: "original", FailureCode: "WORKLOAD_NOT_READY"})
+			var proof interface{ CreateCleanupCompleted() bool }
+			if errors.As(failure, &proof) {
+				t.Fatal("replacement namespace must not confirm cleanup")
+			}
+			if _, err := client.CoreV1().Namespaces().Get(t.Context(), resources.Namespace.Name, metav1.GetOptions{}); err != nil {
+				t.Fatal("replacement namespace was removed")
+			}
+		})
+	}
+}
+
+func TestFailedCreateCleanupDeletesOwnedNamespaceAfterTargetDisabled(t *testing.T) {
 	command := validCreateCommand("aws-dev")
 	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
 	if err != nil {
 		t.Fatal(err)
 	}
-	resources.Namespace.UID = "replacement"
+	resources.Namespace.UID = "original"
 	client := fake.NewSimpleClientset(resources.Namespace)
+	config := validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")
+	config.Enabled = false
+	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{config}, client))
+
+	failure := adapter.CleanupFailedCreate(t.Context(), command, provisioner.CreateCleanup{NamespaceUID: "original", FailureCode: "WORKLOAD_NOT_READY"})
+	var proof interface{ CreateCleanupCompleted() bool }
+	if !errors.As(failure, &proof) || !proof.CreateCleanupCompleted() {
+		t.Fatalf("cleanup was not confirmed for disabled target: %v", failure)
+	}
+	if _, err := client.CoreV1().Namespaces().Get(t.Context(), resources.Namespace.Name, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("namespace remains after cleanup: %v", err)
+	}
+}
+
+func TestFailedCreateCleanupDoesNotConfirmMissingTarget(t *testing.T) {
+	command := validCreateCommand("missing")
+	client := fake.NewSimpleClientset()
 	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client))
-	failure := adapter.CleanupFailedCreate(context.Background(), command, provisioner.CreateCleanup{NamespaceUID: "original", FailureCode: "WORKLOAD_NOT_READY"})
+
+	failure := adapter.CleanupFailedCreate(t.Context(), command, provisioner.CreateCleanup{NamespaceUID: "original", FailureCode: "WORKLOAD_NOT_READY"})
 	var proof interface{ CreateCleanupCompleted() bool }
 	if errors.As(failure, &proof) {
-		t.Fatal("replacement namespace must not confirm cleanup")
+		t.Fatal("missing target must not confirm cleanup")
 	}
-	if _, err := client.CoreV1().Namespaces().Get(t.Context(), resources.Namespace.Name, metav1.GetOptions{}); err != nil {
-		t.Fatal("replacement namespace was removed")
+	if len(client.Actions()) != 0 {
+		t.Fatalf("missing target triggered %d Kubernetes actions", len(client.Actions()))
 	}
 }
 

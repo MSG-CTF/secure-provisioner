@@ -64,8 +64,41 @@ func NewAdapter(registry *Registry, config AdapterConfig) (*Adapter, error) {
 }
 
 func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.CreateWorkloadCommand) (provisioner.CreateWorkloadResult, error) {
+	return a.createWorkload(ctx, command, "")
+}
+
+func (a *Adapter) CreateWorkloadForOperation(ctx context.Context, command provisioner.CreateWorkloadCommand, operationID string) (provisioner.CreateWorkloadResult, error) {
+	return a.createWorkload(ctx, command, operationID)
+}
+
+func (a *Adapter) createWorkload(ctx context.Context, command provisioner.CreateWorkloadCommand, operationID string) (provisioner.CreateWorkloadResult, error) {
 	if err := ctx.Err(); err != nil {
 		return provisioner.CreateWorkloadResult{}, operationCancelledError(err)
+	}
+	release, err := a.workloadLocks.acquire(ctx, workloadLockKey(command.TargetID, command.InstanceID))
+	if err != nil {
+		return provisioner.CreateWorkloadResult{}, operationCancelledError(err)
+	}
+	defer release()
+	if operationID != "" {
+		// Cleanup uses only durable command identity and the maintenance client.
+		// Policy and secrets may have changed after the first worker created the
+		// Namespace, so they cannot be prerequisites for removing that attempt.
+		maintenanceCluster, err := a.registry.LookupForMaintenance(command.TargetID)
+		if err != nil {
+			return provisioner.CreateWorkloadResult{}, err
+		}
+		namespace, err := NamespaceForInstance(command.InstanceID)
+		if err != nil {
+			return provisioner.CreateWorkloadResult{}, newRuntimeError("INVALID_CREATE_COMMAND", false, err)
+		}
+		previousNamespace, err := recoverCommittedNamespace(ctx, maintenanceCluster.Client, buildNamespace(command, namespace, operationID))
+		if err != nil {
+			return provisioner.CreateWorkloadResult{}, err
+		}
+		if previousNamespace != nil {
+			return provisioner.CreateWorkloadResult{}, a.failWithRollback(maintenanceCluster.Client, previousNamespace, "RESOURCE_APPLY_FAILED", interruptedCreateError())
+		}
 	}
 	// HTTP admission is bypassed when a queued command is replayed after an upgrade.
 	for _, container := range normalizedCommandContainers(command) {
@@ -73,11 +106,6 @@ func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.Create
 			return provisioner.CreateWorkloadResult{}, newRuntimeError("SECRET_RESOLUTION_FAILED", false, nil)
 		}
 	}
-	release, err := a.workloadLocks.acquire(ctx, workloadLockKey(command.TargetID, command.InstanceID))
-	if err != nil {
-		return provisioner.CreateWorkloadResult{}, operationCancelledError(err)
-	}
-	defer release()
 
 	cluster, err := a.registry.Lookup(command.TargetID)
 	if err != nil {
@@ -86,7 +114,7 @@ func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.Create
 	if err := cluster.Supports(command.Policy); err != nil {
 		return provisioner.CreateWorkloadResult{}, err
 	}
-	resources, err := BuildResourceSet(cluster, command)
+	resources, err := buildResourceSetForOperation(cluster, command, operationID)
 	if err != nil {
 		return provisioner.CreateWorkloadResult{}, err
 	}
@@ -108,6 +136,9 @@ func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.Create
 
 	createdNamespace, err := ensureNamespace(ctx, cluster.Client, resources.Namespace)
 	if err != nil {
+		if errors.Is(err, errCommittedNamespace) {
+			return provisioner.CreateWorkloadResult{}, a.failWithRollback(cluster.Client, createdNamespace, "RESOURCE_APPLY_FAILED", interruptedCreateError())
+		}
 		if parentErr := ctx.Err(); parentErr != nil {
 			return provisioner.CreateWorkloadResult{}, a.failAfterNamespace(cluster.Client, createdNamespace, "OPERATION_CANCELLED", parentErr)
 		}
@@ -164,11 +195,49 @@ func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.Create
 	}, nil
 }
 
+var errCommittedNamespace = errors.New("namespace belongs to an interrupted create")
+
+func interruptedCreateError() error {
+	return newRuntimeError("RESOURCE_APPLY_FAILED", false, errCommittedNamespace)
+}
+
+func recoverCommittedNamespace(ctx context.Context, client kubernetes.Interface, desired *corev1.Namespace) (*corev1.Namespace, error) {
+	if desired.Annotations[operationIDAnnotation] == "" {
+		return nil, nil
+	}
+	observed, err := client.CoreV1().Namespaces().Get(ctx, desired.Name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, applyError(err)
+	}
+	if !recoverableNamespace(observed, desired) {
+		return nil, newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
+	}
+	return observed.DeepCopy(), nil
+}
+
+func recoverableNamespace(observed, desired *corev1.Namespace) bool {
+	if desired.Annotations[operationIDAnnotation] == "" || observed.UID == "" || observed.ResourceVersion == "" {
+		return false
+	}
+	// A previous worker may have begun deletion before losing its lease. The
+	// terminating timestamp is the sole server-side state we can disregard:
+	// all owner labels, annotations and other metadata must still match.
+	metadataProof := observed.DeepCopy()
+	metadataProof.DeletionTimestamp = nil
+	return approvedSemanticMetadata(metadataProof, desired, false)
+}
+
 func ensureNamespace(ctx context.Context, client kubernetes.Interface, desired *corev1.Namespace) (*corev1.Namespace, error) {
 	var lastErr error
 	for attempt := 0; attempt < maxReconcileAttempts; attempt++ {
-		_, err := client.CoreV1().Namespaces().Get(ctx, desired.Name, metav1.GetOptions{})
+		observed, err := client.CoreV1().Namespaces().Get(ctx, desired.Name, metav1.GetOptions{})
 		if err == nil {
+			if recoverableNamespace(observed, desired) {
+				return observed.DeepCopy(), errCommittedNamespace
+			}
 			return nil, newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
 		}
 		if !apierrors.IsNotFound(err) {
@@ -1067,7 +1136,7 @@ func rollbackNamespace(ctx context.Context, client kubernetes.Interface, desired
 			}
 			continue
 		}
-		if !hasOwnership(existing.Labels, desired.Labels) {
+		if !hasOwnership(existing.Labels, desired.Labels) || !hasRequiredOperationID(existing, desired) {
 			return errNamespaceOwnership
 		}
 		if expectedUID == "" {
@@ -1113,7 +1182,7 @@ func rollbackNamespace(ctx context.Context, client kubernetes.Interface, desired
 			}
 		} else if current.UID != expectedUID {
 			return errNamespaceIdentity
-		} else if !hasOwnership(current.Labels, desired.Labels) {
+		} else if !hasOwnership(current.Labels, desired.Labels) || !hasRequiredOperationID(current, desired) {
 			return errNamespaceOwnership
 		}
 		select {
@@ -1122,6 +1191,11 @@ func rollbackNamespace(ctx context.Context, client kubernetes.Interface, desired
 		case <-ticker.C:
 		}
 	}
+}
+
+func hasRequiredOperationID(actual, desired *corev1.Namespace) bool {
+	want := desired.Annotations[operationIDAnnotation]
+	return want == "" || actual.Annotations[operationIDAnnotation] == want
 }
 
 var (
