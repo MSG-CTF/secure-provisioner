@@ -6,6 +6,12 @@
 
 Provisioner는 `PROVISIONER_IMAGE_POLICIES`가 가리키는 파일을 시작할 때 읽는다. 설정이 없으면 기존 Runtime API 동작을 유지한다. 설정이 있으면 목록에 있는 GHCR 저장소의 미등록 digest, 다른 컨테이너 이름·포트·격리 프로필, `blocked` 이미지를 생성 전에 거절한다. 등록된 digest의 요청값 중 `run_as_user`, `writable_paths`, `exposed_ports`는 이 파일의 값으로 교체한 뒤 기존 Runtime 요청 검증과 격리 resolver를 다시 통과시킨다. 이는 임의 경로 자동 탐색 기능이 아니다.
 
+## 2026-10-16 시험 서버의 Grade Tampering 정책
+
+`younhochoi-k3s-test`의 실행 중인 Runtime 소스는 `47d2c3e74704a8466809acfdfb6ffe98aa34e068`이고 호스트 이미지 정책 SHA-256은 `ecdaade386a7cbdd4f3edbce76986be4d5642ee712859b4eeadd83ec1516e898`이다. 호스트 정책에는 Grade Tampering의 `web@sha256:c409e49cf70a58be3ca19553b2db09da9d9607fd3462eaf00bdb29b20a44e39e`가 `create_enabled` 및 `ci_smoke_enabled`로 이미 등록돼 있다. 이 저장소의 정책에도 같은 digest를 기존 digest와 함께 추가했다. UID 10001, `/tmp`·`/app/instance` 각 32 MiB, 공개 8080, HTTP readiness `/`:8080은 호스트 정책과 일치한다.
+
+이 digest는 10월 13일 해당 K3s에서 생성·`/login` HTTP 200·삭제가 확인됐다. 호스트 정책에는 저장소 정책과 다른 시험용 항목도 있으므로 저장소 JSON 전체를 그대로 덮어쓰지 않는다. 배포할 때는 현재 호스트 정책을 검토해 승인된 항목을 보존하고 정책 SHA를 다시 확인한다. 현재 타깃은 `LOCAL`인 `younhochoi-k3s-test`이며, 옛 GCP `broker-test2`는 비활성이다.
+
 ## 2026-10-06 시험 배포와 CI smoke 계약
 
 GCP `provisioner-test-1`에 코드 커밋 `d806276e328a6e58611ebb875c2e186dd79448b7`에서 빌드한 Linux/AMD64 바이너리(SHA-256 `ebcf206bcce299a45632c1a836ae7e6e7051f251a09f900e3b50ba9a6a910577`)와 정책 파일(SHA-256 `73ec68ba29e84800cb429b7c1e8a76b66e79bcac70d4bf475f5fb299b61959c7`)을 함께 배포했다. VM의 `/opt/secure-provisioner/release.json`이 이 값을 기록한다. 서비스는 active다. 기존 FLAG 파일의 값은 변경하지 않았다.

@@ -32,6 +32,21 @@
       ]
     },
     {
+      "image": "ghcr.io/msg-ctf/challenges/web-grade-tampering/web@sha256:c409e49cf70a58be3ca19553b2db09da9d9607fd3462eaf00bdb29b20a44e39e",
+      "container": "web",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "ci_smoke_enabled": true,
+      "readiness_http": {"path": "/", "port": 8080},
+      "run_as_user": 10001,
+      "ports": [8080],
+      "exposed_ports": [8080],
+      "writable_paths": [
+        {"path": "/tmp", "size_mib": 32},
+        {"path": "/app/instance", "size_mib": 32}
+      ]
+    },
+    {
       "image": "ghcr.io/msg-ctf/challenges/web-daily-point/web@sha256:98c98088662fd5ff538ae9e163fb4a68ad73580e0f4f703624b0650d4a2b499a",
       "container": "web",
       "isolation_profile": "WEB",
