@@ -219,6 +219,15 @@ func (a *bindingCreateAdapter) CreateWorkload(ctx context.Context, command provi
 	return a.inner.CreateWorkload(ctx, command)
 }
 
+func (a *bindingCreateAdapter) CreateWorkloadForOperation(ctx context.Context, command provisioner.CreateWorkloadCommand, operationID string) (provisioner.CreateWorkloadResult, error) {
+	if aware, ok := a.inner.(interface {
+		CreateWorkloadForOperation(context.Context, provisioner.CreateWorkloadCommand, string) (provisioner.CreateWorkloadResult, error)
+	}); ok && operationID != "" {
+		return aware.CreateWorkloadForOperation(ctx, command, operationID)
+	}
+	return a.inner.CreateWorkload(ctx, command)
+}
+
 func (a *bindingCreateAdapter) FinalizeCreate(
 	ctx context.Context,
 	command provisioner.CreateWorkloadCommand,
