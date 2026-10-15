@@ -4,6 +4,16 @@ FLAG 관리 주체를 백엔드로 옮깁니다
 스케줄러 요청에는 일반 env와 승인된 릴리스 컨테이너의 secret_ref만 담습니다
 런타임 worker는 실행 직전에 백엔드에서 값을 조회해 변경 불가 Kubernetes Secret으로 주입합니다
 
+## 2026-10-15 배포 상태
+
+현재 `younhochoi`의 운영 Runtime은 구형 FLAG 파일 계약을 유지하는 hotfix `47d2c3e74704a8466809acfdfb6ffe98aa34e068`입니다. 바이너리 SHA-256은 `66e67d39eb9d1c9a0bfcb8b1432a1053630df75b8ded9c97d8c0e1c95d23e070`입니다. 이 서버는 요청의 `env`·`secret_ref`를 아직 받지 않습니다. 이 문서의 새 계약은 Runtime PR #47에서 구현됐으며, Backend PR #101과 Scheduler PR #63의 전환을 기다리고 있습니다. 현재 서버의 이미지 정책 SHA-256은 `ecdaade386a7cbdd4f3edbce76986be4d5642ee712859b4eeadd83ec1516e898`이며 저장소 정책 파일로 무조건 덮어쓰지 않습니다.
+
+PR #47을 별도 DB·포트와 임시 Target으로 띄운 실제 K3s 시험에서 정상 HTTP healthcheck의 생성·접속·삭제, 실패 healthcheck의 `WORKLOAD_NOT_READY` 및 namespace 정리, 일반 `env`와 `secret_ref`의 Kubernetes Secret 주입을 확인했습니다. 이때 Backend 응답은 별도 loopback 시험 서버로 대체했으므로 실제 Backend #101의 운영 인증·비밀값 등록까지 검증한 결과는 아닙니다. 운영 서비스와 DB는 이 시험에서 변경하지 않았습니다.
+
+운영 전환 시에는 Scheduler의 `exposed-ports-enabled`와 `healthcheck-enabled`를 모두 켜야 합니다. 전자는 공개 포트 계약을, 후자는 검사 결과를 Runtime에 전달합니다. 둘 다 기본값은 꺼져 있습니다. Backend 비밀값 API·암호화 키·문제별 값·전용 조회 토큰과 정확한 이미지 digest 정책을 준비한 뒤 아래 순서로 전환합니다.
+
+수동 배포 워크플로는 `dev` 브랜치와 GitHub Environment `runtime-test`에서만 실행합니다. Environment 변수 `PROVISIONER_DEPLOY_SSH_HOST`, `PROVISIONER_DEPLOY_SSH_USER`, `PROVISIONER_TAILSCALE_TAGS`와 Secret `PROVISIONER_DEPLOY_SSH_HOST_KEY`, `PROVISIONER_SSH_PRIVATE_KEY`, `TS_OAUTH_CLIENT_ID`, `TS_OAUTH_SECRET`을 설정해야 합니다. 이 값들은 현재 워크플로에 등록된 것으로 간주하지 않습니다. 승인된 현재 서버 정책 SHA-256을 실행 입력으로 넣고, 새 환경 파일·정책을 적용할 때는 서버에 미리 준비한 절대 경로와 새 정책 SHA-256을 함께 입력합니다. 환경 파일 후보는 현재 파일과 같은 소유자이며 group/other 접근이 없어야 합니다. 스크립트는 정책 드리프트나 인증된 API 확인 실패 시 바이너리·환경·정책을 복구합니다. 기존 FLAG 설정 그대로 PR #47을 배포하면 기동 확인에 실패하고 복구됩니다.
+
 | 설정 | 용도 |
 | --- | --- |
 | PROVISIONER_BACKEND_SECRET_URL | 백엔드 origin, 운영은 HTTPS, 로컬 시험은 리터럴 loopback HTTP 허용 |
