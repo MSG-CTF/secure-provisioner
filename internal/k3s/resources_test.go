@@ -367,6 +367,7 @@ func TestBuildResourceSetCreatesMultipleContainerResources(t *testing.T) {
 func TestBuildResourceSetUsesNodePortOnlyForExposedContainers(t *testing.T) {
 	command := validMultiCreateCommand("aws-dev")
 	command.Containers[0].Ports = []int{8080, 8443}
+	command.Containers[0].ReadinessHTTP = &provisioner.HTTPReadiness{Path: "/healthz", Port: 8080}
 	command.Policy = resolvedPolicyForCommand(command, "SMALL_MULTI")
 	cluster := validCluster("aws-dev")
 	cluster.Config.ExposureMode = ExposureModeNodePort

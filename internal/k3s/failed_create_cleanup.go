@@ -20,7 +20,7 @@ func (a *Adapter) CleanupFailedCreate(ctx context.Context, command provisioner.C
 		return provisioner.WithCreateCleanupPending(operationCancelledError(err), cleanup)
 	}
 	defer unlock()
-	cluster, err := a.registry.Lookup(command.TargetID)
+	cluster, err := a.registry.LookupForMaintenance(command.TargetID)
 	if err == nil {
 		var namespace string
 		namespace, err = NamespaceForInstance(command.InstanceID)

@@ -13,6 +13,10 @@ type CreateAdapter interface {
 	CreateWorkload(context.Context, provisioner.CreateWorkloadCommand) (provisioner.CreateWorkloadResult, error)
 }
 
+type operationAwareCreateAdapter interface {
+	CreateWorkloadForOperation(context.Context, provisioner.CreateWorkloadCommand, string) (provisioner.CreateWorkloadResult, error)
+}
+
 type CreateAdapterFinalizer interface {
 	FinalizeCreate(context.Context, provisioner.CreateWorkloadCommand, provisioner.CreateWorkloadResult) error
 }
@@ -62,7 +66,13 @@ func (e *Executor) Execute(ctx context.Context, operation operations.Operation) 
 			}
 			return operations.OperationResult{}, classifyRuntimeExecutionError(cleaner.CleanupFailedCreate(ctx, *operation.CreateCommand, *operation.Result.CreateCleanup))
 		}
-		result, err := e.create.CreateWorkload(ctx, *operation.CreateCommand)
+		var result provisioner.CreateWorkloadResult
+		var err error
+		if adapter, ok := e.create.(operationAwareCreateAdapter); ok && operation.ID != "" {
+			result, err = adapter.CreateWorkloadForOperation(ctx, *operation.CreateCommand, operation.ID)
+		} else {
+			result, err = e.create.CreateWorkload(ctx, *operation.CreateCommand)
+		}
 		if err != nil {
 			return operations.OperationResult{}, classifyRuntimeExecutionError(err)
 		}
