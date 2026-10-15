@@ -323,7 +323,7 @@ func TestServiceCleansUpNamespaceWhenBindingSaveFails(t *testing.T) {
 	stopWorker(t, cancel, workerDone)
 }
 
-func TestServiceWorkerCreateCheckpointRetriesBindingWithoutRecreating(t *testing.T) {
+func TestServiceWorkerRetriesCleanupWithoutSavingBindingForDeletingWorkload(t *testing.T) {
 	bindings := &failOnceSaveBindingStore{Store: runtimebinding.NewMemoryStore(), err: runtimebinding.ErrConflict}
 	create := &recordingCreate{result: provisioner.CreateWorkloadResult{
 		RuntimeWorkloadID: "aws-dev/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge",
@@ -341,16 +341,15 @@ func TestServiceWorkerCreateCheckpointRetriesBindingWithoutRecreating(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	operation = waitForOperationStatus(t, service, operation.ID, operations.OperationStatusSucceeded)
-	if operation.Attempt != 2 || operation.CreateCheckpoint != nil || operation.Result.Create == nil ||
-		operation.Result.Create.NamespaceUID != create.result.NamespaceUID {
+	operation = waitForOperationStatus(t, service, operation.ID, operations.OperationStatusFailed)
+	if operation.Attempt != 2 || operation.Result.Create != nil || operation.LastErrorCode != "ROLLBACK_FAILED" {
 		t.Fatalf("operation = %#v", operation)
 	}
-	if create.calls != 1 || cleanup.calls != 1 {
-		t.Fatalf("create calls = %d; cleanup calls = %d; want 1 and 1", create.calls, cleanup.calls)
+	if create.calls != 1 || cleanup.calls != 2 {
+		t.Fatalf("create calls = %d; cleanup calls = %d; want 1 and 2", create.calls, cleanup.calls)
 	}
 	binding, err := bindings.Store.Get(createCommand().InstanceID)
-	if err != nil || binding.NamespaceUID != create.result.NamespaceUID {
+	if !errors.Is(err, runtimebinding.ErrNotFound) {
 		t.Fatalf("binding = %#v, error = %v", binding, err)
 	}
 	stopWorker(t, cancel, workerDone)

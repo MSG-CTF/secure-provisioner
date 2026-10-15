@@ -1029,9 +1029,13 @@ func (a *Adapter) failWithRollback(client kubernetes.Interface, namespace *corev
 	rollbackCtx, cancel := context.WithTimeout(context.Background(), a.config.RollbackTimeout)
 	defer cancel()
 	if err := rollbackNamespace(rollbackCtx, client, namespace, a.config.PollInterval); err != nil {
-		return newRuntimeError("ROLLBACK_FAILED", rollbackErrorRetryable(err), errors.Join(cause, err))
+		failure := newRuntimeError("ROLLBACK_FAILED", rollbackErrorRetryable(err), errors.Join(cause, err))
+		if namespace.UID != "" {
+			return provisioner.WithCreateCleanupPending(failure, provisioner.CreateCleanup{NamespaceUID: string(namespace.UID), FailureCode: code})
+		}
+		return failure
 	}
-	return failureWithoutRollback(code, cause)
+	return provisioner.WithCreateCleanupCompleted(failureWithoutRollback(code, cause))
 }
 
 func rollbackNamespace(ctx context.Context, client kubernetes.Interface, desired *corev1.Namespace, pollInterval time.Duration) error {

@@ -170,6 +170,15 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 				}},
 				TimeoutSeconds: 2, PeriodSeconds: 2, SuccessThreshold: 1, FailureThreshold: 3,
 			}
+		} else {
+			// A running process is not enough: internal services must also accept
+			// connections before the whole instance can be marked ready.
+			podContainer.ReadinessProbe = &corev1.Probe{
+				ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{
+					Port: intstr.FromInt(requirement.Ports[0]),
+				}},
+				TimeoutSeconds: 2, PeriodSeconds: 2, SuccessThreshold: 2, FailureThreshold: 3,
+			}
 		}
 		// Service-link variables can collide with challenge settings such as SERVICE_PORT.
 		podSpec := corev1.PodSpec{

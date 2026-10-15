@@ -9,6 +9,46 @@ import (
 
 const defaultExecutionErrorCode = "EXECUTION_FAILED"
 
+type Failure struct {
+	CreateCleanup          *provisioner.CreateCleanup
+	Code                   string
+	CreateCleanupCompleted bool
+}
+
+func executionFailure(operation Operation, err error) Failure {
+	code, _ := ClassifyExecutionError(err)
+	var cleanup interface{ CreateCleanupCompleted() bool }
+	var pending interface {
+		PendingCreateCleanup() provisioner.CreateCleanup
+	}
+	var target *provisioner.CreateCleanup
+	if operation.Type == OperationTypeCreate && errors.As(err, &pending) {
+		value := pending.PendingCreateCleanup()
+		if value.NamespaceUID != "" {
+			target = &value
+		}
+	}
+	return Failure{
+		CreateCleanup: target,
+		Code:          code,
+		CreateCleanupCompleted: operation.Type == OperationTypeCreate && !operation.CreateLeaseReclaimed &&
+			errors.As(err, &cleanup) && cleanup.CreateCleanupCompleted(),
+	}
+}
+
+func (f Failure) result(operationType OperationType) OperationResult {
+	if operationType != OperationTypeCreate {
+		return OperationResult{}
+	}
+	return OperationResult{CreateCleanup: f.CreateCleanup, CreateCleanupCompleted: f.CreateCleanupCompleted}
+}
+
+func (f Failure) Result(operation Operation) OperationResult {
+	result := f.result(operation.Type)
+	result.CreateCleanupCompleted = result.CreateCleanupCompleted && !operation.CreateLeaseReclaimed
+	return result
+}
+
 type RuntimeExecutor interface {
 	Execute(context.Context, Operation) (OperationResult, error)
 }
