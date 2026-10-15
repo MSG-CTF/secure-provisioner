@@ -1249,7 +1249,7 @@ func waitUntilReady(
 				}
 				matchedService = true
 				readyEndpoint, endpointErr := hasReadyEndpointForServicePods(
-					ctx, client, expectedDeployment.Namespace, service.Name, readyPods,
+					ctx, client, expectedDeployment.Namespace, service.Name, readyPods, service.Spec.Ports,
 				)
 				if endpointErr != nil {
 					return endpointErr
@@ -1314,16 +1314,13 @@ func readyPodsForSpec(ctx context.Context, client kubernetes.Interface, namespac
 	return ready, nil
 }
 
-func hasReadyEndpointForPods(ctx context.Context, client kubernetes.Interface, namespace string, pods []corev1.Pod) (bool, error) {
-	return hasReadyEndpointForServicePods(ctx, client, namespace, resourceName, pods)
-}
-
 func hasReadyEndpointForServicePods(
 	ctx context.Context,
 	client kubernetes.Interface,
 	namespace string,
 	serviceName string,
 	pods []corev1.Pod,
+	servicePorts []corev1.ServicePort,
 ) (bool, error) {
 	endpointSlices, err := client.DiscoveryV1().EndpointSlices(namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: labels.Set{discoveryv1.LabelServiceName: serviceName}.String(),
@@ -1332,6 +1329,9 @@ func hasReadyEndpointForServicePods(
 		return false, err
 	}
 	for _, endpointSlice := range endpointSlices.Items {
+		if !endpointSliceServesServicePorts(endpointSlice.Ports, servicePorts) {
+			continue
+		}
 		for _, endpoint := range endpointSlice.Endpoints {
 			if endpoint.Conditions.Ready != nil && !*endpoint.Conditions.Ready {
 				continue
@@ -1348,23 +1348,69 @@ func hasReadyEndpointForServicePods(
 			}
 			for _, pod := range pods {
 				if endpoint.TargetRef != nil && endpoint.TargetRef.UID != "" {
-					if endpoint.TargetRef.UID == pod.UID {
+					if endpoint.TargetRef.UID == pod.UID && endpointMatchesPodAddress(endpoint.Addresses, pod.Status) {
 						return true, nil
 					}
 					continue
 				}
-				if strings.TrimSpace(pod.Status.PodIP) == "" {
-					continue
-				}
-				for _, address := range endpoint.Addresses {
-					if address == pod.Status.PodIP {
-						return true, nil
-					}
+				if endpointMatchesPodAddress(endpoint.Addresses, pod.Status) {
+					return true, nil
 				}
 			}
 		}
 	}
 	return false, nil
+}
+
+func endpointSliceServesServicePorts(slicePorts []discoveryv1.EndpointPort, servicePorts []corev1.ServicePort) bool {
+	if len(servicePorts) == 0 {
+		return false
+	}
+	for _, servicePort := range servicePorts {
+		if servicePort.TargetPort.IntVal <= 0 {
+			return false
+		}
+		matched := false
+		for _, slicePort := range slicePorts {
+			if slicePort.Port == nil || *slicePort.Port != servicePort.TargetPort.IntVal ||
+				slicePort.Name == nil || *slicePort.Name != servicePort.Name {
+				continue
+			}
+			sliceProtocol := corev1.ProtocolTCP
+			if slicePort.Protocol != nil {
+				sliceProtocol = *slicePort.Protocol
+			}
+			serviceProtocol := servicePort.Protocol
+			if serviceProtocol == "" {
+				serviceProtocol = corev1.ProtocolTCP
+			}
+			if sliceProtocol == serviceProtocol {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
+func endpointMatchesPodAddress(addresses []string, status corev1.PodStatus) bool {
+	for _, address := range addresses {
+		if address == "" {
+			continue
+		}
+		if address == status.PodIP && status.PodIP != "" {
+			return true
+		}
+		for _, podIP := range status.PodIPs {
+			if address == podIP.IP && podIP.IP != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func hasReadyPod(ctx context.Context, client kubernetes.Interface, namespace string) (bool, error) {

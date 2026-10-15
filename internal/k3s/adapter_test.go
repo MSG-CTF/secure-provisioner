@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
@@ -1067,7 +1068,7 @@ func TestAdapterWaitsForEveryContainerAndService(t *testing.T) {
 	client := fake.NewSimpleClientset(
 		webPod,
 		internalPod,
-		readyEndpointSliceForService(resources.Namespace.Name, "web", webPod),
+		readyEndpointSliceForService(resources.Namespace.Name, "web", webPod, resources.Services[0].Spec.Ports...),
 	)
 	installNamespaceCreateMetadata(t, client, "test-namespace-uid", "1")
 	installDeploymentController(client, true)
@@ -1097,7 +1098,7 @@ func TestAdapterWaitsForEveryContainerAndService(t *testing.T) {
 	assertNoCreateResult(t, result)
 	if _, err := client.DiscoveryV1().EndpointSlices(resources.Namespace.Name).Create(
 		context.Background(),
-		readyEndpointSliceForService(resources.Namespace.Name, "internal", internalPod),
+		readyEndpointSliceForService(resources.Namespace.Name, "internal", internalPod, resources.Services[1].Spec.Ports...),
 		metav1.CreateOptions{},
 	); err != nil {
 		t.Fatal(err)
@@ -1514,12 +1515,95 @@ func TestReadyEndpointRequiresNonblankAddressEvenWithMatchingTargetRef(t *testin
 	endpointSlice.Endpoints[0].Addresses = []string{"", "   "}
 	client := fake.NewSimpleClientset(endpointSlice)
 
-	ready, err := hasReadyEndpointForPods(context.Background(), client, resources.Namespace.Name, []corev1.Pod{*pod})
+	ready, err := hasReadyEndpointForServicePods(context.Background(), client, resources.Namespace.Name, resources.Service.Name, []corev1.Pod{*pod}, resources.Service.Spec.Ports)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ready {
 		t.Fatal("matching TargetRef without a nonblank address was accepted")
+	}
+}
+
+func TestReadyEndpointRequiresPodAddressEvenWithMatchingTargetRef(t *testing.T) {
+	command := validCreateCommand("aws-dev")
+	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pod := readyPod(resources.Namespace.Name, resources.ExpectedSpecHash, "ready-pod", "10.0.0.1", resources.Deployment.Spec.Template.Labels)
+	endpointSlice := readyEndpointSlice(resources.Namespace.Name, pod)
+	endpointSlice.Endpoints[0].Addresses = []string{"10.0.0.99"}
+	client := fake.NewSimpleClientset(endpointSlice)
+
+	ready, err := hasReadyEndpointForServicePods(context.Background(), client, resources.Namespace.Name, resources.Service.Name, []corev1.Pod{*pod}, resources.Service.Spec.Ports)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ready {
+		t.Fatal("matching TargetRef with a stale Pod address was accepted")
+	}
+}
+
+func TestReadyEndpointAcceptsSecondaryPodIP(t *testing.T) {
+	command := validCreateCommand("aws-dev")
+	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pod := readyPod(resources.Namespace.Name, resources.ExpectedSpecHash, "ready-pod", "10.0.0.1", resources.Deployment.Spec.Template.Labels)
+	pod.Status.PodIPs = []corev1.PodIP{{IP: "10.0.0.1"}, {IP: "2001:db8::1"}}
+	endpointSlice := readyEndpointSlice(resources.Namespace.Name, pod)
+	endpointSlice.AddressType = discoveryv1.AddressTypeIPv6
+	endpointSlice.Endpoints[0].Addresses = []string{"2001:db8::1"}
+	client := fake.NewSimpleClientset(endpointSlice)
+
+	ready, err := hasReadyEndpointForServicePods(context.Background(), client, resources.Namespace.Name, resources.Service.Name, []corev1.Pod{*pod}, resources.Service.Spec.Ports)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ready {
+		t.Fatal("secondary Pod IP was rejected")
+	}
+}
+
+func TestReadyEndpointRequiresServicePort(t *testing.T) {
+	command := validCreateCommand("aws-dev")
+	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pod := readyPod(resources.Namespace.Name, resources.ExpectedSpecHash, "ready-pod", "10.0.0.1", resources.Deployment.Spec.Template.Labels)
+	endpointSlice := readyEndpointSlice(resources.Namespace.Name, pod)
+	endpointSlice.Ports = nil
+	client := fake.NewSimpleClientset(endpointSlice)
+
+	ready, err := hasReadyEndpointForServicePods(context.Background(), client, resources.Namespace.Name, resources.Service.Name, []corev1.Pod{*pod}, resources.Service.Spec.Ports)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ready {
+		t.Fatal("EndpointSlice without a Service target port was accepted")
+	}
+}
+
+func TestReadyEndpointRejectsWrongServicePort(t *testing.T) {
+	command := validCreateCommand("aws-dev")
+	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pod := readyPod(resources.Namespace.Name, resources.ExpectedSpecHash, "ready-pod", "10.0.0.1", resources.Deployment.Spec.Template.Labels)
+	endpointSlice := readyEndpointSlice(resources.Namespace.Name, pod)
+	endpointSlice.Ports[0].Name = ptr.To("port-9090")
+	endpointSlice.Ports[0].Port = ptr.To(int32(9090))
+	client := fake.NewSimpleClientset(endpointSlice)
+
+	ready, err := hasReadyEndpointForServicePods(context.Background(), client, resources.Namespace.Name, resources.Service.Name, []corev1.Pod{*pod}, resources.Service.Spec.Ports)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ready {
+		t.Fatal("EndpointSlice with a different Service target port was accepted")
 	}
 }
 
@@ -2828,10 +2912,20 @@ func readyEndpointSlice(namespace string, pod *corev1.Pod) *discoveryv1.Endpoint
 	return readyEndpointSliceForService(namespace, resourceName, pod)
 }
 
-func readyEndpointSliceForService(namespace, serviceName string, pod *corev1.Pod) *discoveryv1.EndpointSlice {
+func readyEndpointSliceForService(namespace, serviceName string, pod *corev1.Pod, servicePorts ...corev1.ServicePort) *discoveryv1.EndpointSlice {
+	if len(servicePorts) == 0 {
+		servicePorts = []corev1.ServicePort{{Name: "port-8080", Port: 8080, TargetPort: intstr.FromInt(8080)}}
+	}
+	ports := make([]discoveryv1.EndpointPort, 0, len(servicePorts))
+	for _, servicePort := range servicePorts {
+		ports = append(ports, discoveryv1.EndpointPort{
+			Name: ptr.To(servicePort.Name), Port: ptr.To(servicePort.TargetPort.IntVal), Protocol: ptr.To(corev1.ProtocolTCP),
+		})
+	}
 	return &discoveryv1.EndpointSlice{
 		ObjectMeta:  metav1.ObjectMeta{Namespace: namespace, Name: serviceName, Labels: map[string]string{discoveryv1.LabelServiceName: serviceName}},
 		AddressType: discoveryv1.AddressTypeIPv4,
+		Ports:       ports,
 		Endpoints:   []discoveryv1.Endpoint{matchingEndpoint(pod)},
 	}
 }
@@ -2895,7 +2989,7 @@ func readyClient(t *testing.T, command provisioner.CreateWorkloadCommand) *fake.
 		t.Fatal(err)
 	}
 	pod := readyPod(namespace, resources.ExpectedSpecHash, "ready-pod", "10.0.0.1", resources.Deployment.Spec.Template.Labels)
-	client := fake.NewSimpleClientset(pod, readyEndpointSlice(namespace, pod))
+	client := fake.NewSimpleClientset(pod, readyEndpointSliceForService(namespace, resources.Service.Name, pod, resources.Service.Spec.Ports...))
 	installNamespaceCreateMetadata(t, client, "test-namespace-uid", "1")
 	installDeploymentController(client, true)
 	return client
@@ -2916,7 +3010,12 @@ func readyMultiContainerClient(t *testing.T, command provisioner.CreateWorkloadC
 			fmt.Sprintf("10.0.0.%d", index+1),
 			deployment.Spec.Template.Labels,
 		)
-		objects = append(objects, pod, readyEndpointSliceForService(resources.Namespace.Name, deployment.Name, pod))
+		for _, service := range resources.Services {
+			if service.Name == deployment.Name {
+				objects = append(objects, pod, readyEndpointSliceForService(resources.Namespace.Name, service.Name, pod, service.Spec.Ports...))
+				break
+			}
+		}
 	}
 	client := fake.NewSimpleClientset(objects...)
 	installNamespaceCreateMetadata(t, client, "test-namespace-uid", "1")

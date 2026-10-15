@@ -36,7 +36,7 @@ func TestMixedPortAdapterRequiresPublicServiceEndpoints(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if _, err := client.DiscoveryV1().EndpointSlices(resources.Namespace.Name).Create(context.Background(), readyEndpointSliceForService(resources.Namespace.Name, resources.Services[1].Name, &pods.Items[0]), metav1.CreateOptions{}); err != nil {
+				if _, err := client.DiscoveryV1().EndpointSlices(resources.Namespace.Name).Create(context.Background(), readyEndpointSliceForService(resources.Namespace.Name, resources.Services[1].Name, &pods.Items[0], resources.Services[1].Spec.Ports...), metav1.CreateOptions{}); err != nil {
 					t.Fatal(err)
 				}
 			}
