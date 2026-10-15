@@ -125,6 +125,7 @@ func scanBinding(row rowScanner) (runtimebinding.Binding, error) {
 	binding.IsolationProfile = policy.IsolationProfile
 	binding.WorkloadProfile = policy.WorkloadProfile
 	binding.ContainerRequirements = policy.ContainerRequirements
+	binding.WorkloadNetwork = policy.WorkloadNetwork
 	binding.InternalConnections = policy.InternalConnections
 	binding.OutboundMode = policy.OutboundMode
 	binding.ResourceLimits = policy.ResourceLimits

@@ -31,7 +31,17 @@ func buildNetworkPolicies(
 	if policy.IsolationRef.Version == "v2" && policy.InternalConnections != nil {
 		return nil, false
 	}
-	connections, valid := approvedInternalConnections(policy.InternalConnections, policyContainers)
+	requested := policy.InternalConnections
+	if policy.WorkloadNetwork != nil {
+		if policy.IsolationRef.Version != "v2" {
+			return nil, false
+		}
+		requested = make([]isolation.InternalConnection, 0, len(policy.WorkloadNetwork.Allow))
+		for _, edge := range policy.WorkloadNetwork.Allow {
+			requested = append(requested, isolation.InternalConnection{SourceContainer: edge.From, DestinationContainer: edge.To, Protocol: isolation.ProtocolTCP, Port: edge.Port})
+		}
+	}
+	connections, valid := approvedInternalConnections(requested, policyContainers)
 	if !valid {
 		return nil, false
 	}
@@ -69,7 +79,7 @@ func buildNetworkPolicies(
 		))
 	}
 
-	if policy.IsolationRef.Version == "v2" {
+	if policy.IsolationRef.Version == "v2" && policy.WorkloadNetwork == nil {
 		policies = append(policies, buildInstanceInternalNetworkPolicy(namespace, ownerLabels))
 		return policies, true
 	}

@@ -104,6 +104,7 @@ const (
 type Request struct {
 	WorkloadProfile WorkloadProfile
 	Containers      []ContainerRequirement
+	WorkloadNetwork *WorkloadNetwork `json:",omitempty"`
 	// 기존 v1 Operation snapshot 복원 전용. 신규 요청에서는 사용하지 않는다.
 	InternalConnections []InternalConnection `json:",omitempty"`
 	ResourceLimits      ResourceLimits
@@ -117,6 +118,7 @@ type ResolvedPolicy struct {
 	EndpointProtocol    EndpointProtocol
 	ExposureRequirement ExposureRequirement
 	Containers          []ContainerRequirement
+	WorkloadNetwork     *WorkloadNetwork `json:",omitempty"`
 	// 기존 STANDARD@v1 승인 정책 재생 전용.
 	InternalConnections []InternalConnection `json:",omitempty"`
 	OutboundMode        OutboundMode

@@ -37,6 +37,9 @@ func (r *StaticResolver) Resolve(request Request) (ResolvedPolicy, error) {
 	if request.InternalConnections != nil {
 		return ResolvedPolicy{}, rejected("internal connections are no longer accepted")
 	}
+	if err := ValidateWorkloadNetwork(request.WorkloadNetwork, request.WorkloadProfile, request.Containers); err != nil {
+		return ResolvedPolicy{}, err
+	}
 
 	return ResolvedPolicy{
 		IsolationRef:        ProfileRef{Name: "STANDARD", Version: "v2"},
@@ -53,9 +56,10 @@ func (r *StaticResolver) Resolve(request Request) (ResolvedPolicy, error) {
 			DropAllCapabilities:          true,
 			SeccompRuntimeDefault:        true,
 		},
-		Containers:     cloneContainerRequirements(request.Containers),
-		OutboundMode:   OutboundNone,
-		ResourceLimits: request.ResourceLimits,
+		Containers:      cloneContainerRequirements(request.Containers),
+		WorkloadNetwork: CloneWorkloadNetwork(request.WorkloadNetwork),
+		OutboundMode:    OutboundNone,
+		ResourceLimits:  request.ResourceLimits,
 	}, nil
 }
 

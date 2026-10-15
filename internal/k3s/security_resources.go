@@ -5,6 +5,7 @@ import (
 	"encoding/base32"
 	"math"
 	"path"
+	"reflect"
 	"strings"
 
 	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
@@ -33,6 +34,25 @@ func validateResolvedPolicy(
 		policy.ResourceLimits.MemoryMiB != command.ResourceLimits.MemoryMiB ||
 		policy.ResourceLimits.EphemeralStorageMiB != command.ResourceLimits.EphemeralStorageMiB {
 		return nil, false
+	}
+	if !reflect.DeepEqual(command.PolicyRequest.WorkloadNetwork, policy.WorkloadNetwork) {
+		return nil, false
+	}
+	if policy.WorkloadNetwork != nil {
+		if policy.IsolationRef.Version != "v2" || policy.InternalConnections != nil ||
+			isolation.ValidateWorkloadNetwork(policy.WorkloadNetwork, isolation.WorkloadProfile(policy.WorkloadProfileRef.Name), policy.Containers) != nil ||
+			len(policy.WorkloadNetwork.Containers) != len(containers) {
+			return nil, false
+		}
+		images := make(map[string]string, len(containers))
+		for _, container := range containers {
+			images[container.Name] = container.Image
+		}
+		for _, identity := range policy.WorkloadNetwork.Containers {
+			if images[identity.Name] != identity.Image {
+				return nil, false
+			}
+		}
 	}
 
 	approved := make(map[string]isolation.ContainerRequirement, len(policy.Containers))

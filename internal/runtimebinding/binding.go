@@ -36,6 +36,7 @@ type Binding struct {
 	IsolationProfile      string
 	WorkloadProfile       string
 	ContainerRequirements []isolation.ContainerRequirement
+	WorkloadNetwork       *isolation.WorkloadNetwork `json:",omitempty"`
 	// 기존 STANDARD@v1 Binding snapshot 보존 전용.
 	InternalConnections []isolation.InternalConnection `json:",omitempty"`
 	OutboundMode        isolation.OutboundMode
@@ -78,6 +79,7 @@ func samePlacement(first, second Binding) bool {
 		first.IsolationProfile == second.IsolationProfile &&
 		first.WorkloadProfile == second.WorkloadProfile &&
 		reflect.DeepEqual(first.ContainerRequirements, second.ContainerRequirements) &&
+		reflect.DeepEqual(first.WorkloadNetwork, second.WorkloadNetwork) &&
 		reflect.DeepEqual(first.InternalConnections, second.InternalConnections) &&
 		first.OutboundMode == second.OutboundMode &&
 		first.ResourceLimits == second.ResourceLimits
@@ -85,6 +87,7 @@ func samePlacement(first, second Binding) bool {
 
 func copyBinding(binding Binding) Binding {
 	copied := binding
+	copied.WorkloadNetwork = isolation.CloneWorkloadNetwork(binding.WorkloadNetwork)
 	copied.Endpoints = append([]provisioner.WorkloadEndpoint(nil), binding.Endpoints...)
 	if binding.ContainerRequirements != nil {
 		copied.ContainerRequirements = make([]isolation.ContainerRequirement, len(binding.ContainerRequirements))
