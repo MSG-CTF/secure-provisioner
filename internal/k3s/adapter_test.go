@@ -1431,12 +1431,16 @@ func TestAdapterWaitsForLatestRevisionPodAndItsEndpoint(t *testing.T) {
 	client := fake.NewSimpleClientset(oldPod, oldEndpoint)
 	installNamespaceCreateMetadata(t, client, "test-namespace-uid", "1")
 	installDeploymentController(client, true)
-	podListed := make(chan struct{})
+	podListed := make(chan struct{}, 1)
 	firstListRelease := make(chan struct{})
 	listCount := 0
 	client.PrependReactor("list", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
 		listCount++
-		podListed <- struct{}{}
+		// Fake client reactors hold its lock; notification must not block Pod updates.
+		select {
+		case podListed <- struct{}{}:
+		default:
+		}
 		if listCount == 1 {
 			<-firstListRelease
 		}
