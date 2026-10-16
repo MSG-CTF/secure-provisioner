@@ -134,6 +134,12 @@ func copyCreateCommand(command provisioner.CreateWorkloadCommand) provisioner.Cr
 }
 
 func sameCreateCommand(first, second provisioner.CreateWorkloadCommand) bool {
+	if first.RequestFingerprint != "" && second.RequestFingerprint != "" {
+		return first.RequestID == second.RequestID &&
+			first.InstanceID == second.InstanceID && first.TeamID == second.TeamID &&
+			first.TargetID == second.TargetID && first.RuntimeType == second.RuntimeType &&
+			first.RequestFingerprint == second.RequestFingerprint
+	}
 	if first.RequestID != second.RequestID ||
 		first.InstanceID != second.InstanceID ||
 		first.TeamID != second.TeamID ||

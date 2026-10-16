@@ -23,6 +23,10 @@ CI smoke 토큰에는 secret_ref 사용 권한이 없습니다
 - `Location` Header는 Operation 조회 경로를 제공한다.
 - `Retry-After` Header는 다음 조회까지 기다릴 초를 제공한다.
 - `request_id`는 멱등 키다.
+- 신규 접수 시 호출자 입력의 지문과 승인된 실행 설정을 함께 저장한다
+  동일 입력 재전송은 이미지 정책 변경·차단 후에도 기존 Operation을 반환하며 새 작업을 만들지 않는다
+  다른 입력은 409로 거절하고, 새로운 요청에는 현재 차단 정책을 적용한다
+  지문이 없는 구버전 Operation은 기존 비교를 사용하므로 정책을 바꾸기 전에 대기 요청을 정리한다
 - JSON 필드는 `snake_case`를 사용한다.
 - 시간은 UTC RFC 3339 형식을 사용한다.
 - 로컬 기본 주소는 `http://127.0.0.1:8080`이다.
@@ -483,6 +487,8 @@ Pwn 성공 결과는 endpoint의 `protocol`이 `TCP`이고 주소가
 생성은 실패했지만 해당 namespace의 삭제까지 확인했으면 응답에
 cleanup_completed: true를 추가합니다
 Scheduler는 이때 인스턴스를 CLEANED로 전환하고 예약 자원을 반납할 수 있습니다
+비밀값 조회가 실패해 namespace를 만들지 못한 경우에도 Kubernetes에서 해당 namespace가 없음을 다시 확인한 뒤 이 값을 반환합니다
+조회가 실패하거나 같은 이름의 namespace가 남아 있으면 정리 완료로 처리하지 않습니다
 이 필드가 없거나 false인 경우, 또는 runtime-status가 404인 경우에는 정리 완료로 판단하지 않습니다
 
 삭제가 지연되면 namespace UID와 원래 실패 원인을 저장하고 다음 시도에서 삭제를 이어갑니다

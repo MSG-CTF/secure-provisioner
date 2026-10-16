@@ -45,8 +45,13 @@ func TestReplayCannotRunRequiredFlagImageWithoutBackendReference(t *testing.T) {
 	}
 	images[0] = "changed-after-construction"
 	_, err = adapter.CreateWorkload(context.Background(), command)
-	if runtimeErrorCode(t, err) != "SECRET_RESOLUTION_FAILED" || len(client.Actions()) != 0 {
+	if runtimeErrorCode(t, err) != "SECRET_RESOLUTION_FAILED" {
 		t.Fatal("old queued FLAG command bypassed the Backend reference gate")
+	}
+	for _, action := range client.Actions() {
+		if action.GetVerb() != "get" || action.GetResource().Resource != "namespaces" {
+			t.Fatal("missing FLAG reference caused a Kubernetes mutation")
+		}
 	}
 }
 

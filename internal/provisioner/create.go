@@ -58,15 +58,18 @@ func (container WorkloadContainer) PublicPorts() []int {
 }
 
 type CreateWorkloadCommand struct {
-	RequestID      string
-	InstanceID     string
-	TeamID         TeamID
-	RuntimeType    RuntimeType
-	TargetID       string
-	Containers     []WorkloadContainer
-	ResourceLimits ResourceLimits
-	PolicyRequest  isolation.Request
-	Policy         isolation.ResolvedPolicy
+	// RequestFingerprint identifies the caller input before server-owned policy
+	// overrides. Legacy snapshots decode this field to an empty string.
+	RequestFingerprint string
+	RequestID          string
+	InstanceID         string
+	TeamID             TeamID
+	RuntimeType        RuntimeType
+	TargetID           string
+	Containers         []WorkloadContainer
+	ResourceLimits     ResourceLimits
+	PolicyRequest      isolation.Request
+	Policy             isolation.ResolvedPolicy
 }
 
 type CreateWorkloadResult struct {

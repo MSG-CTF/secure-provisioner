@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -64,6 +66,30 @@ func (api *API) handleCreateInstance(writer http.ResponseWriter, request *http.R
 		writeAPIError(writer, http.StatusForbidden, "FORBIDDEN", "CI smoke token cannot create this workload")
 		return
 	}
+	encodedInput, err := json.Marshal(createRequest)
+	if err != nil {
+		writeAPIError(writer, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
+		return
+	}
+	inputHash := sha256.Sum256(encodedInput)
+	fingerprint := hex.EncodeToString(inputHash[:])
+	if replay, ok := api.runtime.(interface {
+		FindCreateByRequest(string, string) (operations.Operation, bool, error)
+	}); ok {
+		operation, found, err := replay.FindCreateByRequest(createRequest.RequestID, fingerprint)
+		if err != nil {
+			if errors.Is(err, operations.ErrIdempotencyConflict) {
+				writeAPIError(writer, http.StatusConflict, "REQUEST_ID_CONFLICT", "request_id is already used by another operation")
+			} else {
+				writeAPIError(writer, http.StatusBadGateway, "CREATE_QUEUE_FAILED", "workload creation could not be queued")
+			}
+			return
+		}
+		if found {
+			writeAcceptedOperation(writer, operation, false)
+			return
+		}
+	}
 	if err := api.imagePolicies.Apply(&createRequest); err != nil {
 		writeAPIError(writer, http.StatusUnprocessableEntity, "IMAGE_POLICY_REJECTED", err.Error())
 		return
@@ -74,7 +100,9 @@ func (api *API) handleCreateInstance(writer http.ResponseWriter, request *http.R
 	}
 
 	if api.runtime != nil {
-		operation, created, err := api.runtime.EnqueueCreate(createRequest.ToCommand())
+		command := createRequest.ToCommand()
+		command.RequestFingerprint = fingerprint
+		operation, created, err := api.runtime.EnqueueCreate(command)
 		if err != nil {
 			if errors.Is(err, isolation.ErrPolicyRejected) {
 				writeAPIError(writer, http.StatusUnprocessableEntity, "ISOLATION_POLICY_REJECTED", "isolation policy was rejected")
