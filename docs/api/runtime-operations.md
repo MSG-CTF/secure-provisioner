@@ -8,6 +8,14 @@
   `docs/superpowers/specs/2026-07-28-async-runtime-operations-status-design.md`
   및 `docs/superpowers/specs/2026-09-09-instance-network-policy-design.md`
 
+## 실행 환경변수와 비밀값
+
+workload.containers의 env는 일반 문자열 값, secret_ref는 백엔드 릴리스 컨테이너 UUID입니다
+런타임은 비밀값 원문을 생성 요청으로 받지 않고 worker 전용 API로 조회합니다
+조회·검증 실패는 SECRET_RESOLUTION_FAILED로 처리하며 Pod를 만들지 않습니다
+CI smoke 토큰에는 secret_ref 사용 권한이 없습니다
+상세 계약과 전환 순서: [백엔드 비밀값 주입](../operations/backend-secret-injection.md)
+
 ## 공통 규칙
 
 - 생성과 삭제는 비동기 Operation으로 접수한다.
@@ -479,6 +487,8 @@ Pwn 성공 결과는 endpoint의 `protocol`이 `TCP`이고 주소가
 생성은 실패했지만 해당 namespace의 삭제까지 확인했으면 응답에
 cleanup_completed: true를 추가합니다
 Scheduler는 이때 인스턴스를 CLEANED로 전환하고 예약 자원을 반납할 수 있습니다
+비밀값 조회가 실패해 namespace를 만들지 못한 경우에도 Kubernetes에서 해당 namespace가 없음을 다시 확인한 뒤 이 값을 반환합니다
+조회가 실패하거나 같은 이름의 namespace가 남아 있으면 정리 완료로 처리하지 않습니다
 이 필드가 없거나 false인 경우, 또는 runtime-status가 404인 경우에는 정리 완료로 판단하지 않습니다
 
 삭제가 지연되면 namespace UID와 원래 실패 원인을 저장하고 다음 시도에서 삭제를 이어갑니다

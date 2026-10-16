@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -27,7 +26,8 @@ type appConfig struct {
 	Address               string
 	RegistryPath          string
 	ImagePoliciesPath     string
-	FlagFilePath          string
+	BackendSecretURL      string
+	BackendSecretToken    string
 	ServiceAuth           httpapi.ServiceAuthConfig
 	RuntimeStore          runtimeStoreConfig
 	WorkerConcurrency     int
@@ -71,25 +71,28 @@ func loadConfig(getenv func(string) string) (appConfig, error) {
 		return appConfig{}, errors.New("environment reader is required")
 	}
 	config := appConfig{
-		Address:           valueOrDefault(getenv("PROVISIONER_ADDR"), "127.0.0.1:8080"),
-		RegistryPath:      strings.TrimSpace(getenv("PROVISIONER_CLUSTER_REGISTRY")),
-		ImagePoliciesPath: strings.TrimSpace(getenv("PROVISIONER_IMAGE_POLICIES")),
-		FlagFilePath:      strings.TrimSpace(getenv("PROVISIONER_FLAG_FILE")),
-		WorkerConcurrency: 10,
-		MaxAttempts:       4,
-		ReadyTimeout:      2 * time.Minute,
-		PollInterval:      time.Second,
-		RollbackTimeout:   30 * time.Second,
-		DeleteTimeout:     time.Minute,
+		Address:            valueOrDefault(getenv("PROVISIONER_ADDR"), "127.0.0.1:8080"),
+		RegistryPath:       strings.TrimSpace(getenv("PROVISIONER_CLUSTER_REGISTRY")),
+		ImagePoliciesPath:  strings.TrimSpace(getenv("PROVISIONER_IMAGE_POLICIES")),
+		BackendSecretURL:   strings.TrimSpace(getenv("PROVISIONER_BACKEND_SECRET_URL")),
+		BackendSecretToken: strings.TrimSpace(getenv("PROVISIONER_BACKEND_SECRET_TOKEN")),
+		WorkerConcurrency:  10,
+		MaxAttempts:        4,
+		ReadyTimeout:       2 * time.Minute,
+		PollInterval:       time.Second,
+		RollbackTimeout:    30 * time.Second,
+		DeleteTimeout:      time.Minute,
 	}
 	if config.RegistryPath == "" {
 		return appConfig{}, errors.New("PROVISIONER_CLUSTER_REGISTRY is required")
 	}
-	if config.FlagFilePath != "" && config.ImagePoliciesPath == "" {
-		return appConfig{}, errors.New("PROVISIONER_FLAG_FILE requires PROVISIONER_IMAGE_POLICIES")
+	if strings.TrimSpace(getenv("PROVISIONER_FLAG_FILE")) != "" {
+		return appConfig{}, errors.New("PROVISIONER_FLAG_FILE has been replaced by Backend secret references")
 	}
-	if config.FlagFilePath != "" && !filepath.IsAbs(config.FlagFilePath) && !strings.HasPrefix(config.FlagFilePath, "/") {
-		return appConfig{}, errors.New("PROVISIONER_FLAG_FILE must be an absolute path")
+	if config.BackendSecretURL != "" || config.BackendSecretToken != "" {
+		if _, err := k3s.NewBackendSecretResolver(config.BackendSecretURL, config.BackendSecretToken); err != nil {
+			return appConfig{}, err
+		}
 	}
 
 	var err error
@@ -172,26 +175,22 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 			return nil, fmt.Errorf("load image policies: %w", err)
 		}
 	}
-	var flags *k3s.FlagCatalog
-	if config.FlagFilePath != "" {
-		flags, err = k3s.LoadFlagCatalog(config.FlagFilePath)
+	var secretResolver k3s.SecretResolver
+	if config.BackendSecretURL != "" {
+		secretResolver, err = k3s.NewBackendSecretResolver(config.BackendSecretURL, config.BackendSecretToken)
 		if err != nil {
-			return nil, fmt.Errorf("load local FLAG file: %w", err)
-		}
-		for _, image := range flags.Images() {
-			if !imagePolicies.AllowsFlag(image) {
-				return nil, errors.New("local FLAG file contains an image without a reviewed FLAG policy")
-			}
+			return nil, err
 		}
 	}
-	if err := flags.Require(imagePolicies.RequiredFlagImages()); err != nil {
-		return nil, err
+	if len(imagePolicies.RequiredFlagImages()) > 0 && secretResolver == nil {
+		return nil, errors.New("enabled FLAG images require a Backend secret resolver")
 	}
 	createAdapter, err := k3s.NewAdapter(registry, k3s.AdapterConfig{
-		ReadyTimeout:    config.ReadyTimeout,
-		PollInterval:    config.PollInterval,
-		RollbackTimeout: config.RollbackTimeout,
-		Flags:           flags,
+		ReadyTimeout:       config.ReadyTimeout,
+		PollInterval:       config.PollInterval,
+		RollbackTimeout:    config.RollbackTimeout,
+		Secrets:            secretResolver,
+		RequiredFlagImages: imagePolicies.RequiredFlagImages(),
 	})
 	if err != nil {
 		return nil, err

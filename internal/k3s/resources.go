@@ -9,6 +9,7 @@ import (
 	"math"
 	"net"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -37,7 +38,7 @@ type ResourceSet struct {
 	ResourceQuota      *corev1.ResourceQuota
 	LimitRange         *corev1.LimitRange
 	NetworkPolicies    []*networkingv1.NetworkPolicy
-	FlagSecret         *corev1.Secret
+	EnvSecret          *corev1.Secret
 	Deployments        []*appsv1.Deployment
 	Services           []*corev1.Service
 	Ingress            *networkingv1.Ingress
@@ -157,6 +158,16 @@ func buildResourceSetForOperation(cluster Cluster, command provisioner.CreateWor
 				Requests: quantities,
 				Limits:   quantities.DeepCopy(),
 			},
+		}
+		names := make([]string, 0, len(container.Env))
+		for name := range container.Env {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			podContainer.Env = append(podContainer.Env, corev1.EnvVar{
+				Name: name, Value: strings.ReplaceAll(container.Env[name], "$", "$$"),
+			})
 		}
 		if container.ReadinessHTTP != nil {
 			podContainer.ReadinessProbe = &corev1.Probe{
@@ -454,6 +465,11 @@ func validWorkloadCommand(
 	names := make(map[string]struct{}, len(containers))
 	hasExposed := false
 	for _, container := range containers {
+		if provisioner.ValidateEnvironment(container.Env, false) != nil ||
+			!provisioner.ValidSecretReference(container.SecretRef) ||
+			(container.RequiresFlag && container.SecretRef == "") {
+			return false
+		}
 		if len(validation.IsDNS1123Label(container.Name)) > 0 ||
 			strings.TrimSpace(container.Image) == "" ||
 			len(container.Ports) == 0 {

@@ -1,25 +1,83 @@
-name: Deploy Provisioner MVP (legacy AWS, manual)
+name: Deploy Provisioner test server (manual, Tailscale)
 
 on:
   workflow_dispatch:
+    inputs:
+      expected_current_policy_sha256:
+        description: SHA-256 of the policy currently approved on the server
+        required: true
+        type: string
+      candidate_env_path:
+        description: Optional server-local root-owned 0600 environment candidate
+        required: false
+        type: string
+      candidate_policy_path:
+        description: Optional server-local image policy candidate
+        required: false
+        type: string
+      expected_candidate_policy_sha256:
+        description: SHA-256 of candidate_policy_path, when provided
+        required: false
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: provisioner-mvp-deployment
+  group: provisioner-test-deployment
   cancel-in-progress: false
 
 jobs:
   test-build-deploy:
     if: github.ref == 'refs/heads/dev'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    environment: runtime-test
+    timeout-minutes: 25
     env:
-      SSH_HOST: 3.36.110.174
-      SSH_USER: ubuntu
+      SSH_HOST: ${{ vars.PROVISIONER_DEPLOY_SSH_HOST }}
+      SSH_USER: ${{ vars.PROVISIONER_DEPLOY_SSH_USER }}
+      SSH_HOST_KEY: ${{ secrets.PROVISIONER_DEPLOY_SSH_HOST_KEY }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROVISIONER_SSH_PRIVATE_KEY }}
+      TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+      TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+      TS_TAGS: ${{ vars.PROVISIONER_TAILSCALE_TAGS }}
+      EXPECTED_CURRENT_POLICY_SHA256: ${{ inputs.expected_current_policy_sha256 }}
+      CANDIDATE_ENV_PATH: ${{ inputs.candidate_env_path }}
+      CANDIDATE_POLICY_PATH: ${{ inputs.candidate_policy_path }}
+      EXPECTED_CANDIDATE_POLICY_SHA256: ${{ inputs.expected_candidate_policy_sha256 }}
+      REMOTE_DIR: /tmp/provisioner-deploy-${{ github.sha }}-${{ github.run_id }}
 
     steps:
+      - name: Check required deployment configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in SSH_HOST SSH_USER SSH_HOST_KEY SSH_PRIVATE_KEY TS_OAUTH_CLIENT_ID TS_OAUTH_SECRET TS_TAGS EXPECTED_CURRENT_POLICY_SHA256; do
+            if [[ -z "${!name}" ]]; then
+              printf '%s is required\n' "${name}" >&2
+              exit 1
+            fi
+          done
+          [[ "${SSH_HOST}" =~ ^[A-Za-z0-9.-]+$ ]] || exit 1
+          [[ "${SSH_USER}" =~ ^[a-z_][a-z0-9_-]*$ ]] || exit 1
+          [[ "${EXPECTED_CURRENT_POLICY_SHA256}" =~ ^[0-9a-f]{64}$ ]] || exit 1
+          [[ "${SSH_HOST_KEY}" == "${SSH_HOST} "* ]] || exit 1
+          for path in "${CANDIDATE_ENV_PATH}" "${CANDIDATE_POLICY_PATH}"; do
+            if [[ -n "${path}" && ! "${path}" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+              printf 'candidate paths must be absolute and contain only safe characters\n' >&2
+              exit 1
+            fi
+            if [[ "${path}" == *".."* ]]; then
+              printf 'candidate paths must not traverse parent directories\n' >&2
+              exit 1
+            fi
+          done
+          if [[ -n "${CANDIDATE_POLICY_PATH}" ]]; then
+            [[ "${EXPECTED_CANDIDATE_POLICY_SHA256}" =~ ^[0-9a-f]{64}$ ]] || exit 1
+          elif [[ -n "${EXPECTED_CANDIDATE_POLICY_SHA256}" ]]; then
+            exit 1
+          fi
+
       - name: Check out source
         uses: actions/checkout@v7
 
@@ -40,7 +98,7 @@ jobs:
 
       - name: Build Linux binary
         env:
-          CGO_ENABLED: "0"
+          CGO_ENABLED: '0'
           GOOS: linux
           GOARCH: amd64
         run: |
@@ -48,31 +106,59 @@ jobs:
           go build -trimpath -ldflags='-s -w' -o dist/secure-provisioner ./cmd/provisioner
           sha256sum dist/secure-provisioner > dist/secure-provisioner.sha256
 
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: ${{ vars.PROVISIONER_TAILSCALE_TAGS }}
+          ping: ${{ vars.PROVISIONER_DEPLOY_SSH_HOST }}
+
       - name: Configure pinned SSH host
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.PROVISIONER_SSH_PRIVATE_KEY }}
+        id: configure_ssh
+        shell: bash
         run: |
-          if [[ -z "${SSH_PRIVATE_KEY}" ]]; then
-            echo "PROVISIONER_SSH_PRIVATE_KEY is required" >&2
-            exit 1
-          fi
+          set -euo pipefail
           install -d -m 0700 "${HOME}/.ssh"
           printf '%s\n' "${SSH_PRIVATE_KEY}" | tr -d '\r' > "${HOME}/.ssh/id_provisioner"
           chmod 0600 "${HOME}/.ssh/id_provisioner"
-          printf '%s\n' '3.36.110.174 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDIZpU/FNdIdzs0AwvhTnRZ0gHNMLuSyrYu9nWLilEM3' > "${HOME}/.ssh/known_hosts"
+          printf '%s\n' "${SSH_HOST_KEY}" > "${HOME}/.ssh/known_hosts"
           chmod 0644 "${HOME}/.ssh/known_hosts"
 
       - name: Upload release candidate
+        shell: bash
         run: |
-          scp -i "${HOME}/.ssh/id_provisioner" \
-            "dist/secure-provisioner" \
-            "scripts/deploy-provisioner-release.sh" \
-            "${SSH_USER}@${SSH_HOST}:/tmp/"
+          set -euo pipefail
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -i "${HOME}/.ssh/id_provisioner" \
+            "${SSH_USER}@${SSH_HOST}" "install -d -m 0700 '${REMOTE_DIR}'"
+          scp -o BatchMode=yes -o StrictHostKeyChecking=yes -i "${HOME}/.ssh/id_provisioner" \
+            dist/secure-provisioner scripts/deploy-provisioner-release.sh \
+            "${SSH_USER}@${SSH_HOST}:${REMOTE_DIR}/"
 
       - name: Deploy and verify
+        shell: bash
         run: |
+          set -euo pipefail
           binary_sha256="$(cut -d ' ' -f 1 dist/secure-provisioner.sha256)"
-          ssh -i "${HOME}/.ssh/id_provisioner" "${SSH_USER}@${SSH_HOST}" \
-            "sudo bash /tmp/deploy-provisioner-release.sh /tmp/secure-provisioner '${binary_sha256}'"
-          ssh -i "${HOME}/.ssh/id_provisioner" "${SSH_USER}@${SSH_HOST}" \
-            "rm -f /tmp/deploy-provisioner-release.sh"
+          args=(sudo -n bash "${REMOTE_DIR}/deploy-provisioner-release.sh" \
+            "${REMOTE_DIR}/secure-provisioner" "${binary_sha256}" \
+            --expected-current-policy-sha256 "${EXPECTED_CURRENT_POLICY_SHA256}")
+          if [[ -n "${CANDIDATE_ENV_PATH}" ]]; then
+            args+=(--candidate-env "${CANDIDATE_ENV_PATH}")
+          fi
+          if [[ -n "${CANDIDATE_POLICY_PATH}" ]]; then
+            args+=(--candidate-policy "${CANDIDATE_POLICY_PATH}" \
+              --expected-candidate-policy-sha256 "${EXPECTED_CANDIDATE_POLICY_SHA256}")
+          fi
+          printf -v remote_command '%q ' "${args[@]}"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -i "${HOME}/.ssh/id_provisioner" \
+            "${SSH_USER}@${SSH_HOST}" "${remote_command}"
+          printf 'deployed source commit %s\n' "${GITHUB_SHA}"
+
+      - name: Remove remote upload files
+        if: always() && steps.configure_ssh.outcome == 'success'
+        shell: bash
+        run: |
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -i "${HOME}/.ssh/id_provisioner" \
+            "${SSH_USER}@${SSH_HOST}" \
+            "rm -f '${REMOTE_DIR}/secure-provisioner' '${REMOTE_DIR}/deploy-provisioner-release.sh'; rmdir '${REMOTE_DIR}'" || true

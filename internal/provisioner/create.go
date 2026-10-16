@@ -35,8 +35,11 @@ type WorkloadContainer struct {
 	Expose bool
 	// ExposedPorts is used for a partial selection. Omitted legacy payloads keep
 	// their original Expose semantics and serialized spec hashes.
-	ExposedPorts  []int          `json:",omitempty"`
-	ReadinessHTTP *HTTPReadiness `json:",omitempty"`
+	ExposedPorts  []int             `json:",omitempty"`
+	ReadinessHTTP *HTTPReadiness    `json:",omitempty"`
+	Env           map[string]string `json:",omitempty"`
+	SecretRef     string            `json:",omitempty"`
+	RequiresFlag  bool              `json:",omitempty"`
 }
 
 type HTTPReadiness struct {

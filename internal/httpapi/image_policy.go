@@ -234,6 +234,7 @@ func (catalog *ImagePolicyCatalog) Apply(request *CreateWorkloadRequest) error {
 	}
 	for index, policy := range selected {
 		container := &request.Workload.Containers[index]
+		container.requiresFlag = policy.RequiresFlag
 		container.RunAsUser = policy.RunAsUser
 		container.Expose = false
 		container.ExposedPorts = slices.Clone(policy.ExposedPorts)

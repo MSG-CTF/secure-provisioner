@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"path"
 	"strings"
 
@@ -37,14 +38,17 @@ type RuntimeHealthcheck struct {
 }
 
 type RuntimeContainer struct {
-	Name          string         `json:"name"`
-	Image         string         `json:"image"`
-	Ports         []int          `json:"ports"`
-	Expose        bool           `json:"expose"`
-	ExposedPorts  []int          `json:"exposed_ports,omitempty"`
-	RunAsUser     int64          `json:"run_as_user"`
-	WritablePaths []WritablePath `json:"writable_paths,omitempty"`
+	Name          string            `json:"name"`
+	Image         string            `json:"image"`
+	Ports         []int             `json:"ports"`
+	Expose        bool              `json:"expose"`
+	ExposedPorts  []int             `json:"exposed_ports,omitempty"`
+	RunAsUser     int64             `json:"run_as_user"`
+	WritablePaths []WritablePath    `json:"writable_paths,omitempty"`
+	Env           map[string]string `json:"env,omitempty"`
+	SecretRef     string            `json:"secret_ref,omitempty"`
 	readinessHTTP *provisioner.HTTPReadiness
+	requiresFlag  bool
 }
 
 func (container *RuntimeContainer) UnmarshalJSON(data []byte) error {
@@ -61,9 +65,29 @@ func (container *RuntimeContainer) UnmarshalJSON(data []byte) error {
 	}
 	for name := range fields {
 		switch name {
-		case "name", "image", "ports", "expose", "exposed_ports", "run_as_user", "writable_paths":
+		case "name", "image", "ports", "expose", "exposed_ports", "run_as_user", "writable_paths", "env", "secret_ref":
 		default:
 			return fmt.Errorf("unknown container field %q", name)
+		}
+	}
+	if raw, exists := fields["secret_ref"]; exists {
+		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) || decoded.SecretRef == "" {
+			return fmt.Errorf("secret_ref must be a canonical nonzero UUID")
+		}
+	}
+	if raw, exists := fields["env"]; exists {
+		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return fmt.Errorf("env must be an object")
+		}
+		var entries map[string]json.RawMessage
+		if json.Unmarshal(raw, &entries) != nil {
+			return fmt.Errorf("env must be an object")
+		}
+		for _, entry := range entries {
+			var value string
+			if bytes.Equal(bytes.TrimSpace(entry), []byte("null")) || json.Unmarshal(entry, &value) != nil {
+				return fmt.Errorf("env values must be strings")
+			}
 		}
 	}
 	if selected, exists := fields["exposed_ports"]; exists {
@@ -306,6 +330,15 @@ func (request CreateWorkloadRequest) normalizedContainers() ([]provisioner.Workl
 	names := make(map[string]struct{}, len(request.Workload.Containers))
 	hasExposed := false
 	for _, container := range request.Workload.Containers {
+		if err := provisioner.ValidateEnvironment(container.Env, false); err != nil {
+			return nil, err
+		}
+		if !provisioner.ValidSecretReference(container.SecretRef) {
+			return nil, fmt.Errorf("secret_ref must be a canonical nonzero UUID")
+		}
+		if container.requiresFlag && container.SecretRef == "" {
+			return nil, fmt.Errorf("reviewed image requires a backend secret_ref")
+		}
 		if problems := validation.IsDNS1123Label(container.Name); len(problems) > 0 {
 			return nil, fmt.Errorf("container name must be a DNS label")
 		}
@@ -339,6 +372,7 @@ func (request CreateWorkloadRequest) normalizedContainers() ([]provisioner.Workl
 		}
 		normalized := provisioner.WorkloadContainer{
 			Name: container.Name, Image: container.Image, Ports: ports, Expose: container.Expose,
+			Env: maps.Clone(container.Env), SecretRef: container.SecretRef, RequiresFlag: container.requiresFlag,
 		}
 		if container.readinessHTTP != nil {
 			readiness := *container.readinessHTTP

@@ -125,6 +125,38 @@ func TestReclaimedCreateCleansNamespaceAfterTargetDisabled(t *testing.T) {
 	assertDeleteActionCount(t, client, "namespaces", 1)
 }
 
+func TestReclaimedCreateCleansNamespaceBeforeFlagPolicyRejectsCommand(t *testing.T) {
+	command := validCreateCommand("aws-dev")
+	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources.Namespace.Annotations = map[string]string{"msgctf.io/operation-id": "operation-123"}
+	resources.Namespace.UID = types.UID("committed-namespace-uid")
+	resources.Namespace.ResourceVersion = "17"
+	client := fake.NewSimpleClientset(resources.Namespace)
+	registry := adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client)
+	adapter, err := NewAdapter(registry, AdapterConfig{
+		ReadyTimeout: time.Second, PollInterval: time.Millisecond,
+		RequiredFlagImages: []string{command.Containers[0].Image},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor, err := NewExecutor(adapter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation := operations.Operation{ID: "operation-123", Type: operations.OperationTypeCreate, CreateCommand: &command, CreateLeaseReclaimed: true}
+	if _, err := executor.Execute(context.Background(), operation); err == nil {
+		t.Fatal("recovered create unexpectedly succeeded")
+	}
+	if _, err := client.CoreV1().Namespaces().Get(t.Context(), resources.Namespace.Name, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("orphaned Namespace remains after flag policy change: %v", err)
+	}
+	assertDeleteActionCount(t, client, "namespaces", 1)
+}
+
 func TestReclaimedCreateRecordsExactUIDWhenRecoveryDeleteFails(t *testing.T) {
 	command := validCreateCommand("aws-dev")
 	resources, err := BuildResourceSet(validCluster("aws-dev"), command)

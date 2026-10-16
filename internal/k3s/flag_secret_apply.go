@@ -9,9 +9,9 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-// applyFlagSecret only creates in the newly owned namespace. A failed create
+// applyEnvSecret only creates in the newly owned namespace. A failed create
 // leaves ownership uncertain, so the caller rolls back the whole namespace.
-func applyFlagSecret(ctx context.Context, client kubernetes.Interface, desired *corev1.Secret) error {
+func applyEnvSecret(ctx context.Context, client kubernetes.Interface, desired *corev1.Secret) error {
 	secrets := client.CoreV1().Secrets(desired.Namespace)
 	if _, err := secrets.Create(ctx, desired.DeepCopy(), metav1.CreateOptions{}); err != nil {
 		return newRuntimeError("RESOURCE_APPLY_FAILED", kubernetesErrorRetryable(err), nil)
