@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 	"k8s.io/apimachinery/pkg/util/validation"
 )
@@ -18,8 +19,10 @@ import (
 // ImagePolicyCatalog is an operator-owned, immutable-at-runtime set of
 // requirements for published challenge images. It contains no secret values.
 type ImagePolicyCatalog struct {
-	managed map[string]struct{}
-	images  map[string]ImagePolicy
+	managed                  map[string]struct{}
+	images                   map[string]ImagePolicy
+	graphByImage             map[string]*isolation.WorkloadNetwork
+	graphManagedRepositories map[string]struct{}
 }
 
 type ImagePolicy struct {
@@ -60,9 +63,10 @@ func (catalog *ImagePolicyCatalog) AllowsFlag(image string) bool {
 }
 
 type imagePolicyFile struct {
-	SchemaVersion       int           `json:"schema_version"`
-	ManagedRepositories []string      `json:"managed_repositories"`
-	Images              []ImagePolicy `json:"images"`
+	SchemaVersion       int                         `json:"schema_version"`
+	ManagedRepositories []string                    `json:"managed_repositories"`
+	Images              []ImagePolicy               `json:"images"`
+	WorkloadNetworks    []isolation.WorkloadNetwork `json:"workload_networks,omitempty"`
 }
 
 var ErrImagePolicyRejected = errors.New("image policy rejected")
@@ -91,10 +95,10 @@ func ParseImagePolicies(contents []byte) (*ImagePolicyCatalog, error) {
 	if err := decoder.Decode(new(any)); err != io.EOF {
 		return nil, errors.New("image policy file must contain one JSON object")
 	}
-	if config.SchemaVersion != 1 || len(config.ManagedRepositories) == 0 || len(config.Images) == 0 {
-		return nil, errors.New("image policy file requires schema_version 1, managed_repositories, and images")
+	if (config.SchemaVersion != 1 && config.SchemaVersion != 2) || len(config.ManagedRepositories) == 0 || len(config.Images) == 0 || (config.SchemaVersion == 1 && config.WorkloadNetworks != nil) {
+		return nil, errors.New("image policy file requires schema_version 1 or 2, managed_repositories, and images; networks require version 2")
 	}
-	catalog := &ImagePolicyCatalog{managed: make(map[string]struct{}), images: make(map[string]ImagePolicy)}
+	catalog := &ImagePolicyCatalog{managed: make(map[string]struct{}), images: make(map[string]ImagePolicy), graphByImage: make(map[string]*isolation.WorkloadNetwork), graphManagedRepositories: make(map[string]struct{})}
 	for _, repository := range config.ManagedRepositories {
 		if repository == "" || repository != strings.ToLower(repository) || strings.ContainsAny(repository, "@: \t\r\n") {
 			return nil, fmt.Errorf("invalid managed image repository %q", repository)
@@ -138,7 +142,43 @@ func ParseImagePolicies(contents []byte) (*ImagePolicyCatalog, error) {
 		}
 		catalog.images[policy.Image] = policy
 	}
+	seenGraphIDs := make(map[string]struct{}, len(config.WorkloadNetworks))
+	for index := range config.WorkloadNetworks {
+		graph := &config.WorkloadNetworks[index]
+		if _, duplicate := seenGraphIDs[graph.ID]; duplicate {
+			return nil, fmt.Errorf("duplicate workload network id %q", graph.ID)
+		}
+		seenGraphIDs[graph.ID] = struct{}{}
+		requirements := make([]isolation.ContainerRequirement, 0, len(graph.Containers))
+		for _, identity := range graph.Containers {
+			image, known := catalog.images[identity.Image]
+			if !known || image.Status != "create_enabled" || image.Container != identity.Name || image.IsolationProfile != string(graph.IsolationProfile) || !samePolicyPorts(image.Ports, identity.Ports) {
+				return nil, fmt.Errorf("workload network %q identity lacks an enabled matching image policy", graph.ID)
+			}
+			if _, duplicate := catalog.graphByImage[identity.Image]; duplicate {
+				return nil, fmt.Errorf("image belongs to more than one workload network: %q", identity.Image)
+			}
+			requirements = append(requirements, isolation.ContainerRequirement{Name: identity.Name, Ports: slices.Clone(identity.Ports)})
+		}
+		if err := isolation.ValidateWorkloadNetwork(graph, graph.IsolationProfile, requirements); err != nil {
+			return nil, fmt.Errorf("invalid workload network %q: %w", graph.ID, err)
+		}
+		for _, identity := range graph.Containers {
+			catalog.graphByImage[identity.Image] = isolation.CloneWorkloadNetwork(graph)
+			catalog.graphManagedRepositories[imageRepository(identity.Image)] = struct{}{}
+		}
+	}
 	return catalog, nil
+}
+
+func samePolicyPorts(first, second []int) bool {
+	if len(first) != len(second) {
+		return false
+	}
+	a, b := slices.Clone(first), slices.Clone(second)
+	slices.Sort(a)
+	slices.Sort(b)
+	return slices.Equal(a, b)
 }
 
 func (catalog *ImagePolicyCatalog) AllowsCISmoke(image string) bool {
@@ -207,6 +247,7 @@ func (catalog *ImagePolicyCatalog) Apply(request *CreateWorkloadRequest) error {
 	if catalog == nil || request == nil {
 		return nil
 	}
+	request.workloadNetwork = nil
 	if request.Workload.Image != "" {
 		if _, managed := catalog.managed[imageRepository(request.Workload.Image)]; managed {
 			return fmt.Errorf("%w: managed images require containers[]", ErrImagePolicyRejected)
@@ -221,6 +262,9 @@ func (catalog *ImagePolicyCatalog) Apply(request *CreateWorkloadRequest) error {
 			}
 			continue
 		}
+		if _, graphManaged := catalog.graphManagedRepositories[imageRepository(container.Image)]; graphManaged && catalog.graphByImage[container.Image] == nil {
+			return fmt.Errorf("%w: graph-managed repository requires an exact workload network", ErrImagePolicyRejected)
+		}
 		if policy.Status != "create_enabled" {
 			return fmt.Errorf("%w: image is not ready for deployment", ErrImagePolicyRejected)
 		}
@@ -231,6 +275,38 @@ func (catalog *ImagePolicyCatalog) Apply(request *CreateWorkloadRequest) error {
 	}
 	if len(selected) != 0 && len(selected) != len(request.Workload.Containers) {
 		return fmt.Errorf("%w: managed images cannot run with unreviewed companion containers", ErrImagePolicyRejected)
+	}
+	var graph *isolation.WorkloadNetwork
+	for _, container := range request.Workload.Containers {
+		candidate := catalog.graphByImage[container.Image]
+		if candidate == nil {
+			continue
+		}
+		if graph != nil && graph.ID != candidate.ID {
+			return fmt.Errorf("%w: mixed workload network image sets", ErrImagePolicyRejected)
+		}
+		graph = candidate
+	}
+	if graph != nil {
+		if len(request.Workload.Containers) != len(graph.Containers) || request.IsolationProfile != string(graph.IsolationProfile) {
+			return fmt.Errorf("%w: incomplete workload network image set", ErrImagePolicyRejected)
+		}
+		expected := make(map[string]isolation.NetworkIdentity, len(graph.Containers))
+		for _, identity := range graph.Containers {
+			expected[identity.Name] = identity
+		}
+		seen := make(map[string]struct{}, len(request.Workload.Containers))
+		for _, container := range request.Workload.Containers {
+			identity, found := expected[container.Name]
+			if !found || identity.Image != container.Image || !samePolicyPorts(identity.Ports, container.Ports) {
+				return fmt.Errorf("%w: workload network image identity mismatch", ErrImagePolicyRejected)
+			}
+			if _, duplicate := seen[container.Name]; duplicate {
+				return fmt.Errorf("%w: duplicate workload network container", ErrImagePolicyRejected)
+			}
+			seen[container.Name] = struct{}{}
+		}
+		request.workloadNetwork = isolation.CloneWorkloadNetwork(graph)
 	}
 	for index, policy := range selected {
 		container := &request.Workload.Containers[index]

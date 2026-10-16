@@ -139,6 +139,7 @@ type CreateWorkloadRequest struct {
 	IsolationProfile string             `json:"isolation_profile"`
 	Target           RuntimeTarget      `json:"target"`
 	Workload         RuntimeWorkload    `json:"workload"`
+	workloadNetwork  *isolation.WorkloadNetwork
 }
 
 func (request *CreateWorkloadRequest) UnmarshalJSON(data []byte) error {
@@ -499,6 +500,7 @@ func (request CreateWorkloadRequest) toPolicyRequest(containers []provisioner.Wo
 	return isolation.Request{
 		WorkloadProfile: isolation.WorkloadProfile(request.IsolationProfile),
 		Containers:      requirements,
+		WorkloadNetwork: isolation.CloneWorkloadNetwork(request.workloadNetwork),
 		ResourceLimits: isolation.ResourceLimits{
 			CPUMillicores:       request.Workload.ResourceLimits.CPUMillicores,
 			MemoryMiB:           request.Workload.ResourceLimits.MemoryMiB,
