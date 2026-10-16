@@ -129,6 +129,28 @@ func (s *Service) EnqueueCreate(command provisioner.CreateWorkloadCommand) (oper
 	return operation, created, err
 }
 
+// FindCreateByRequest returns an accepted operation without applying today's
+// image policy. Old snapshots without an input fingerprint use the legacy path.
+func (s *Service) FindCreateByRequest(requestID, fingerprint string) (operations.Operation, bool, error) {
+	existing, err := s.operations.GetByRequestID(requestID)
+	if errors.Is(err, operations.ErrOperationNotFound) {
+		return operations.Operation{}, false, nil
+	}
+	if err != nil {
+		return operations.Operation{}, false, err
+	}
+	if existing.Type != operations.OperationTypeCreate || existing.CreateCommand == nil {
+		return operations.Operation{}, false, operations.ErrIdempotencyConflict
+	}
+	if existing.CreateCommand.RequestFingerprint == "" {
+		return operations.Operation{}, false, nil
+	}
+	if fingerprint == "" || existing.CreateCommand.RequestFingerprint != fingerprint {
+		return operations.Operation{}, false, operations.ErrIdempotencyConflict
+	}
+	return existing, true, nil
+}
+
 func (s *Service) existingCreateOperation(command provisioner.CreateWorkloadCommand) (operations.Operation, bool, error) {
 	existing, err := s.operations.GetByRequestID(command.RequestID)
 	if errors.Is(err, operations.ErrOperationNotFound) {
@@ -191,7 +213,40 @@ type bindingCreateAdapter struct {
 	createdBindings *createdBindingRecorder
 }
 
+func (a *bindingCreateAdapter) CleanupFailedCreate(ctx context.Context, command provisioner.CreateWorkloadCommand, cleanup provisioner.CreateCleanup) error {
+	if cleanup.RuntimeWorkloadID != "" {
+		namespace, err := k3s.NamespaceForInstance(command.InstanceID)
+		if err != nil {
+			return err
+		}
+		binding := createdBinding(command, provisioner.CreateWorkloadResult{RuntimeWorkloadID: cleanup.RuntimeWorkloadID, NamespaceUID: cleanup.NamespaceUID}, namespace, a.createdBindings.now().UTC())
+		err = a.createdBindings.cleanup.DeleteWorkload(ctx, provisioner.DeleteWorkloadCommand{
+			RequestID: command.RequestID, InstanceID: command.InstanceID, TeamID: command.TeamID,
+			RuntimeType: command.RuntimeType, TargetID: command.TargetID, RuntimeWorkloadID: cleanup.RuntimeWorkloadID,
+			Reason: provisioner.DeleteReasonCreateFailedCleanup,
+		}, binding)
+		if err != nil {
+			return provisioner.WithCreateCleanupPending(operations.NewExecutionError("ROLLBACK_FAILED", isRetryableCleanupError(err), err), cleanup)
+		}
+		return provisioner.WithCreateCleanupCompleted(operations.NewExecutionError(cleanup.FailureCode, false, nil))
+	}
+	cleaner, ok := a.inner.(k3s.FailedCreateCleaner)
+	if !ok {
+		return operations.NewExecutionError("ROLLBACK_FAILED", false, nil)
+	}
+	return cleaner.CleanupFailedCreate(ctx, command, cleanup)
+}
+
 func (a *bindingCreateAdapter) CreateWorkload(ctx context.Context, command provisioner.CreateWorkloadCommand) (provisioner.CreateWorkloadResult, error) {
+	return a.inner.CreateWorkload(ctx, command)
+}
+
+func (a *bindingCreateAdapter) CreateWorkloadForOperation(ctx context.Context, command provisioner.CreateWorkloadCommand, operationID string) (provisioner.CreateWorkloadResult, error) {
+	if aware, ok := a.inner.(interface {
+		CreateWorkloadForOperation(context.Context, provisioner.CreateWorkloadCommand, string) (provisioner.CreateWorkloadResult, error)
+	}); ok && operationID != "" {
+		return aware.CreateWorkloadForOperation(ctx, command, operationID)
+	}
 	return a.inner.CreateWorkload(ctx, command)
 }
 
@@ -233,13 +288,13 @@ func (r *createdBindingRecorder) Save(
 			Reason:            provisioner.DeleteReasonCreateFailedCleanup,
 		}, binding)
 		if cleanupErr != nil {
-			return operations.NewExecutionError(
+			return provisioner.WithCreateCleanupPending(operations.NewExecutionError(
 				"ROLLBACK_FAILED",
 				isRetryableCleanupError(cleanupErr),
 				errors.Join(saveErr, cleanupErr),
-			)
+			), provisioner.CreateCleanup{NamespaceUID: result.NamespaceUID, RuntimeWorkloadID: result.RuntimeWorkloadID, FailureCode: "RUNTIME_BINDING_SAVE_FAILED"})
 		}
-		return operations.NewExecutionError("RUNTIME_BINDING_SAVE_FAILED", false, saveErr)
+		return provisioner.WithCreateCleanupCompleted(operations.NewExecutionError("RUNTIME_BINDING_SAVE_FAILED", false, saveErr))
 	}
 	return nil
 }
@@ -287,6 +342,7 @@ func (s *Service) GetRuntimeStatus(ctx context.Context, instanceID string) (k3s.
 	if binding.State == runtimebinding.StateDeleted {
 		return k3s.RuntimeStatus{
 			InstanceID:        binding.InstanceID,
+			TeamID:            binding.TeamID,
 			TargetID:          binding.TargetID,
 			RuntimeWorkloadID: binding.RuntimeWorkloadID,
 			Phase:             "TERMINATED",

@@ -831,7 +831,7 @@ func (contextErrorStore) CheckpointCreateResult(string, provisioner.CreateWorklo
 	return Operation{}, errors.New("not implemented")
 }
 
-func (contextErrorStore) MarkRetrying(string, string) (Operation, error) {
+func (contextErrorStore) MarkRetrying(string, Failure) (Operation, error) {
 	return Operation{}, errors.New("not implemented")
 }
 
@@ -841,7 +841,7 @@ func (contextErrorStore) MarkSucceeded(string, OperationResult) (Operation, erro
 	return Operation{}, errors.New("not implemented")
 }
 
-func (contextErrorStore) MarkFailed(string, string) (Operation, error) {
+func (contextErrorStore) MarkFailed(string, Failure) (Operation, error) {
 	return Operation{}, errors.New("not implemented")
 }
 

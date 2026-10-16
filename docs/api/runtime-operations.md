@@ -15,6 +15,10 @@
 - `Location` Header는 Operation 조회 경로를 제공한다.
 - `Retry-After` Header는 다음 조회까지 기다릴 초를 제공한다.
 - `request_id`는 멱등 키다.
+- 신규 접수 시 호출자 입력의 지문과 승인된 실행 설정을 함께 저장한다
+  동일 입력 재전송은 이미지 정책 변경·차단 후에도 기존 Operation을 반환하며 새 작업을 만들지 않는다
+  다른 입력은 409로 거절하고, 새로운 요청에는 현재 차단 정책을 적용한다
+  지문이 없는 구버전 Operation은 기존 비교를 사용하므로 정책을 바꾸기 전에 대기 요청을 정리한다
 - JSON 필드는 `snake_case`를 사용한다.
 - 시간은 UTC RFC 3339 형식을 사용한다.
 - 로컬 기본 주소는 `http://127.0.0.1:8080`이다.
@@ -95,6 +99,8 @@ Content-Type: application/json
 - 신규 `exposed_ports`: 공개할 포트 목록. 중복 없는 `ports` 부분집합이며 빈 배열은
   전체 private다. `null`, 중복, 범위 밖 포트, `ports`에 없는 포트는 거절한다.
 - 두 필드를 함께 보내면 `expose: false`나 `null`도 포함하여 `400 INVALID_REQUEST`다.
+- 공개 포트가 여러 개여도 HTTP `healthcheck`는 선택 사항입니다
+  생략하면 첫 번째 공개 포트에 TCP 준비 상태 검사를 적용합니다
 
 ### 같은 WEB 컨테이너에서 public/private 포트 혼합
 
@@ -348,6 +354,15 @@ Retry-After: 2
 
 `QUEUED`, `RUNNING`, `RETRYING` 응답에는 `Retry-After`를 포함한다.
 
+HTTP healthcheck를 지정한 컨테이너는 해당 응답으로 준비 상태를 확인합니다
+그 외 공개 포트가 있는 컨테이너는 첫 번째 공개 포트에 TCP 연결이 두 번 연속 성공해야 준비된 것으로 처리합니다
+공개 포트가 없는 내부 컨테이너는 첫 번째 선언 포트에 같은 TCP 검사를 적용합니다
+공개 포트 순서는 exposed_ports를 지정했으면 그 목록을, expose만 지정했으면 ports 목록을 따릅니다
+TCP 기본 검사는 나머지 포트의 준비 상태나 서비스 기능까지 확인하지 않습니다
+여러 서비스의 준비 상태를 함께 확인해야 하면 이를 반영하는 HTTP healthcheck를 지정합니다
+내부 DB에도 같은 기준을 적용하며 모든 컨테이너와 Service endpoint가 준비되어야 생성 성공을 반환합니다
+TCP 확인은 포트 연결 여부만 보므로 DB 쿼리와 같은 서비스 기능은 별도 검증이 필요합니다
+
 ### 생성 성공
 
 ```json
@@ -380,7 +395,9 @@ Retry-After: 2
 
 공개 포트마다 `endpoints[]` 항목을 하나씩 반환한다. 예를 들어 같은 WEB 컨테이너의
 `ports: [8080, 9000, 9090]`, `exposed_ports: [8080, 9090]` 요청은 공개 URL 2개를
-반환하고 private 포트 9000은 응답에서 제외한다. 다음은 NODE_PORT 모드의 생성 완료
+반환하고 private 포트 9000은 응답에서 제외합니다
+HTTP `healthcheck`를 생략하면 공개 목록의 첫 번째 포트인 8080을 검사합니다
+다음은 NODE_PORT 모드의 생성 완료
 `result` 예시이며, 외부 포트 31042·31043은 예시 할당값이다.
 
 ```json
@@ -458,6 +475,20 @@ Pwn 성공 결과는 endpoint의 `protocol`이 `TCP`이고 주소가
   "last_error_code": "TARGET_TEMPORARILY_UNAVAILABLE"
 }
 ```
+
+생성은 실패했지만 해당 namespace의 삭제까지 확인했으면 응답에
+cleanup_completed: true를 추가합니다
+Scheduler는 이때 인스턴스를 CLEANED로 전환하고 예약 자원을 반납할 수 있습니다
+이 필드가 없거나 false인 경우, 또는 runtime-status가 404인 경우에는 정리 완료로 판단하지 않습니다
+
+삭제가 지연되면 namespace UID와 원래 실패 원인을 저장하고 다음 시도에서 삭제를 이어갑니다
+같은 CREATE를 다시 실행하지 않으며, 이름이 같아도 UID가 다른 namespace는 지우지 않습니다
+Worker 종료로 삭제가 중단된 경우에도 이 정보를 유지합니다
+만료된 CREATE lease를 다른 Worker가 가져간 경우에는 이전 Worker의 작업이 남아 있을 수 있어 정리 완료를 확정하지 않습니다
+최대 재시도 횟수를 넘겼거나 소유권을 확인할 수 없는 건은 별도 확인이 필요합니다
+
+배포할 때는 003_create_cleanup_proof.sql을 포함한 Runtime을 먼저 적용하고 Scheduler를 갱신합니다
+기존 실패 기록에는 정리 완료 값을 소급해서 넣지 않습니다
 
 ## 런타임 상태 조회
 
@@ -669,6 +700,7 @@ Scheduler가 처리한 비동기 Operation의 최종 실패는 서로 다른 계
 | `POST /internal/v1/instances` | 409 | `REQUEST_ID_CONFLICT` | `request_id`가 다른 명령에 이미 사용됨 | 접수 거절; 기존 Operation은 그대로 유지 |
 | `POST /internal/v1/instances` | 415 | `UNSUPPORTED_MEDIA_TYPE` | `Content-Type`이 `application/json`이 아님 | 접수 거절; Operation/Worker 없음 |
 | `POST /internal/v1/instances` | 422 | `ISOLATION_POLICY_REJECTED` | 형식은 유효하지만 trusted resolver가 profile 또는 요구사항을 승인하지 않음 | 접수 거절; Operation/Worker/Binding 없음 |
+| `POST /internal/v1/instances` | 422 | `IMAGE_POLICY_REJECTED` | 운영자가 관리하는 이미지 저장소의 digest가 미등록·차단 상태이거나 컨테이너 이름·포트·격리 프로필이 정책과 다름 | 접수 거절; Operation/Worker/Binding 없음 |
 | `POST /internal/v1/instances` | 502 | `CREATE_QUEUE_FAILED` | 생성 Operation을 queue에 기록하지 못함 | 접수 거절; Worker 실행 없음 |
 | `DELETE /internal/v1/instances/{instance_id}` | 400 | `INVALID_REQUEST` | JSON, 경로/본문 값, enum 또는 필수 필드가 유효하지 않음 | 접수 거절; Operation/Worker 없음 |
 | `DELETE /internal/v1/instances/{instance_id}` | 404 | `INSTANCE_NOT_FOUND` | Instance Binding이 없음 | 접수 거절; Operation/Worker 없음 |

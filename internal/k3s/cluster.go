@@ -13,9 +13,10 @@ type Provider string
 type ExposureMode string
 
 const (
-	ProviderAWS Provider = "AWS"
-	ProviderGCP Provider = "GCP"
-	ProviderNCP Provider = "NCP"
+	ProviderAWS   Provider = "AWS"
+	ProviderGCP   Provider = "GCP"
+	ProviderNCP   Provider = "NCP"
+	ProviderLocal Provider = "LOCAL"
 
 	ExposureModeIngressPath ExposureMode = "INGRESS_PATH"
 	ExposureModeNodePort    ExposureMode = "NODE_PORT"

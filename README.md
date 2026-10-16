@@ -18,9 +18,12 @@ CTF 문제 인스턴스의 K3s 워크로드 생성·삭제와 상태 조회를 �
 - `STANDARD@v2` 격리 baseline, non-root UID, 제한된 writable path,
   동일 인스턴스 내부 통신 허용과 기본 `NONE` outbound 정책 적용
 - 적용된 격리/workload profile, resolver 승인 요구사항과 Namespace UID를 Runtime Binding에 기록
+- 선택적으로 운영자가 관리하는 이미지 digest별 쓰기 경로·공개 포트·UID 정책을 적용
 
 API 계약은 [런타임 API 명세](docs/api/runtime-operations.md)와
 [OpenAPI](docs/api/secure-provisioner.openapi.yaml)에 정리되어 있습니다.
+[WEB 이미지별 런타임 정책](docs/operations/web-image-policy-catalog.md)은
+`info.yaml`을 수정하지 않고 운영 설정을 고정하는 방법과 현재 이미지별 상태를 설명합니다.
 
 Scheduler는 생성 요청에 `isolation_profile`을 `WEB` 또는 `PWN`으로 지정합니다.
 Provisioner는 공통 `STANDARD@v2` baseline에 선택한 workload profile을 합성하고,
@@ -36,6 +39,8 @@ raw Kubernetes/보안 설정과 제거된 과거 profile 참조 필드는 API �
 | 환경 변수 | 기본값 | 의미 |
 |---|---:|---|
 | `PROVISIONER_CLUSTER_REGISTRY` | 없음 | target Registry JSON 파일 경로 |
+| `PROVISIONER_IMAGE_POLICIES` | 없음 | 검토된 이미지 digest별 정책 JSON 파일 경로 |
+| `PROVISIONER_FLAG_FILE` | 없음 | 이미지 정책에서 `requires_flag`로 승인한 이미지의 FLAG를 담은 VM 전용 파일 경로 |
 | `PROVISIONER_ADDR` | `127.0.0.1:8080` | HTTP 수신 주소 |
 | `PROVISIONER_WORKER_CONCURRENCY` | `4` | Operation Worker 수 |
 | `PROVISIONER_MAX_ATTEMPTS` | `3` | Operation 최대 시도 횟수 |
@@ -114,6 +119,10 @@ Registry 예시:
 
 각 `target_id`는 독립 Kubernetes·Metrics 클라이언트와 연결됩니다. 상태
 조회 대상은 노드가 정확히 하나인 K3s여야 합니다.
+자체 호스팅 K3s는 `provider: "LOCAL"`로 등록합니다. `region`에는 운영자가
+구분할 위치 이름을 넣고, `public_gateway`에는 실제 이용자가 접근할 수 있는
+주소를 지정합니다. Registry의 보안 capability 값은 설치 및 검증 결과에 맞게
+설정해야 합니다.
 `NODE_PORT`는 공개 Service의 Kubernetes 할당 포트를 공인 IP와 조합하고,
 `INGRESS_PATH`는 기존 Ingress 경로를 사용합니다. `exposure_mode`를 생략하면
 `INGRESS_PATH`로 동작합니다.

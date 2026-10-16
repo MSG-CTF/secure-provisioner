@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -25,6 +26,8 @@ import (
 type appConfig struct {
 	Address               string
 	RegistryPath          string
+	ImagePoliciesPath     string
+	FlagFilePath          string
 	ServiceAuth           httpapi.ServiceAuthConfig
 	RuntimeStore          runtimeStoreConfig
 	WorkerConcurrency     int
@@ -70,6 +73,8 @@ func loadConfig(getenv func(string) string) (appConfig, error) {
 	config := appConfig{
 		Address:           valueOrDefault(getenv("PROVISIONER_ADDR"), "127.0.0.1:8080"),
 		RegistryPath:      strings.TrimSpace(getenv("PROVISIONER_CLUSTER_REGISTRY")),
+		ImagePoliciesPath: strings.TrimSpace(getenv("PROVISIONER_IMAGE_POLICIES")),
+		FlagFilePath:      strings.TrimSpace(getenv("PROVISIONER_FLAG_FILE")),
 		WorkerConcurrency: 10,
 		MaxAttempts:       4,
 		ReadyTimeout:      2 * time.Minute,
@@ -79,6 +84,12 @@ func loadConfig(getenv func(string) string) (appConfig, error) {
 	}
 	if config.RegistryPath == "" {
 		return appConfig{}, errors.New("PROVISIONER_CLUSTER_REGISTRY is required")
+	}
+	if config.FlagFilePath != "" && config.ImagePoliciesPath == "" {
+		return appConfig{}, errors.New("PROVISIONER_FLAG_FILE requires PROVISIONER_IMAGE_POLICIES")
+	}
+	if config.FlagFilePath != "" && !filepath.IsAbs(config.FlagFilePath) && !strings.HasPrefix(config.FlagFilePath, "/") {
+		return appConfig{}, errors.New("PROVISIONER_FLAG_FILE must be an absolute path")
 	}
 
 	var err error
@@ -154,10 +165,33 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 	if err != nil {
 		return nil, err
 	}
+	var imagePolicies *httpapi.ImagePolicyCatalog
+	if config.ImagePoliciesPath != "" {
+		imagePolicies, err = httpapi.LoadImagePolicies(config.ImagePoliciesPath)
+		if err != nil {
+			return nil, fmt.Errorf("load image policies: %w", err)
+		}
+	}
+	var flags *k3s.FlagCatalog
+	if config.FlagFilePath != "" {
+		flags, err = k3s.LoadFlagCatalog(config.FlagFilePath)
+		if err != nil {
+			return nil, fmt.Errorf("load local FLAG file: %w", err)
+		}
+		for _, image := range flags.Images() {
+			if !imagePolicies.AllowsFlag(image) {
+				return nil, errors.New("local FLAG file contains an image without a reviewed FLAG policy")
+			}
+		}
+	}
+	if err := flags.Require(imagePolicies.RequiredFlagImages()); err != nil {
+		return nil, err
+	}
 	createAdapter, err := k3s.NewAdapter(registry, k3s.AdapterConfig{
 		ReadyTimeout:    config.ReadyTimeout,
 		PollInterval:    config.PollInterval,
 		RollbackTimeout: config.RollbackTimeout,
+		Flags:           flags,
 	})
 	if err != nil {
 		return nil, err
@@ -217,7 +251,7 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 		return nil, err
 	}
 	return &application{
-		handler:   httpapi.NewHandlerWithRuntime(service, service, config.ServiceAuth),
+		handler:   httpapi.NewHandlerWithRuntimePolicies(service, service, config.ServiceAuth, imagePolicies),
 		runWorker: service.Run,
 		close:     closeStore,
 	}, nil

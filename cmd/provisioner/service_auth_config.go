@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/MSG-CTF/secure-provisioner/internal/httpapi"
+	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 )
 
 var serviceTokenPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43,128}$`)
@@ -28,7 +29,23 @@ func loadServiceAuthConfig(getenv func(string) string) (httpapi.ServiceAuthConfi
 	if previous != "" && current == previous {
 		return httpapi.ServiceAuthConfig{}, errors.New("current and previous service tokens must differ")
 	}
-	return httpapi.ServiceAuthConfig{CurrentToken: current, PreviousToken: previous}, nil
+	ciSmoke, err := readServiceTokenSetting(getenv, "PROVISIONER_CI_SMOKE_TOKEN", "PROVISIONER_CI_SMOKE_TOKEN_FILE", false)
+	if err != nil {
+		return httpapi.ServiceAuthConfig{}, err
+	}
+	ciTeamID := getenv("PROVISIONER_CI_SMOKE_TEAM_ID")
+	ciTargetID := getenv("PROVISIONER_CI_SMOKE_TARGET_ID")
+	if ciSmoke != "" {
+		if ciSmoke == current || ciSmoke == previous {
+			return httpapi.ServiceAuthConfig{}, errors.New("CI smoke token must differ from full service tokens")
+		}
+		if !provisioner.TeamID(ciTeamID).Valid() || ciTargetID == "" || ciTargetID != strings.TrimSpace(ciTargetID) {
+			return httpapi.ServiceAuthConfig{}, errors.New("CI smoke token requires a valid team ID and target ID")
+		}
+	} else if ciTeamID != "" || ciTargetID != "" {
+		return httpapi.ServiceAuthConfig{}, errors.New("CI smoke scope requires a token")
+	}
+	return httpapi.ServiceAuthConfig{CurrentToken: current, PreviousToken: previous, CISmokeToken: ciSmoke, CISmokeTeamID: provisioner.TeamID(ciTeamID), CISmokeTargetID: ciTargetID}, nil
 }
 
 func readServiceTokenSetting(getenv func(string) string, valueKey, fileKey string, required bool) (string, error) {

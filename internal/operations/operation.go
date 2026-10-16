@@ -29,23 +29,26 @@ const (
 )
 
 type OperationResult struct {
-	Create          *provisioner.CreateWorkloadResult
-	DeleteCompleted bool
+	CreateCleanup          *provisioner.CreateCleanup `json:",omitempty"`
+	Create                 *provisioner.CreateWorkloadResult
+	DeleteCompleted        bool
+	CreateCleanupCompleted bool `json:",omitempty"`
 }
 
 type Operation struct {
-	ID               string
-	RequestID        string
-	Type             OperationType
-	Status           OperationStatus
-	CreateCommand    *provisioner.CreateWorkloadCommand
-	DeleteCommand    *provisioner.DeleteWorkloadCommand
-	CreateCheckpoint *provisioner.CreateWorkloadResult
-	Attempt          int
-	MaxAttempts      int
-	Result           OperationResult
-	LastErrorCode    string
-	NextRetryAt      time.Time
+	ID                   string
+	RequestID            string
+	Type                 OperationType
+	Status               OperationStatus
+	CreateCommand        *provisioner.CreateWorkloadCommand
+	DeleteCommand        *provisioner.DeleteWorkloadCommand
+	CreateCheckpoint     *provisioner.CreateWorkloadResult
+	Attempt              int
+	MaxAttempts          int
+	Result               OperationResult
+	LastErrorCode        string
+	CreateLeaseReclaimed bool
+	NextRetryAt          time.Time
 }
 
 func validCreateWorkloadResult(result provisioner.CreateWorkloadResult) bool {
@@ -118,6 +121,10 @@ func copyCreateCommand(command provisioner.CreateWorkloadCommand) provisioner.Cr
 		copied.Containers[index] = container
 		copied.Containers[index].Ports = slices.Clone(container.Ports)
 		copied.Containers[index].ExposedPorts = slices.Clone(container.ExposedPorts)
+		if container.ReadinessHTTP != nil {
+			readiness := *container.ReadinessHTTP
+			copied.Containers[index].ReadinessHTTP = &readiness
+		}
 	}
 	copied.PolicyRequest = copyPolicyRequest(command.PolicyRequest)
 	copied.Policy = copyResolvedPolicy(command.Policy)
@@ -125,6 +132,12 @@ func copyCreateCommand(command provisioner.CreateWorkloadCommand) provisioner.Cr
 }
 
 func sameCreateCommand(first, second provisioner.CreateWorkloadCommand) bool {
+	if first.RequestFingerprint != "" && second.RequestFingerprint != "" {
+		return first.RequestID == second.RequestID &&
+			first.InstanceID == second.InstanceID && first.TeamID == second.TeamID &&
+			first.TargetID == second.TargetID && first.RuntimeType == second.RuntimeType &&
+			first.RequestFingerprint == second.RequestFingerprint
+	}
 	if first.RequestID != second.RequestID ||
 		first.InstanceID != second.InstanceID ||
 		first.TeamID != second.TeamID ||
@@ -142,6 +155,7 @@ func sameCreateCommand(first, second provisioner.CreateWorkloadCommand) bool {
 		if firstContainer.Name != secondContainer.Name ||
 			firstContainer.Image != secondContainer.Image ||
 			firstContainer.Expose != secondContainer.Expose ||
+			!reflect.DeepEqual(firstContainer.ReadinessHTTP, secondContainer.ReadinessHTTP) ||
 			!slices.Equal(firstContainer.ExposedPorts, secondContainer.ExposedPorts) ||
 			!slices.Equal(firstContainer.Ports, secondContainer.Ports) {
 			return false

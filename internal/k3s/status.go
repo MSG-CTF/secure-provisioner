@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 	"github.com/MSG-CTF/secure-provisioner/internal/runtimebinding"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
@@ -56,6 +57,7 @@ type NodeRuntimeStatus struct {
 
 type RuntimeStatus struct {
 	InstanceID        string
+	TeamID            provisioner.TeamID
 	TargetID          string
 	RuntimeWorkloadID string
 	Phase             string
@@ -135,6 +137,7 @@ func (r *StatusReader) Get(ctx context.Context, binding runtimebinding.Binding) 
 
 	status := RuntimeStatus{
 		InstanceID:        binding.InstanceID,
+		TeamID:            binding.TeamID,
 		TargetID:          binding.TargetID,
 		RuntimeWorkloadID: binding.RuntimeWorkloadID,
 		MetricsAvailable:  metricsAvailable,

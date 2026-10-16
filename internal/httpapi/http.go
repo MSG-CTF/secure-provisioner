@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -13,21 +15,28 @@ import (
 )
 
 type API struct {
-	createWorkload provisioner.CreateWorkloadUseCase
-	runtime        RuntimeUseCase
-	directResolver isolation.Resolver
+	createWorkload  provisioner.CreateWorkloadUseCase
+	runtime         RuntimeUseCase
+	directResolver  isolation.Resolver
+	imagePolicies   *ImagePolicyCatalog
+	ciSmokeTeamID   provisioner.TeamID
+	ciSmokeTargetID string
 }
 
 func NewHandler(createWorkload provisioner.CreateWorkloadUseCase, authConfig ServiceAuthConfig) http.Handler {
-	return newHandler(createWorkload, nil, authConfig)
+	return newHandler(createWorkload, nil, authConfig, nil)
 }
 
 func NewHandlerWithRuntime(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase, authConfig ServiceAuthConfig) http.Handler {
-	return newHandler(createWorkload, runtime, authConfig)
+	return newHandler(createWorkload, runtime, authConfig, nil)
 }
 
-func newHandler(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase, authConfig ServiceAuthConfig) http.Handler {
-	api := &API{createWorkload: createWorkload, runtime: runtime}
+func NewHandlerWithRuntimePolicies(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase, authConfig ServiceAuthConfig, policies *ImagePolicyCatalog) http.Handler {
+	return newHandler(createWorkload, runtime, authConfig, policies)
+}
+
+func newHandler(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase, authConfig ServiceAuthConfig, policies *ImagePolicyCatalog) http.Handler {
+	api := &API{createWorkload: createWorkload, runtime: runtime, imagePolicies: policies, ciSmokeTeamID: authConfig.CISmokeTeamID, ciSmokeTargetID: authConfig.CISmokeTargetID}
 	if runtime == nil {
 		api.directResolver = isolation.NewStaticResolver()
 	}
@@ -53,13 +62,47 @@ func (api *API) handleCreateInstance(writer http.ResponseWriter, request *http.R
 		writeAPIError(writer, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON request body")
 		return
 	}
+	if isCISmokeRequest(request) && !api.allowsCISmokeCreate(createRequest) {
+		writeAPIError(writer, http.StatusForbidden, "FORBIDDEN", "CI smoke token cannot create this workload")
+		return
+	}
+	encodedInput, err := json.Marshal(createRequest)
+	if err != nil {
+		writeAPIError(writer, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
+		return
+	}
+	inputHash := sha256.Sum256(encodedInput)
+	fingerprint := hex.EncodeToString(inputHash[:])
+	if replay, ok := api.runtime.(interface {
+		FindCreateByRequest(string, string) (operations.Operation, bool, error)
+	}); ok {
+		operation, found, err := replay.FindCreateByRequest(createRequest.RequestID, fingerprint)
+		if err != nil {
+			if errors.Is(err, operations.ErrIdempotencyConflict) {
+				writeAPIError(writer, http.StatusConflict, "REQUEST_ID_CONFLICT", "request_id is already used by another operation")
+			} else {
+				writeAPIError(writer, http.StatusBadGateway, "CREATE_QUEUE_FAILED", "workload creation could not be queued")
+			}
+			return
+		}
+		if found {
+			writeAcceptedOperation(writer, operation, false)
+			return
+		}
+	}
+	if err := api.imagePolicies.Apply(&createRequest); err != nil {
+		writeAPIError(writer, http.StatusUnprocessableEntity, "IMAGE_POLICY_REJECTED", err.Error())
+		return
+	}
 	if err := createRequest.Validate(); err != nil {
 		writeAPIError(writer, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 		return
 	}
 
 	if api.runtime != nil {
-		operation, created, err := api.runtime.EnqueueCreate(createRequest.ToCommand())
+		command := createRequest.ToCommand()
+		command.RequestFingerprint = fingerprint
+		operation, created, err := api.runtime.EnqueueCreate(command)
 		if err != nil {
 			if errors.Is(err, isolation.ErrPolicyRejected) {
 				writeAPIError(writer, http.StatusUnprocessableEntity, "ISOLATION_POLICY_REJECTED", "isolation policy was rejected")

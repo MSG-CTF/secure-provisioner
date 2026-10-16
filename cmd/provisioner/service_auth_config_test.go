@@ -8,6 +8,39 @@ import (
 
 const validCurrentServiceToken = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 const validPreviousServiceToken = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+const validCISmokeServiceToken = "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+
+func TestLoadServiceAuthConfigReadsScopedCITokenFromFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ci-token")
+	if err := os.WriteFile(path, []byte(validCISmokeServiceToken+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config, err := loadServiceAuthConfig(environment(map[string]string{
+		"PROVISIONER_SERVICE_TOKEN":       validCurrentServiceToken,
+		"PROVISIONER_CI_SMOKE_TOKEN_FILE": path,
+		"PROVISIONER_CI_SMOKE_TEAM_ID":    "f33df6f0-52ee-4e63-b409-3df4d0a4b314",
+		"PROVISIONER_CI_SMOKE_TARGET_ID":  "aws-dev",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.CISmokeToken != validCISmokeServiceToken || config.CISmokeTeamID != "f33df6f0-52ee-4e63-b409-3df4d0a4b314" || config.CISmokeTargetID != "aws-dev" {
+		t.Fatal("CI smoke token scope was not loaded")
+	}
+}
+
+func TestLoadServiceAuthConfigRejectsIncompleteCIScope(t *testing.T) {
+	for _, values := range []map[string]string{
+		{"PROVISIONER_CI_SMOKE_TOKEN": validCISmokeServiceToken},
+		{"PROVISIONER_CI_SMOKE_TOKEN": validCurrentServiceToken, "PROVISIONER_CI_SMOKE_TEAM_ID": "f33df6f0-52ee-4e63-b409-3df4d0a4b314", "PROVISIONER_CI_SMOKE_TARGET_ID": "aws-dev"},
+		{"PROVISIONER_CI_SMOKE_TOKEN": validCISmokeServiceToken, "PROVISIONER_CI_SMOKE_TEAM_ID": "bad", "PROVISIONER_CI_SMOKE_TARGET_ID": "aws-dev"},
+	} {
+		values["PROVISIONER_SERVICE_TOKEN"] = validCurrentServiceToken
+		if _, err := loadServiceAuthConfig(environment(values)); err == nil {
+			t.Fatal("incomplete CI scope was accepted")
+		}
+	}
+}
 
 func TestLoadServiceAuthConfigAcceptsCurrentAndPreviousTokens(t *testing.T) {
 	config, err := loadServiceAuthConfig(environment(map[string]string{

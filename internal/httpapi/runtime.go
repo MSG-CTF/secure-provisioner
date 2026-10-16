@@ -73,15 +73,16 @@ type ResourceUsageResponse struct {
 }
 
 type OperationResponse struct {
-	OperationID   string                   `json:"operation_id"`
-	RequestID     string                   `json:"request_id"`
-	Type          string                   `json:"type"`
-	Status        string                   `json:"status"`
-	Attempt       int                      `json:"attempt"`
-	MaxAttempts   int                      `json:"max_attempts"`
-	LastErrorCode string                   `json:"last_error_code,omitempty"`
-	Created       *bool                    `json:"created,omitempty"`
-	Result        *OperationResultResponse `json:"result,omitempty"`
+	CleanupCompleted bool                     `json:"cleanup_completed,omitempty"`
+	OperationID      string                   `json:"operation_id"`
+	RequestID        string                   `json:"request_id"`
+	Type             string                   `json:"type"`
+	Status           string                   `json:"status"`
+	Attempt          int                      `json:"attempt"`
+	MaxAttempts      int                      `json:"max_attempts"`
+	LastErrorCode    string                   `json:"last_error_code,omitempty"`
+	Created          *bool                    `json:"created,omitempty"`
+	Result           *OperationResultResponse `json:"result,omitempty"`
 }
 
 type OperationResultResponse struct {
@@ -109,6 +110,10 @@ func (api *API) handleRuntimeStatus(writer http.ResponseWriter, request *http.Re
 			return
 		}
 		writeAPIError(writer, http.StatusBadGateway, "RUNTIME_STATUS_FAILED", "runtime status lookup failed")
+		return
+	}
+	if isCISmokeRequest(request) && (status.TeamID != api.ciSmokeTeamID || status.TargetID != api.ciSmokeTargetID) {
+		writeAPIError(writer, http.StatusForbidden, "FORBIDDEN", "CI smoke token cannot read this instance")
 		return
 	}
 	writeJSON(writer, http.StatusOK, newRuntimeStatusResponse(status))
@@ -156,6 +161,10 @@ func (api *API) handleDeleteInstance(writer http.ResponseWriter, request *http.R
 		writeAPIError(writer, http.StatusConflict, "INSTANCE_BINDING_MISMATCH", "request does not match the stored runtime binding")
 		return
 	}
+	if isCISmokeRequest(request) && (deleteRequest.TeamID != api.ciSmokeTeamID || deleteRequest.Target.TargetID != api.ciSmokeTargetID) {
+		writeAPIError(writer, http.StatusForbidden, "FORBIDDEN", "CI smoke token cannot delete this instance")
+		return
+	}
 
 	operation, created, err := api.runtime.EnqueueDelete(deleteRequest.ToCommand())
 	if err != nil {
@@ -173,6 +182,10 @@ func (api *API) handleGetOperation(writer http.ResponseWriter, request *http.Req
 			return
 		}
 		writeAPIError(writer, http.StatusInternalServerError, "OPERATION_LOOKUP_FAILED", "operation lookup failed")
+		return
+	}
+	if isCISmokeRequest(request) && !api.allowsCISmokeOperation(operation) {
+		writeAPIError(writer, http.StatusForbidden, "FORBIDDEN", "CI smoke token cannot read this operation")
 		return
 	}
 	if operationNeedsPolling(operation.Status) {
@@ -275,14 +288,15 @@ func newResourceValuesResponse(values k3s.ResourceValues) ResourceValuesResponse
 
 func newOperationResponse(operation operations.Operation) OperationResponse {
 	return OperationResponse{
-		OperationID:   operation.ID,
-		RequestID:     operation.RequestID,
-		Type:          string(operation.Type),
-		Status:        string(operation.Status),
-		Attempt:       operation.Attempt,
-		MaxAttempts:   operation.MaxAttempts,
-		LastErrorCode: operation.LastErrorCode,
-		Result:        newOperationResultResponse(operation),
+		OperationID:      operation.ID,
+		RequestID:        operation.RequestID,
+		Type:             string(operation.Type),
+		Status:           string(operation.Status),
+		Attempt:          operation.Attempt,
+		MaxAttempts:      operation.MaxAttempts,
+		LastErrorCode:    operation.LastErrorCode,
+		CleanupCompleted: operation.Type == operations.OperationTypeCreate && operation.Status == operations.OperationStatusFailed && operation.Result.CreateCleanupCompleted,
+		Result:           newOperationResultResponse(operation),
 	}
 }
 
