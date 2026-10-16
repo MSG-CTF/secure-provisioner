@@ -620,8 +620,10 @@ components:
       type: object
       additionalProperties: false
       description: >-
-        A container exposing multiple public ports requires an HTTP healthcheck
-        for that container. Without one, creation is rejected with INVALID_REQUEST.
+        HTTP healthchecks are optional, including for multiple public ports.
+        Without one, TCP readiness checks the first public port, or the first
+        declared port of a private-only container, with two consecutive successes.
+        This fallback does not check every listener or application behavior.
       required:
         - resource_limits
       oneOf:

@@ -179,10 +179,10 @@ func buildResourceSetForOperation(cluster Cluster, command provisioner.CreateWor
 				TimeoutSeconds: 2, PeriodSeconds: 2, SuccessThreshold: 1, FailureThreshold: 3,
 			}
 		} else {
-			// Prefer the one public listener; private-only containers use their
-			// first declared port. Multiple public ports require HTTP readiness.
+			// Keep HTTP healthchecks optional for the Scheduler's multi-port contract.
+			// Use the first public listener, or the first declared port for private containers.
 			readinessPort := requirement.Ports[0]
-			if publicPorts := container.PublicPorts(); len(publicPorts) == 1 {
+			if publicPorts := container.PublicPorts(); len(publicPorts) > 0 {
 				readinessPort = publicPorts[0]
 			}
 			podContainer.ReadinessProbe = &corev1.Probe{
@@ -499,9 +499,6 @@ func validWorkloadCommand(
 			return false
 		}
 		publicPorts := container.PublicPorts()
-		if len(publicPorts) > 1 && container.ReadinessHTTP == nil {
-			return false
-		}
 		hasExposed = hasExposed || len(publicPorts) > 0
 	}
 	return hasExposed
