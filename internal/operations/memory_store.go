@@ -51,6 +51,10 @@ func (s *MemoryStore) Claim(ctx context.Context, options ClaimOptions) (ClaimedO
 		if !eligible {
 			continue
 		}
+		if operation.Type == OperationTypeCreate && operation.Status == OperationStatusRunning {
+			// An expired worker may still be returning from the Kubernetes API.
+			operation.CreateLeaseReclaimed = true
+		}
 		operation.Status = OperationStatusRunning
 		operation.Attempt++
 		lease.Owner = options.WorkerID
@@ -119,7 +123,7 @@ func (s *MemoryStore) CheckpointLeaseCreateResult(claimed ClaimedOperation, resu
 	return ClaimedOperation{Operation: copyOperation(*operation), Lease: claimed.Lease}, nil
 }
 
-func (s *MemoryStore) MarkLeaseRetrying(claimed ClaimedOperation, errorCode string, nextRetryAt, _ time.Time) (Operation, error) {
+func (s *MemoryStore) MarkLeaseRetrying(claimed ClaimedOperation, failure Failure, nextRetryAt, _ time.Time) (Operation, error) {
 	s.mu.Lock()
 	operation, err := s.find(claimed.Operation.ID)
 	if err != nil {
@@ -131,7 +135,9 @@ func (s *MemoryStore) MarkLeaseRetrying(claimed ClaimedOperation, errorCode stri
 		return Operation{}, ErrLeaseLost
 	}
 	operation.Status = OperationStatusRetrying
-	operation.LastErrorCode = normalizeStableErrorCode(errorCode)
+	operation.LastErrorCode = normalizeStableErrorCode(failure.Code)
+	operation.Result = failure.Result(*operation)
+	operation.Result.CreateCleanupCompleted = false
 	operation.NextRetryAt = nextRetryAt
 	delete(s.leases, operation.ID)
 	result := copyOperation(*operation)
@@ -140,7 +146,7 @@ func (s *MemoryStore) MarkLeaseRetrying(claimed ClaimedOperation, errorCode stri
 	return result, nil
 }
 
-func (s *MemoryStore) MarkLeaseFailed(claimed ClaimedOperation, errorCode string, _ time.Time) (Operation, error) {
+func (s *MemoryStore) MarkLeaseFailed(claimed ClaimedOperation, failure Failure, _ time.Time) (Operation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	operation, err := s.find(claimed.Operation.ID)
@@ -151,7 +157,8 @@ func (s *MemoryStore) MarkLeaseFailed(claimed ClaimedOperation, errorCode string
 		return Operation{}, ErrLeaseLost
 	}
 	operation.Status = OperationStatusFailed
-	operation.LastErrorCode = normalizeStableErrorCode(errorCode)
+	operation.LastErrorCode = normalizeStableErrorCode(failure.Code)
+	operation.Result = failure.Result(*operation)
 	delete(s.leases, operation.ID)
 	return copyOperation(*operation), nil
 }
@@ -294,7 +301,7 @@ func checkpointCreateResult(operation *Operation, result provisioner.CreateWorkl
 	return nil
 }
 
-func (s *MemoryStore) MarkRetrying(id, errorCode string) (Operation, error) {
+func (s *MemoryStore) MarkRetrying(id string, failure Failure) (Operation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	operation, err := s.find(id)
@@ -305,7 +312,9 @@ func (s *MemoryStore) MarkRetrying(id, errorCode string) (Operation, error) {
 		return Operation{}, ErrInvalidTransition
 	}
 	operation.Status = OperationStatusRetrying
-	operation.LastErrorCode = normalizeStableErrorCode(errorCode)
+	operation.LastErrorCode = normalizeStableErrorCode(failure.Code)
+	operation.Result = failure.Result(*operation)
+	operation.Result.CreateCleanupCompleted = false
 	return copyOperation(*operation), nil
 }
 
@@ -369,7 +378,7 @@ func (s *MemoryStore) markSucceededLocked(operation *Operation, result Operation
 	return copyOperation(*operation), nil
 }
 
-func (s *MemoryStore) MarkFailed(id, errorCode string) (Operation, error) {
+func (s *MemoryStore) MarkFailed(id string, failure Failure) (Operation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	operation, err := s.find(id)
@@ -380,7 +389,8 @@ func (s *MemoryStore) MarkFailed(id, errorCode string) (Operation, error) {
 		return Operation{}, ErrInvalidTransition
 	}
 	operation.Status = OperationStatusFailed
-	operation.LastErrorCode = normalizeStableErrorCode(errorCode)
+	operation.LastErrorCode = normalizeStableErrorCode(failure.Code)
+	operation.Result = failure.Result(*operation)
 	return copyOperation(*operation), nil
 }
 
@@ -526,6 +536,10 @@ func copyOperation(operation Operation) Operation {
 
 func copyOperationResult(result OperationResult) OperationResult {
 	copy := result
+	if result.CreateCleanup != nil {
+		target := *result.CreateCleanup
+		copy.CreateCleanup = &target
+	}
 	if result.Create != nil {
 		create := copyCreateWorkloadResult(*result.Create)
 		copy.Create = &create

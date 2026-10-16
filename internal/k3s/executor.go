@@ -13,8 +13,16 @@ type CreateAdapter interface {
 	CreateWorkload(context.Context, provisioner.CreateWorkloadCommand) (provisioner.CreateWorkloadResult, error)
 }
 
+type operationAwareCreateAdapter interface {
+	CreateWorkloadForOperation(context.Context, provisioner.CreateWorkloadCommand, string) (provisioner.CreateWorkloadResult, error)
+}
+
 type CreateAdapterFinalizer interface {
 	FinalizeCreate(context.Context, provisioner.CreateWorkloadCommand, provisioner.CreateWorkloadResult) error
+}
+
+type FailedCreateCleaner interface {
+	CleanupFailedCreate(context.Context, provisioner.CreateWorkloadCommand, provisioner.CreateCleanup) error
 }
 
 type DeleteWorkloadAdapter interface {
@@ -51,7 +59,20 @@ func (e *Executor) Execute(ctx context.Context, operation operations.Operation) 
 		if operation.CreateCommand == nil {
 			return operations.OperationResult{}, operations.NewExecutionError("UNSUPPORTED_OPERATION", false, nil)
 		}
-		result, err := e.create.CreateWorkload(ctx, *operation.CreateCommand)
+		if operation.Result.CreateCleanup != nil {
+			cleaner, ok := e.create.(FailedCreateCleaner)
+			if !ok {
+				return operations.OperationResult{}, operations.NewExecutionError("ROLLBACK_FAILED", false, nil)
+			}
+			return operations.OperationResult{}, classifyRuntimeExecutionError(cleaner.CleanupFailedCreate(ctx, *operation.CreateCommand, *operation.Result.CreateCleanup))
+		}
+		var result provisioner.CreateWorkloadResult
+		var err error
+		if adapter, ok := e.create.(operationAwareCreateAdapter); ok && operation.ID != "" {
+			result, err = adapter.CreateWorkloadForOperation(ctx, *operation.CreateCommand, operation.ID)
+		} else {
+			result, err = e.create.CreateWorkload(ctx, *operation.CreateCommand)
+		}
 		if err != nil {
 			return operations.OperationResult{}, classifyRuntimeExecutionError(err)
 		}
@@ -93,7 +114,7 @@ func (e *Executor) FinalizeCreate(ctx context.Context, operation operations.Oper
 func classifyRuntimeExecutionError(err error) error {
 	var executionErr *operations.ExecutionError
 	if errors.As(err, &executionErr) {
-		return executionErr
+		return err
 	}
 	var runtimeErr *RuntimeError
 	if errors.As(err, &runtimeErr) {

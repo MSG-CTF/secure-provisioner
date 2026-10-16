@@ -49,7 +49,7 @@ func TestMemoryStoreDoesNotClaimRetryBeforeNextRetryAt(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("claim = %#v, %t, %v", claimed, ok, err)
 	}
-	if _, err := store.MarkLeaseRetrying(claimed, "TARGET_TEMPORARILY_UNAVAILABLE", time.Unix(200, 0), time.Unix(101, 0)); err != nil {
+	if _, err := store.MarkLeaseRetrying(claimed, Failure{Code: "TARGET_TEMPORARILY_UNAVAILABLE"}, time.Unix(200, 0), time.Unix(101, 0)); err != nil {
 		t.Fatal(err)
 	}
 	if early, ok, err := store.Claim(context.Background(), ClaimOptions{
@@ -603,7 +603,7 @@ func TestMemoryStoreStoresStableErrorCodes(t *testing.T) {
 	if _, err := store.MarkRunning(operation.ID); err != nil {
 		t.Fatal(err)
 	}
-	retrying, err := store.MarkRetrying(operation.ID, "TARGET_TEMPORARILY_UNAVAILABLE")
+	retrying, err := store.MarkRetrying(operation.ID, Failure{Code: "TARGET_TEMPORARILY_UNAVAILABLE"})
 	if err != nil || retrying.Status != OperationStatusRetrying || retrying.LastErrorCode != "TARGET_TEMPORARILY_UNAVAILABLE" {
 		t.Fatalf("retrying: %#v %v", retrying, err)
 	}
@@ -620,7 +620,7 @@ func TestMemoryStoreStoresStableErrorCodes(t *testing.T) {
 	if _, err := store.MarkRunning(operation.ID); err != nil {
 		t.Fatal(err)
 	}
-	failed, err := store.MarkFailed(operation.ID, "RUNTIME_NOT_FOUND")
+	failed, err := store.MarkFailed(operation.ID, Failure{Code: "RUNTIME_NOT_FOUND"})
 	if err != nil || failed.Status != OperationStatusFailed || failed.LastErrorCode != "RUNTIME_NOT_FOUND" {
 		t.Fatalf("failed: %#v %v", failed, err)
 	}
@@ -631,13 +631,13 @@ func TestMemoryStoreNormalizesUnsafeErrorCodes(t *testing.T) {
 	unsafeCode := "https://user:secret@cluster.example/runtime"
 
 	retrying := enqueueAndStart(t, store, "req-1")
-	updated, err := store.MarkRetrying(retrying.ID, unsafeCode)
+	updated, err := store.MarkRetrying(retrying.ID, Failure{Code: unsafeCode})
 	if err != nil || updated.LastErrorCode != defaultExecutionErrorCode {
 		t.Fatalf("retrying: %#v %v", updated, err)
 	}
 
 	failed := enqueueAndStart(t, store, "req-2")
-	updated, err = store.MarkFailed(failed.ID, unsafeCode)
+	updated, err = store.MarkFailed(failed.ID, Failure{Code: unsafeCode})
 	if err != nil || updated.LastErrorCode != defaultExecutionErrorCode {
 		t.Fatalf("failed: %#v %v", updated, err)
 	}

@@ -59,6 +59,7 @@ func TestBuildNetworkPoliciesAllowsOnlyConfiguredDNSOverTCPAndUDP53(t *testing.T
 func TestBuildNetworkPoliciesAllowsPlatformIngressOnlyToExposedDeclaredPorts(t *testing.T) {
 	command := legacyNetworkCommand("aws-dev")
 	command.Containers[0].Ports = []int{8443, 8080}
+	command.Containers[0].ReadinessHTTP = &provisioner.HTTPReadiness{Path: "/healthz", Port: 8080}
 	command.Policy = resolvedPolicyForCommand(command, "SMALL_MULTI")
 	resources := buildNetworkPolicyResources(t, command)
 
@@ -92,6 +93,7 @@ func TestBuildNetworkPoliciesAllowsPlatformIngressOnlyToExposedDeclaredPorts(t *
 func TestBuildNetworkPoliciesAllowsExternalNodePortIngressOnlyToExposedDeclaredPorts(t *testing.T) {
 	command := legacyNetworkCommand("aws-dev")
 	command.Containers[0].Ports = []int{8443, 8080}
+	command.Containers[0].ReadinessHTTP = &provisioner.HTTPReadiness{Path: "/healthz", Port: 8080}
 	command.Policy = resolvedPolicyForCommand(command, "SMALL_MULTI")
 	cluster := networkPolicyCluster(command.TargetID)
 	cluster.Config.ExposureMode = ExposureModeNodePort
@@ -299,6 +301,7 @@ func TestBuildNetworkPoliciesRejectsUntrustedTargetSelectors(t *testing.T) {
 func TestBuildNetworkPoliciesUsesDeterministicNamesAndOrder(t *testing.T) {
 	first := legacyNetworkCommand("aws-dev")
 	first.Containers[1].Expose = true
+	first.Containers[1].ReadinessHTTP = &provisioner.HTTPReadiness{Path: "/healthz", Port: 8080}
 	first.Policy.Containers[1].Expose = true
 	first.Policy.InternalConnections = []isolation.InternalConnection{
 		{SourceContainer: "web", DestinationContainer: "internal", Protocol: isolation.ProtocolTCP, Port: 9090},

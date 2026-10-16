@@ -24,10 +24,11 @@ import (
 )
 
 const (
-	resourceName        = "challenge"
-	containerNameLabel  = "msgctf.io/container-name"
-	specHashAnnotation  = "msgctf.io/spec-hash"
-	instancePathSegment = "/instances/"
+	resourceName          = "challenge"
+	containerNameLabel    = "msgctf.io/container-name"
+	specHashAnnotation    = "msgctf.io/spec-hash"
+	operationIDAnnotation = "msgctf.io/operation-id"
+	instancePathSegment   = "/instances/"
 )
 
 type ResourceSet struct {
@@ -64,6 +65,10 @@ func RuntimeWorkloadID(targetID, namespace string) string {
 }
 
 func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand) (ResourceSet, error) {
+	return buildResourceSetForOperation(cluster, command, "")
+}
+
+func buildResourceSetForOperation(cluster Cluster, command provisioner.CreateWorkloadCommand, operationID string) (ResourceSet, error) {
 	containers := normalizedCommandContainers(command)
 	if !validWorkloadCommand(cluster, command, containers) {
 		return ResourceSet{}, newRuntimeError("INVALID_CREATE_COMMAND", false, nil)
@@ -94,16 +99,8 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 	}
 	pathType := networkingv1.PathTypePrefix
 	replicas := int32(1)
-	namespaceLabels := copyLabels(labels)
-	// PSA rejects noncompliant Pods only when enforce is set on the Namespace.
-	// Namespace creation precedes all workload and protection resources.
-	namespaceLabels["pod-security.kubernetes.io/enforce"] = "restricted"
-	namespaceLabels["pod-security.kubernetes.io/audit"] = "restricted"
-	namespaceLabels["pod-security.kubernetes.io/warn"] = "restricted"
 	resources := ResourceSet{
-		Namespace: &corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{Name: namespace, Labels: namespaceLabels},
-		},
+		Namespace:          buildNamespace(command, namespace, operationID),
 		ServiceAccount:     buildRuntimeServiceAccount(namespace, labels),
 		ResourceQuota:      buildRuntimeResourceQuota(namespace, labels, command.Policy, len(containers), nodePortQuota(cluster.Config.ExposureMode, containers)),
 		LimitRange:         buildRuntimeLimitRange(namespace, labels, command.Policy, len(containers)),
@@ -169,6 +166,19 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 					Scheme: corev1.URISchemeHTTP,
 				}},
 				TimeoutSeconds: 2, PeriodSeconds: 2, SuccessThreshold: 1, FailureThreshold: 3,
+			}
+		} else {
+			// Keep HTTP healthchecks optional for the Scheduler's multi-port contract.
+			// Use the first public listener, or the first declared port for private containers.
+			readinessPort := requirement.Ports[0]
+			if publicPorts := container.PublicPorts(); len(publicPorts) > 0 {
+				readinessPort = publicPorts[0]
+			}
+			podContainer.ReadinessProbe = &corev1.Probe{
+				ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{
+					Port: intstr.FromInt(readinessPort),
+				}},
+				TimeoutSeconds: 2, PeriodSeconds: 2, SuccessThreshold: 2, FailureThreshold: 3,
 			}
 		}
 		// Service-link variables can collide with challenge settings such as SERVICE_PORT.
@@ -472,7 +482,8 @@ func validWorkloadCommand(
 		if !isolation.ValidPublicPorts(container.Ports, container.Expose, container.ExposedPorts) {
 			return false
 		}
-		hasExposed = hasExposed || len(container.PublicPorts()) > 0
+		publicPorts := container.PublicPorts()
+		hasExposed = hasExposed || len(publicPorts) > 0
 	}
 	return hasExposed
 }
@@ -488,6 +499,22 @@ func ownershipLabels(command provisioner.CreateWorkloadCommand) map[string]strin
 		"msgctf.io/instance-id":        command.InstanceID,
 		"msgctf.io/team-id":            string(command.TeamID),
 	}
+}
+
+func buildNamespace(command provisioner.CreateWorkloadCommand, namespace, operationID string) *corev1.Namespace {
+	labels := ownershipLabels(command)
+	// PSA rejects noncompliant Pods only when enforce is set on the Namespace.
+	// Namespace creation precedes all workload and protection resources.
+	labels["pod-security.kubernetes.io/enforce"] = "restricted"
+	labels["pod-security.kubernetes.io/audit"] = "restricted"
+	labels["pod-security.kubernetes.io/warn"] = "restricted"
+	var annotations map[string]string
+	if operationID != "" {
+		annotations = map[string]string{operationIDAnnotation: operationID}
+	}
+	return &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name: namespace, Labels: labels, Annotations: annotations,
+	}}
 }
 
 func copyLabels(labels map[string]string) map[string]string {

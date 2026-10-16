@@ -57,6 +57,14 @@ func NewAdapter(registry *Registry, config AdapterConfig) (*Adapter, error) {
 }
 
 func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.CreateWorkloadCommand) (provisioner.CreateWorkloadResult, error) {
+	return a.createWorkload(ctx, command, "")
+}
+
+func (a *Adapter) CreateWorkloadForOperation(ctx context.Context, command provisioner.CreateWorkloadCommand, operationID string) (provisioner.CreateWorkloadResult, error) {
+	return a.createWorkload(ctx, command, operationID)
+}
+
+func (a *Adapter) createWorkload(ctx context.Context, command provisioner.CreateWorkloadCommand, operationID string) (provisioner.CreateWorkloadResult, error) {
 	if err := ctx.Err(); err != nil {
 		return provisioner.CreateWorkloadResult{}, operationCancelledError(err)
 	}
@@ -65,6 +73,26 @@ func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.Create
 		return provisioner.CreateWorkloadResult{}, operationCancelledError(err)
 	}
 	defer release()
+	if operationID != "" {
+		// Cleanup uses only durable command identity and the maintenance client.
+		// Policy and secrets may have changed after the first worker created the
+		// Namespace, so they cannot be prerequisites for removing that attempt.
+		maintenanceCluster, err := a.registry.LookupForMaintenance(command.TargetID)
+		if err != nil {
+			return provisioner.CreateWorkloadResult{}, err
+		}
+		namespace, err := NamespaceForInstance(command.InstanceID)
+		if err != nil {
+			return provisioner.CreateWorkloadResult{}, newRuntimeError("INVALID_CREATE_COMMAND", false, err)
+		}
+		previousNamespace, err := recoverCommittedNamespace(ctx, maintenanceCluster.Client, buildNamespace(command, namespace, operationID))
+		if err != nil {
+			return provisioner.CreateWorkloadResult{}, err
+		}
+		if previousNamespace != nil {
+			return provisioner.CreateWorkloadResult{}, a.failWithRollback(maintenanceCluster.Client, previousNamespace, "RESOURCE_APPLY_FAILED", interruptedCreateError())
+		}
+	}
 
 	cluster, err := a.registry.Lookup(command.TargetID)
 	if err != nil {
@@ -73,7 +101,7 @@ func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.Create
 	if err := cluster.Supports(command.Policy); err != nil {
 		return provisioner.CreateWorkloadResult{}, err
 	}
-	resources, err := BuildResourceSet(cluster, command)
+	resources, err := buildResourceSetForOperation(cluster, command, operationID)
 	if err != nil {
 		return provisioner.CreateWorkloadResult{}, err
 	}
@@ -95,6 +123,9 @@ func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.Create
 
 	createdNamespace, err := ensureNamespace(ctx, cluster.Client, resources.Namespace)
 	if err != nil {
+		if errors.Is(err, errCommittedNamespace) {
+			return provisioner.CreateWorkloadResult{}, a.failWithRollback(cluster.Client, createdNamespace, "RESOURCE_APPLY_FAILED", interruptedCreateError())
+		}
 		if parentErr := ctx.Err(); parentErr != nil {
 			return provisioner.CreateWorkloadResult{}, a.failAfterNamespace(cluster.Client, createdNamespace, "OPERATION_CANCELLED", parentErr)
 		}
@@ -151,11 +182,49 @@ func (a *Adapter) CreateWorkload(ctx context.Context, command provisioner.Create
 	}, nil
 }
 
+var errCommittedNamespace = errors.New("namespace belongs to an interrupted create")
+
+func interruptedCreateError() error {
+	return newRuntimeError("RESOURCE_APPLY_FAILED", false, errCommittedNamespace)
+}
+
+func recoverCommittedNamespace(ctx context.Context, client kubernetes.Interface, desired *corev1.Namespace) (*corev1.Namespace, error) {
+	if desired.Annotations[operationIDAnnotation] == "" {
+		return nil, nil
+	}
+	observed, err := client.CoreV1().Namespaces().Get(ctx, desired.Name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, applyError(err)
+	}
+	if !recoverableNamespace(observed, desired) {
+		return nil, newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
+	}
+	return observed.DeepCopy(), nil
+}
+
+func recoverableNamespace(observed, desired *corev1.Namespace) bool {
+	if desired.Annotations[operationIDAnnotation] == "" || observed.UID == "" || observed.ResourceVersion == "" {
+		return false
+	}
+	// A previous worker may have begun deletion before losing its lease. The
+	// terminating timestamp is the sole server-side state we can disregard:
+	// all owner labels, annotations and other metadata must still match.
+	metadataProof := observed.DeepCopy()
+	metadataProof.DeletionTimestamp = nil
+	return approvedSemanticMetadata(metadataProof, desired, false)
+}
+
 func ensureNamespace(ctx context.Context, client kubernetes.Interface, desired *corev1.Namespace) (*corev1.Namespace, error) {
 	var lastErr error
 	for attempt := 0; attempt < maxReconcileAttempts; attempt++ {
-		_, err := client.CoreV1().Namespaces().Get(ctx, desired.Name, metav1.GetOptions{})
+		observed, err := client.CoreV1().Namespaces().Get(ctx, desired.Name, metav1.GetOptions{})
 		if err == nil {
+			if recoverableNamespace(observed, desired) {
+				return observed.DeepCopy(), errCommittedNamespace
+			}
 			return nil, newRuntimeError("RESOURCE_OWNERSHIP_CONFLICT", false, nil)
 		}
 		if !apierrors.IsNotFound(err) {
@@ -1029,9 +1098,13 @@ func (a *Adapter) failWithRollback(client kubernetes.Interface, namespace *corev
 	rollbackCtx, cancel := context.WithTimeout(context.Background(), a.config.RollbackTimeout)
 	defer cancel()
 	if err := rollbackNamespace(rollbackCtx, client, namespace, a.config.PollInterval); err != nil {
-		return newRuntimeError("ROLLBACK_FAILED", rollbackErrorRetryable(err), errors.Join(cause, err))
+		failure := newRuntimeError("ROLLBACK_FAILED", rollbackErrorRetryable(err), errors.Join(cause, err))
+		if namespace.UID != "" {
+			return provisioner.WithCreateCleanupPending(failure, provisioner.CreateCleanup{NamespaceUID: string(namespace.UID), FailureCode: code})
+		}
+		return failure
 	}
-	return failureWithoutRollback(code, cause)
+	return provisioner.WithCreateCleanupCompleted(failureWithoutRollback(code, cause))
 }
 
 func rollbackNamespace(ctx context.Context, client kubernetes.Interface, desired *corev1.Namespace, pollInterval time.Duration) error {
@@ -1050,7 +1123,7 @@ func rollbackNamespace(ctx context.Context, client kubernetes.Interface, desired
 			}
 			continue
 		}
-		if !hasOwnership(existing.Labels, desired.Labels) {
+		if !hasOwnership(existing.Labels, desired.Labels) || !hasRequiredOperationID(existing, desired) {
 			return errNamespaceOwnership
 		}
 		if expectedUID == "" {
@@ -1096,7 +1169,7 @@ func rollbackNamespace(ctx context.Context, client kubernetes.Interface, desired
 			}
 		} else if current.UID != expectedUID {
 			return errNamespaceIdentity
-		} else if !hasOwnership(current.Labels, desired.Labels) {
+		} else if !hasOwnership(current.Labels, desired.Labels) || !hasRequiredOperationID(current, desired) {
 			return errNamespaceOwnership
 		}
 		select {
@@ -1105,6 +1178,11 @@ func rollbackNamespace(ctx context.Context, client kubernetes.Interface, desired
 		case <-ticker.C:
 		}
 	}
+}
+
+func hasRequiredOperationID(actual, desired *corev1.Namespace) bool {
+	want := desired.Annotations[operationIDAnnotation]
+	return want == "" || actual.Annotations[operationIDAnnotation] == want
 }
 
 var (
@@ -1171,7 +1249,7 @@ func waitUntilReady(
 				}
 				matchedService = true
 				readyEndpoint, endpointErr := hasReadyEndpointForServicePods(
-					ctx, client, expectedDeployment.Namespace, service.Name, readyPods,
+					ctx, client, expectedDeployment.Namespace, service.Name, readyPods, service.Spec.Ports,
 				)
 				if endpointErr != nil {
 					return endpointErr
@@ -1236,16 +1314,13 @@ func readyPodsForSpec(ctx context.Context, client kubernetes.Interface, namespac
 	return ready, nil
 }
 
-func hasReadyEndpointForPods(ctx context.Context, client kubernetes.Interface, namespace string, pods []corev1.Pod) (bool, error) {
-	return hasReadyEndpointForServicePods(ctx, client, namespace, resourceName, pods)
-}
-
 func hasReadyEndpointForServicePods(
 	ctx context.Context,
 	client kubernetes.Interface,
 	namespace string,
 	serviceName string,
 	pods []corev1.Pod,
+	servicePorts []corev1.ServicePort,
 ) (bool, error) {
 	endpointSlices, err := client.DiscoveryV1().EndpointSlices(namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: labels.Set{discoveryv1.LabelServiceName: serviceName}.String(),
@@ -1254,6 +1329,9 @@ func hasReadyEndpointForServicePods(
 		return false, err
 	}
 	for _, endpointSlice := range endpointSlices.Items {
+		if !endpointSliceServesServicePorts(endpointSlice.Ports, servicePorts) {
+			continue
+		}
 		for _, endpoint := range endpointSlice.Endpoints {
 			if endpoint.Conditions.Ready != nil && !*endpoint.Conditions.Ready {
 				continue
@@ -1270,23 +1348,69 @@ func hasReadyEndpointForServicePods(
 			}
 			for _, pod := range pods {
 				if endpoint.TargetRef != nil && endpoint.TargetRef.UID != "" {
-					if endpoint.TargetRef.UID == pod.UID {
+					if endpoint.TargetRef.UID == pod.UID && endpointMatchesPodAddress(endpoint.Addresses, pod.Status) {
 						return true, nil
 					}
 					continue
 				}
-				if strings.TrimSpace(pod.Status.PodIP) == "" {
-					continue
-				}
-				for _, address := range endpoint.Addresses {
-					if address == pod.Status.PodIP {
-						return true, nil
-					}
+				if endpointMatchesPodAddress(endpoint.Addresses, pod.Status) {
+					return true, nil
 				}
 			}
 		}
 	}
 	return false, nil
+}
+
+func endpointSliceServesServicePorts(slicePorts []discoveryv1.EndpointPort, servicePorts []corev1.ServicePort) bool {
+	if len(servicePorts) == 0 {
+		return false
+	}
+	for _, servicePort := range servicePorts {
+		if servicePort.TargetPort.IntVal <= 0 {
+			return false
+		}
+		matched := false
+		for _, slicePort := range slicePorts {
+			if slicePort.Port == nil || *slicePort.Port != servicePort.TargetPort.IntVal ||
+				slicePort.Name == nil || *slicePort.Name != servicePort.Name {
+				continue
+			}
+			sliceProtocol := corev1.ProtocolTCP
+			if slicePort.Protocol != nil {
+				sliceProtocol = *slicePort.Protocol
+			}
+			serviceProtocol := servicePort.Protocol
+			if serviceProtocol == "" {
+				serviceProtocol = corev1.ProtocolTCP
+			}
+			if sliceProtocol == serviceProtocol {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
+func endpointMatchesPodAddress(addresses []string, status corev1.PodStatus) bool {
+	for _, address := range addresses {
+		if address == "" {
+			continue
+		}
+		if address == status.PodIP && status.PodIP != "" {
+			return true
+		}
+		for _, podIP := range status.PodIPs {
+			if address == podIP.IP && podIP.IP != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func hasReadyPod(ctx context.Context, client kubernetes.Interface, namespace string) (bool, error) {
