@@ -260,6 +260,32 @@ func TestServiceProcessesCreateAndRecordsBinding(t *testing.T) {
 	stopWorker(t, cancel, workerDone)
 }
 
+func TestServiceWorkerForwardsOperationIDToCreateAdapter(t *testing.T) {
+	create := &operationAwareRecordingCreate{recordingCreate: recordingCreate{result: provisioner.CreateWorkloadResult{
+		RuntimeWorkloadID: "aws-dev/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge",
+		NamespaceUID:      "namespace-uid-01",
+	}}}
+	bindings := runtimebinding.NewMemoryStore()
+	service := newTestService(t, create, &recordingStatus{}, &recordingDelete{}, bindings)
+	ctx, cancel := context.WithCancel(context.Background())
+	workerDone := make(chan error, 1)
+	go func() { workerDone <- service.Run(ctx) }()
+	defer stopWorker(t, cancel, workerDone)
+
+	operation, created, err := service.EnqueueCreate(createCommand())
+	if err != nil || !created {
+		t.Fatalf("EnqueueCreate() = (%#v, %t, %v)", operation, created, err)
+	}
+	operation = waitForOperationStatus(t, service, operation.ID, operations.OperationStatusSucceeded)
+	if create.operationCalls != 1 || create.directCalls != 0 || create.operationID != operation.ID {
+		t.Fatalf("operation-aware calls = %d, direct calls = %d, forwarded ID = %q, want %q",
+			create.operationCalls, create.directCalls, create.operationID, operation.ID)
+	}
+	if _, err := bindings.Get(createCommand().InstanceID); err != nil {
+		t.Fatalf("binding was not recorded after operation-aware create: %v", err)
+	}
+}
+
 func TestServiceCreateFailureDoesNotRecordBinding(t *testing.T) {
 	bindings := runtimebinding.NewMemoryStore()
 	create := &recordingCreate{err: errors.New("create failed")}
@@ -323,7 +349,7 @@ func TestServiceCleansUpNamespaceWhenBindingSaveFails(t *testing.T) {
 	stopWorker(t, cancel, workerDone)
 }
 
-func TestServiceWorkerCreateCheckpointRetriesBindingWithoutRecreating(t *testing.T) {
+func TestServiceWorkerRetriesCleanupWithoutSavingBindingForDeletingWorkload(t *testing.T) {
 	bindings := &failOnceSaveBindingStore{Store: runtimebinding.NewMemoryStore(), err: runtimebinding.ErrConflict}
 	create := &recordingCreate{result: provisioner.CreateWorkloadResult{
 		RuntimeWorkloadID: "aws-dev/ctf-018f3f1e21b87a91a30b63b3400fd001/challenge",
@@ -341,16 +367,15 @@ func TestServiceWorkerCreateCheckpointRetriesBindingWithoutRecreating(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	operation = waitForOperationStatus(t, service, operation.ID, operations.OperationStatusSucceeded)
-	if operation.Attempt != 2 || operation.CreateCheckpoint != nil || operation.Result.Create == nil ||
-		operation.Result.Create.NamespaceUID != create.result.NamespaceUID {
+	operation = waitForOperationStatus(t, service, operation.ID, operations.OperationStatusFailed)
+	if operation.Attempt != 2 || operation.Result.Create != nil || operation.LastErrorCode != "ROLLBACK_FAILED" {
 		t.Fatalf("operation = %#v", operation)
 	}
-	if create.calls != 1 || cleanup.calls != 1 {
-		t.Fatalf("create calls = %d; cleanup calls = %d; want 1 and 1", create.calls, cleanup.calls)
+	if create.calls != 1 || cleanup.calls != 2 {
+		t.Fatalf("create calls = %d; cleanup calls = %d; want 1 and 2", create.calls, cleanup.calls)
 	}
 	binding, err := bindings.Store.Get(createCommand().InstanceID)
-	if err != nil || binding.NamespaceUID != create.result.NamespaceUID {
+	if !errors.Is(err, runtimebinding.ErrNotFound) {
 		t.Fatalf("binding = %#v, error = %v", binding, err)
 	}
 	stopWorker(t, cancel, workerDone)
@@ -701,6 +726,24 @@ type recordingCreate struct {
 	result  provisioner.CreateWorkloadResult
 	err     error
 	command provisioner.CreateWorkloadCommand
+}
+
+type operationAwareRecordingCreate struct {
+	recordingCreate
+	operationID    string
+	operationCalls int
+	directCalls    int
+}
+
+func (a *operationAwareRecordingCreate) CreateWorkload(ctx context.Context, command provisioner.CreateWorkloadCommand) (provisioner.CreateWorkloadResult, error) {
+	a.directCalls++
+	return a.recordingCreate.CreateWorkload(ctx, command)
+}
+
+func (a *operationAwareRecordingCreate) CreateWorkloadForOperation(ctx context.Context, command provisioner.CreateWorkloadCommand, operationID string) (provisioner.CreateWorkloadResult, error) {
+	a.operationCalls++
+	a.operationID = operationID
+	return a.recordingCreate.CreateWorkload(ctx, command)
 }
 
 func (a *recordingCreate) CreateWorkload(_ context.Context, command provisioner.CreateWorkloadCommand) (provisioner.CreateWorkloadResult, error) {

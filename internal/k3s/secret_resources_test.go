@@ -3,12 +3,36 @@ package k3s
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 )
+
+func TestCombinedEnvironmentLimitIncludesResolvedSecrets(t *testing.T) {
+	command := validCreateCommand("aws-dev")
+	command.Containers[0].SecretRef = testBackendSecretRef
+	command.Containers[0].Env = map[string]string{}
+	for i := 0; i < 127; i++ {
+		command.Containers[0].Env[fmt.Sprintf("SETTING_%d", i)] = fmt.Sprint(i)
+	}
+	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := addSecretResources(context.Background(), &resources, command, fixedTestSecretResolver{values: map[string]string{"FLAG": testBackendFlag}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(resources.Deployment.Spec.Template.Spec.Containers[0].Env) != 128 {
+		t.Fatal("runtime dropped environment entries")
+	}
+	resources, _ = BuildResourceSet(validCluster("aws-dev"), command)
+	if err := addSecretResources(context.Background(), &resources, command, fixedTestSecretResolver{values: map[string]string{"FLAG": testBackendFlag, "INTERNAL_TOKEN": "test-only"}}); err == nil {
+		t.Fatal("combined environment exceeded 128 entries")
+	}
+}
 
 func TestReplayCannotRunRequiredFlagImageWithoutBackendReference(t *testing.T) {
 	command := validCreateCommand("aws-dev")

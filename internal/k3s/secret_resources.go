@@ -29,7 +29,7 @@ func addSecretResources(ctx context.Context, resources *ResourceSet, command pro
 			return err
 		}
 		if len(values) == 0 || provisioner.ValidateEnvironment(values, true) != nil ||
-			len(values)+len(container.Env) > 32 {
+			len(values)+len(container.Env) > provisioner.MaxEnvironmentEntries {
 			return newRuntimeError("SECRET_RESOLUTION_FAILED", false, nil)
 		}
 		if flag, found := values["FLAG"]; container.RequiresFlag && (!found || strings.TrimSpace(flag) == "" || strings.ContainsAny(flag, "\r\n")) {

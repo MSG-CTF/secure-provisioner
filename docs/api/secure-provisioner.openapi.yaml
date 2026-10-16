@@ -619,6 +619,11 @@ components:
     Workload:
       type: object
       additionalProperties: false
+      description: >-
+        HTTP healthchecks are optional, including for multiple public ports.
+        Without one, TCP readiness checks the first public port, or the first
+        declared port of a private-only container, with two consecutive successes.
+        This fallback does not check every listener or application behavior.
       required:
         - resource_limits
       oneOf:
@@ -741,7 +746,7 @@ components:
           description: Approved non-root numeric UID; this is not a Kubernetes securityContext.
         env:
           type: object
-          maxProperties: 32
+          maxProperties: 128
           propertyNames:
             pattern: "^[A-Z_][A-Z0-9_]{0,63}$"
           additionalProperties:
@@ -954,6 +959,12 @@ components:
           type: boolean
         last_error_code:
           type: string
+        cleanup_completed:
+          type: boolean
+          description: >-
+            Present as true only for a terminal FAILED CREATE whose owned namespace
+            has been removed. Absence or false does not prove that resources are gone.
+            Never confirmed after reclaiming an expired CREATE worker lease.
         result:
           oneOf:
             - $ref: "#/components/schemas/CreateOperationResult"

@@ -32,6 +32,21 @@
       ]
     },
     {
+      "image": "ghcr.io/msg-ctf/challenges/web-grade-tampering/web@sha256:c409e49cf70a58be3ca19553b2db09da9d9607fd3462eaf00bdb29b20a44e39e",
+      "container": "web",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "ci_smoke_enabled": true,
+      "readiness_http": {"path": "/", "port": 8080},
+      "run_as_user": 10001,
+      "ports": [8080],
+      "exposed_ports": [8080],
+      "writable_paths": [
+        {"path": "/tmp", "size_mib": 32},
+        {"path": "/app/instance", "size_mib": 32}
+      ]
+    },
+    {
       "image": "ghcr.io/msg-ctf/challenges/web-daily-point/web@sha256:98c98088662fd5ff538ae9e163fb4a68ad73580e0f4f703624b0650d4a2b499a",
       "container": "web",
       "isolation_profile": "WEB",
@@ -69,6 +84,31 @@
       "ports": [8080, 9090],
       "exposed_ports": [8080],
       "writable_paths": [{"path": "/tmp", "size_mib": 64}]
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web-notebook/web@sha256:d4249f02fb0745df557dc65382911ec00da883e2fa6bde434c5b63c14cb81db3",
+      "container": "web",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "readiness_http": {"path": "/", "port": 8080},
+      "run_as_user": 10001,
+      "ports": [8080],
+      "exposed_ports": [8080],
+      "writable_paths": [{"path": "/tmp", "size_mib": 64}]
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web-notebook/db@sha256:396878dd36296204aa326c5acfaba267e76e8dd604a940ffdd67e1122f2dc872",
+      "container": "db",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "run_as_user": 70,
+      "ports": [5432],
+      "exposed_ports": [],
+      "writable_paths": [
+        {"path": "/tmp", "size_mib": 64},
+        {"path": "/var/lib/postgresql/data", "size_mib": 256},
+        {"path": "/var/run/postgresql", "size_mib": 16}
+      ]
     },
     {
       "image": "ghcr.io/msg-ctf/challenges/web-notebook/web@sha256:0a9297f98efc2502b9df85fcde8954190a6f2d132bb98bf49bc12efb6f45cde3",

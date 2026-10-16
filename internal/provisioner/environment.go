@@ -9,6 +9,8 @@ import (
 	"github.com/google/uuid"
 )
 
+const MaxEnvironmentEntries = 128
+
 var environmentName = regexp.MustCompile("^[A-Z_][A-Z0-9_]{0,63}$")
 var sensitiveEnvironmentName = regexp.MustCompile("SECRET|TOKEN|PASSWORD|PASSWD|PRIVATE_KEY|API_KEY|CREDENTIAL")
 
@@ -21,8 +23,8 @@ func ValidSecretReference(reference string) bool {
 }
 
 func ValidateEnvironment(env map[string]string, secret bool) error {
-	if len(env) > 32 {
-		return errors.New("environment has more than 32 entries")
+	if len(env) > MaxEnvironmentEntries {
+		return errors.New("environment has more than 128 entries")
 	}
 	total := 0
 	for name, value := range env {

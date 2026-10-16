@@ -191,23 +191,24 @@ func (w *Worker) processLeased(ctx context.Context, claimed ClaimedOperation) er
 	if executeErr == nil {
 		_, err := w.leaseStore.MarkLeaseSucceeded(claimed, result, now)
 		if errors.Is(err, ErrInvalidOperationResult) {
-			_, err = w.leaseStore.MarkLeaseFailed(claimed, invalidOperationResultErrorCode, now)
+			_, err = w.leaseStore.MarkLeaseFailed(claimed, Failure{Code: invalidOperationResultErrorCode}, now)
 		}
 		return err
 	}
 	if errors.Is(executeErr, ErrInvalidOperationResult) {
-		_, err := w.leaseStore.MarkLeaseFailed(claimed, invalidOperationResultErrorCode, now)
+		_, err := w.leaseStore.MarkLeaseFailed(claimed, Failure{Code: invalidOperationResultErrorCode}, now)
 		return err
 	}
-	if ctx.Err() != nil && isContextError(executeErr) {
+	failure := executionFailure(claimed.Operation, executeErr)
+	if ctx.Err() != nil && isContextError(executeErr) && noUncheckpointedCleanup(claimed.Operation, failure) {
 		return w.leaseStore.ReleaseLease(claimed, now)
 	}
-	code, retryable := ClassifyExecutionError(executeErr)
+	_, retryable := ClassifyExecutionError(executeErr)
 	if !retryable || claimed.Operation.Attempt >= claimed.Operation.MaxAttempts {
-		_, err := w.leaseStore.MarkLeaseFailed(claimed, code, now)
+		_, err := w.leaseStore.MarkLeaseFailed(claimed, failure, now)
 		return err
 	}
-	_, err := w.leaseStore.MarkLeaseRetrying(claimed, code, now.Add(w.backoff(claimed.Operation.Attempt)), now)
+	_, err := w.leaseStore.MarkLeaseRetrying(claimed, failure, now.Add(w.backoff(claimed.Operation.Attempt)), now)
 	return err
 }
 
@@ -231,7 +232,7 @@ func (w *Worker) renewLease(ctx context.Context, claimed ClaimedOperation, stop 
 
 func (w *Worker) executeLeased(ctx context.Context, claimed ClaimedOperation) (OperationResult, error) {
 	operation := claimed.Operation
-	if operation.Type != OperationTypeCreate {
+	if operation.Type != OperationTypeCreate || operation.Result.CreateCleanup != nil {
 		return w.executor.Execute(ctx, operation)
 	}
 	if operation.CreateCheckpoint == nil {
@@ -273,23 +274,24 @@ func (w *Worker) process(ctx context.Context, operation Operation) error {
 	if err == nil {
 		_, err = w.legacyStore.MarkSucceeded(running.ID, result)
 		if errors.Is(err, ErrInvalidOperationResult) {
-			_, err = w.legacyStore.MarkFailed(running.ID, invalidOperationResultErrorCode)
+			_, err = w.legacyStore.MarkFailed(running.ID, Failure{Code: invalidOperationResultErrorCode})
 		}
 		return err
 	}
 	if errors.Is(err, ErrInvalidOperationResult) {
-		_, err = w.legacyStore.MarkFailed(running.ID, invalidOperationResultErrorCode)
+		_, err = w.legacyStore.MarkFailed(running.ID, Failure{Code: invalidOperationResultErrorCode})
 		return err
 	}
-	if ctx.Err() != nil && isContextError(err) {
+	failure := executionFailure(running, err)
+	if ctx.Err() != nil && isContextError(err) && noUncheckpointedCleanup(running, failure) {
 		return w.legacyStore.Requeue(running.ID)
 	}
-	code, retryable := ClassifyExecutionError(err)
+	_, retryable := ClassifyExecutionError(err)
 	if !retryable || running.Attempt >= running.MaxAttempts {
-		_, markErr := w.legacyStore.MarkFailed(running.ID, code)
+		_, markErr := w.legacyStore.MarkFailed(running.ID, failure)
 		return markErr
 	}
-	if _, err := w.legacyStore.MarkRetrying(running.ID, code); err != nil {
+	if _, err := w.legacyStore.MarkRetrying(running.ID, failure); err != nil {
 		return err
 	}
 	if err := w.sleep(ctx, w.backoff(running.Attempt)); err != nil {
@@ -301,8 +303,15 @@ func (w *Worker) process(ctx context.Context, operation Operation) error {
 	return w.legacyStore.Requeue(running.ID)
 }
 
+func noUncheckpointedCleanup(operation Operation, failure Failure) bool {
+	if failure.CreateCleanup == nil {
+		return true
+	}
+	return operation.Result.CreateCleanup != nil && *operation.Result.CreateCleanup == *failure.CreateCleanup
+}
+
 func (w *Worker) execute(ctx context.Context, running Operation) (OperationResult, error) {
-	if running.Type != OperationTypeCreate {
+	if running.Type != OperationTypeCreate || running.Result.CreateCleanup != nil {
 		return w.executor.Execute(ctx, running)
 	}
 

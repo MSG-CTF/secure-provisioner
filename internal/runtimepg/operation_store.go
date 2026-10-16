@@ -76,13 +76,14 @@ func (store *OperationStore) Claim(ctx context.Context, options operations.Claim
     )
     UPDATE runtime_operations operation
        SET status='RUNNING', attempt=operation.attempt+1, lease_owner=$2,
+           create_lease_reclaimed=operation.create_lease_reclaimed OR (operation.operation_type='CREATE' AND operation.status='RUNNING'),
            lease_until=$3, lease_version=operation.lease_version+1,
            updated_at=$1, started_at=COALESCE(operation.started_at,$1)
       FROM candidate WHERE operation.operation_id=candidate.operation_id
     RETURNING operation.operation_id,operation.request_id,operation.operation_type,operation.status,
       operation.command_snapshot,operation.create_checkpoint,operation.result,operation.attempt,
       operation.max_attempts,operation.next_retry_at,operation.lease_owner,operation.lease_until,
-      operation.lease_version,operation.last_error_code`, options.Now, options.WorkerID, options.Now.Add(options.LeaseDuration))
+      operation.lease_version,operation.last_error_code,operation.create_lease_reclaimed`, options.Now, options.WorkerID, options.Now.Add(options.LeaseDuration))
 	operation, lease, err := scanClaimedOperation(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return operations.ClaimedOperation{}, false, nil
@@ -121,8 +122,13 @@ func (store *OperationStore) CheckpointLeaseCreateResult(claimed operations.Clai
 	return claimed, nil
 }
 
-func (store *OperationStore) MarkLeaseRetrying(claimed operations.ClaimedOperation, errorCode string, nextRetryAt, now time.Time) (operations.Operation, error) {
-	result, err := store.db.Exec(fencedUpdate(`status='RETRYING',last_error_code=$4,next_retry_at=$5,lease_owner=NULL,lease_until=NULL,updated_at=$6`), claimed.Operation.ID, claimed.Lease.Owner, claimed.Lease.Version, errorCode, nextRetryAt, now)
+func (store *OperationStore) MarkLeaseRetrying(claimed operations.ClaimedOperation, failure operations.Failure, nextRetryAt, now time.Time) (operations.Operation, error) {
+	failure.CreateCleanupCompleted = false
+	payload, err := json.Marshal(failure.Result(claimed.Operation))
+	if err != nil {
+		return operations.Operation{}, err
+	}
+	result, err := store.db.Exec(fencedUpdate(`status='RETRYING',last_error_code=$4,next_retry_at=$5,result=$7,lease_owner=NULL,lease_until=NULL,updated_at=$6`), claimed.Operation.ID, claimed.Lease.Owner, claimed.Lease.Version, failure.Code, nextRetryAt, now, payload)
 	if err != nil {
 		return operations.Operation{}, err
 	}
@@ -155,8 +161,12 @@ func (store *OperationStore) MarkLeaseSucceeded(claimed operations.ClaimedOperat
 	return store.Get(claimed.Operation.ID)
 }
 
-func (store *OperationStore) MarkLeaseFailed(claimed operations.ClaimedOperation, errorCode string, now time.Time) (operations.Operation, error) {
-	result, err := store.db.Exec(fencedUpdate(`status='FAILED',last_error_code=$4,lease_owner=NULL,lease_until=NULL,next_retry_at=NULL,updated_at=$5,finished_at=$5`), claimed.Operation.ID, claimed.Lease.Owner, claimed.Lease.Version, errorCode, now)
+func (store *OperationStore) MarkLeaseFailed(claimed operations.ClaimedOperation, failure operations.Failure, now time.Time) (operations.Operation, error) {
+	payload, err := json.Marshal(failure.Result(claimed.Operation))
+	if err != nil {
+		return operations.Operation{}, err
+	}
+	result, err := store.db.Exec(fencedUpdate(`status='FAILED',last_error_code=$4,result=$6,lease_owner=NULL,lease_until=NULL,next_retry_at=NULL,updated_at=$5,finished_at=$5`), claimed.Operation.ID, claimed.Lease.Owner, claimed.Lease.Version, failure.Code, now, payload)
 	if err != nil {
 		return operations.Operation{}, err
 	}
@@ -182,7 +192,7 @@ func requireOneRow(result sql.Result) error {
 }
 
 const operationSelect = `SELECT operation_id,request_id,operation_type,status,command_snapshot,
- create_checkpoint,result,attempt,max_attempts,next_retry_at,lease_owner,lease_until,lease_version,last_error_code FROM runtime_operations`
+ create_checkpoint,result,attempt,max_attempts,next_retry_at,lease_owner,lease_until,lease_version,last_error_code,create_lease_reclaimed FROM runtime_operations`
 
 type rowScanner interface{ Scan(...any) error }
 
@@ -201,7 +211,7 @@ func scanClaimedOperation(row rowScanner) (operations.Operation, operations.Leas
 	var leaseOwner sql.NullString
 	var leaseVersion int64
 	if err := row.Scan(&operation.ID, &operation.RequestID, &operation.Type, &operation.Status, &command, &checkpoint, &result,
-		&operation.Attempt, &operation.MaxAttempts, &nextRetry, &leaseOwner, &leaseUntil, &leaseVersion, &operation.LastErrorCode); err != nil {
+		&operation.Attempt, &operation.MaxAttempts, &nextRetry, &leaseOwner, &leaseUntil, &leaseVersion, &operation.LastErrorCode, &operation.CreateLeaseReclaimed); err != nil {
 		return operations.Operation{}, operations.Lease{}, err
 	}
 	decoded, err := decodeOperationCommand(operation.Type, command)

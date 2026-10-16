@@ -73,15 +73,16 @@ type ResourceUsageResponse struct {
 }
 
 type OperationResponse struct {
-	OperationID   string                   `json:"operation_id"`
-	RequestID     string                   `json:"request_id"`
-	Type          string                   `json:"type"`
-	Status        string                   `json:"status"`
-	Attempt       int                      `json:"attempt"`
-	MaxAttempts   int                      `json:"max_attempts"`
-	LastErrorCode string                   `json:"last_error_code,omitempty"`
-	Created       *bool                    `json:"created,omitempty"`
-	Result        *OperationResultResponse `json:"result,omitempty"`
+	CleanupCompleted bool                     `json:"cleanup_completed,omitempty"`
+	OperationID      string                   `json:"operation_id"`
+	RequestID        string                   `json:"request_id"`
+	Type             string                   `json:"type"`
+	Status           string                   `json:"status"`
+	Attempt          int                      `json:"attempt"`
+	MaxAttempts      int                      `json:"max_attempts"`
+	LastErrorCode    string                   `json:"last_error_code,omitempty"`
+	Created          *bool                    `json:"created,omitempty"`
+	Result           *OperationResultResponse `json:"result,omitempty"`
 }
 
 type OperationResultResponse struct {
@@ -287,14 +288,15 @@ func newResourceValuesResponse(values k3s.ResourceValues) ResourceValuesResponse
 
 func newOperationResponse(operation operations.Operation) OperationResponse {
 	return OperationResponse{
-		OperationID:   operation.ID,
-		RequestID:     operation.RequestID,
-		Type:          string(operation.Type),
-		Status:        string(operation.Status),
-		Attempt:       operation.Attempt,
-		MaxAttempts:   operation.MaxAttempts,
-		LastErrorCode: operation.LastErrorCode,
-		Result:        newOperationResultResponse(operation),
+		OperationID:      operation.ID,
+		RequestID:        operation.RequestID,
+		Type:             string(operation.Type),
+		Status:           string(operation.Status),
+		Attempt:          operation.Attempt,
+		MaxAttempts:      operation.MaxAttempts,
+		LastErrorCode:    operation.LastErrorCode,
+		CleanupCompleted: operation.Type == operations.OperationTypeCreate && operation.Status == operations.OperationStatusFailed && operation.Result.CreateCleanupCompleted,
+		Result:           newOperationResultResponse(operation),
 	}
 }
 

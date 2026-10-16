@@ -98,7 +98,7 @@ func readyIntegrationClient(t *testing.T, cluster Cluster, command provisioner.C
 		"10.0.0.9",
 		resources.Deployment.Spec.Template.Labels,
 	)
-	client := fake.NewSimpleClientset(pod, readyEndpointSlice(resources.Namespace.Name, pod))
+	client := fake.NewSimpleClientset(pod, readyEndpointSliceForService(resources.Namespace.Name, resources.Service.Name, pod, resources.Service.Spec.Ports...))
 	installNamespaceCreateMetadata(t, client, "test-pwn-namespace-uid", "1")
 	installDeploymentController(client, true)
 	return client

@@ -30,23 +30,26 @@ const (
 )
 
 type OperationResult struct {
-	Create          *provisioner.CreateWorkloadResult
-	DeleteCompleted bool
+	CreateCleanup          *provisioner.CreateCleanup `json:",omitempty"`
+	Create                 *provisioner.CreateWorkloadResult
+	DeleteCompleted        bool
+	CreateCleanupCompleted bool `json:",omitempty"`
 }
 
 type Operation struct {
-	ID               string
-	RequestID        string
-	Type             OperationType
-	Status           OperationStatus
-	CreateCommand    *provisioner.CreateWorkloadCommand
-	DeleteCommand    *provisioner.DeleteWorkloadCommand
-	CreateCheckpoint *provisioner.CreateWorkloadResult
-	Attempt          int
-	MaxAttempts      int
-	Result           OperationResult
-	LastErrorCode    string
-	NextRetryAt      time.Time
+	ID                   string
+	RequestID            string
+	Type                 OperationType
+	Status               OperationStatus
+	CreateCommand        *provisioner.CreateWorkloadCommand
+	DeleteCommand        *provisioner.DeleteWorkloadCommand
+	CreateCheckpoint     *provisioner.CreateWorkloadResult
+	Attempt              int
+	MaxAttempts          int
+	Result               OperationResult
+	LastErrorCode        string
+	CreateLeaseReclaimed bool
+	NextRetryAt          time.Time
 }
 
 func validCreateWorkloadResult(result provisioner.CreateWorkloadResult) bool {
