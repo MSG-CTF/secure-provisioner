@@ -1430,6 +1430,7 @@ func TestAdapterWaitsForLatestRevisionPodAndItsEndpoint(t *testing.T) {
 	listCount := 0
 	client.PrependReactor("list", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
 		listCount++
+		// Fake client reactors hold its lock; notification must not block Pod updates.
 		select {
 		case podListed <- struct{}{}:
 		default:
