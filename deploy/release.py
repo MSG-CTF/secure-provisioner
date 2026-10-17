@@ -175,6 +175,10 @@ def deploy(component, stream, root=Path("/"), service=None, attempts=45, delay=2
             raise DeploymentError("deployment already running") from error
         manifest, files, values = read_bundle(stream, component)
         artifact, env, marker = (path(config[key]) for key in ("artifact", "env", "marker"))
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        if artifact.parent.is_symlink():
+            raise DeploymentError("artifact directory must not be a symlink")
+        artifact.parent.chmod(0o755)
         entries = [(artifact, files["artifact"], config["mode"], 0), (env, files["app.env"], 0o600, 0)]
         token = values.get("SCHEDULER_API_TOKEN")
         if component == "runtime":

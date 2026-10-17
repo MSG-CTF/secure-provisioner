@@ -102,6 +102,19 @@ class DeploymentTests(unittest.TestCase):
             self.assertEqual(service.restarts, 0)
             self.assertEqual((root / "opt/msgctf-scheduler/scheduler.jar").read_bytes(), b"old artifact")
 
+    def test_service_can_read_artifact_directory_with_private_umask(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            self.fixture(root, "scheduler")
+            directory = root / "opt/msgctf-scheduler"
+            directory.chmod(0o700)
+            previous = os.umask(0o077)
+            try:
+                deploy("scheduler", bundle(), root, Service(root, "scheduler"), 1, 0)
+            finally:
+                os.umask(previous)
+            self.assertEqual(directory.stat().st_mode & 0o777, 0o755)
+
     def test_rejects_traversal_symlink_and_duplicate_entries(self):
         for name, kind in (("../escape", tarfile.REGTYPE), ("app.env", tarfile.SYMTYPE), ("artifact", tarfile.REGTYPE)):
             with self.subTest(name=name, kind=kind):
