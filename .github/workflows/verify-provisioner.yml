@@ -4,17 +4,22 @@ on:
   pull_request:
   push:
     branches: [dev]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: runtime-ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   verify:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:18-alpine
         env:
           POSTGRES_USER: provisioner
           POSTGRES_PASSWORD: provisioner_test_only
@@ -29,22 +34,61 @@ jobs:
     env:
       PROVISIONER_TEST_DATABASE_URL: postgres://provisioner:provisioner_test_only@127.0.0.1:5432/provisioner_test?sslmode=disable
     steps:
-      - name: Check out source
-        uses: actions/checkout@v7
-      - name: Set up Go
-        uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
           cache: true
-      - name: Test deployment rollback
-        run: bash scripts/test-deploy-provisioner-release.sh
-      - name: Test with PostgreSQL
-        run: go test -p 1 ./... -count=1 -timeout 5m
-      - name: Vet
-        run: go vet ./...
-      - name: Build Linux binary
+      - name: Verify modules and deployment recovery
+        run: |
+          go mod verify
+          python3 -m unittest discover -s deploy -p 'test_*.py' -v
+          bash scripts/test-deploy-provisioner-release.sh
+      - name: Test with PostgreSQL and vet
+        run: |
+          go test -p 1 ./... -count=1 -timeout 5m
+          go vet ./...
+      - name: Build the Linux release
         env:
-          CGO_ENABLED: "0"
+          CGO_ENABLED: '0'
           GOOS: linux
           GOARCH: amd64
-        run: go build -trimpath -ldflags='-s -w' -o /tmp/secure-provisioner ./cmd/provisioner
+        run: |
+          mkdir -p dist
+          go build -trimpath -ldflags='-s -w' -o dist/artifact ./cmd/provisioner
+          (cd dist && sha256sum artifact > artifact.sha256)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: runtime-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  deploy:
+    needs: verify
+    if: github.ref == 'refs/heads/dev' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    environment: control-production
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: runtime-${{ github.sha }}
+          path: dist/
+      - name: Deploy the verified artifact and check authenticated API responses
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: msgctf-deploy
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_ENV: ${{ secrets.DEPLOY_ENV }}
+          DEPLOY_SERVICE_TOKEN: ${{ secrets.DEPLOY_SERVICE_TOKEN }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          (cd dist && sha256sum -c artifact.sha256)
+          python3 deploy/send_release.py runtime --artifact dist/artifact --source-sha "$SOURCE_SHA"
