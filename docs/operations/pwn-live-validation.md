@@ -31,6 +31,8 @@ KVM 장치가 없는 검증 VM에서는 systrap을 사용하며 systemd cgroup�
 기존 WEB 문제도 함께 운영하면 현재 호스트 정책을 보존하고 PWN 정책의 managed_repositories와 images를 합쳐 적용합니다
 PROVISIONER_IMAGE_POLICIES는 합친 정책 파일을 가리켜야 합니다
 운영 설정과 비밀값은 Git에 넣지 않습니다
+새 Runtime 바이너리가 기존 정책으로 정상 기동한 뒤 파일 주입 정책을 적용합니다
+이전 바이너리로 되돌릴 때는 함께 백업한 이미지 정책도 복원해야 합니다
 
 flag_file_path는 운영자 정책에만 있습니다
 백엔드·스케줄러의 생성 요청에는 기존 secret_ref만 전달하며, 참가자는 파일 경로나 Kubernetes 보안 설정을 고를 수 없습니다

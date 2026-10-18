@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -30,3 +31,23 @@ class GVisorBootstrapTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 write_reviewed_file(link, b"replacement", 0o644)
             self.assertEqual(original.read_bytes(), b"keep")
+
+    def test_existing_writable_configuration_is_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder) / "runtime.toml"
+            target.write_bytes(b"approved")
+            target.chmod(0o666)
+            with self.assertRaises(RuntimeError):
+                write_reviewed_file(target, b"approved", 0o644)
+
+    def test_sandbox_sidecars_remain_executable_with_a_private_umask(self):
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder) / "gvisor-bin/nested/sentry"
+            before = os.umask(0o077)
+            try:
+                write_reviewed_file(target, b"approved", 0o755)
+            finally:
+                os.umask(before)
+            self.assertEqual(target.stat().st_mode & 0o777, 0o755)
+            self.assertEqual(target.parent.stat().st_mode & 0o777, 0o755)
+            self.assertEqual(target.parent.parent.stat().st_mode & 0o777, 0o755)

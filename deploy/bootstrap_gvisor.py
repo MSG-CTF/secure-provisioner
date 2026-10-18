@@ -42,10 +42,20 @@ def write_reviewed_file(target, data, mode):
     if target.is_symlink():
         raise RuntimeError(f"Refusing a symlink: {target}")
     if target.exists():
+        info = target.stat()
+        if info.st_uid != os.geteuid() or info.st_mode & 0o022:
+            raise RuntimeError(f"An existing file has unsafe ownership or permissions: {target}")
         if target.read_bytes() != data:
             raise RuntimeError(f"An existing file differs; review it first: {target}")
         return False
+    missing = []
+    parent = target.parent
+    while not parent.exists():
+        missing.append(parent)
+        parent = parent.parent
     target.parent.mkdir(parents=True, exist_ok=True)
+    for parent in missing:
+        parent.chmod(0o755)
     target.write_bytes(data)
     target.chmod(mode)
     return True
@@ -55,6 +65,9 @@ def main():
     if os.geteuid() != 0 or os.uname().machine != "x86_64":
         raise RuntimeError("This reviewed installer requires root on Linux x86_64")
     check_idle(json.loads(kube("get", "pods", "-A", "-o", "json"))["items"])
+    existing_class = kube("get", "runtimeclass", "gvisor", "--ignore-not-found", "-o", "json")
+    if existing_class and json.loads(existing_class).get("handler") != "runsc":
+        raise RuntimeError("The existing gvisor RuntimeClass uses a different handler")
     config = Path("/var/lib/rancher/k3s/agent/etc/containerd/config.toml")
     if 'config-v3.toml.d/*.toml' not in config.read_text():
         raise RuntimeError("K3s must support containerd v3 configuration drop-ins")
