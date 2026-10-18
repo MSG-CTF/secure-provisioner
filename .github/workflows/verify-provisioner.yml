@@ -59,6 +59,13 @@ jobs:
           mkdir -p dist
           go build -trimpath -ldflags='-s -w' -o dist/artifact ./cmd/provisioner
           (cd dist && sha256sum artifact > artifact.sha256)
+      - name: Verify continuous HTTP and durable queue handoff with real nginx
+        env:
+          RUNTIME_TEST_BINARY: ${{ github.workspace }}/dist/artifact
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends nginx
+          python3 -m unittest discover -s deploy -p 'test_runtime_integration.py' -v
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: runtime-${{ github.sha }}
