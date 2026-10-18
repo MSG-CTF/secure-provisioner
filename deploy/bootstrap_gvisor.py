@@ -8,7 +8,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -30,7 +29,7 @@ def kube(*args, body=None):
     return subprocess.check_output(
         ["k3s", "kubectl", *args],
         input=json.dumps(body).encode() if body else None,
-        timeout=40,
+        timeout=110 if args and args[0] == "wait" else 40,
     )
 
 

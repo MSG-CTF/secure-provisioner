@@ -40,3 +40,31 @@ func TestFlagFilePathIsOperatorOwned(t *testing.T) {
 		t.Fatal("file policy without required FLAG accepted")
 	}
 }
+
+func TestPublishedPwnCatalogRequiresBackendFlags(t *testing.T) {
+	catalog, err := LoadImagePolicies("../../config/pwn-image-policies.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.RequiredFlagImages()) != 4 || len(catalog.RequiredFlagFiles()) != 3 {
+		t.Fatal("PWN FLAG policy is incomplete")
+	}
+	for image, policy := range catalog.images {
+		if policy.IsolationProfile != "PWN" || policy.CISmokeEnabled || !policy.RequiresFlag {
+			t.Fatal("PWN isolation or FLAG requirement was weakened")
+		}
+		request := validCreateWorkloadRequest()
+		request.IsolationProfile = "PWN"
+		request.Workload.Containers = []RuntimeContainer{{Name: policy.Container, Image: image, Ports: policy.Ports, Expose: true}}
+		if err := catalog.Apply(&request); err != nil {
+			t.Fatal(err)
+		}
+		if err := request.Validate(); err == nil {
+			t.Fatal("published image accepted without Backend secret_ref")
+		}
+		request.Workload.Containers[0].Image = strings.Split(image, "@")[0] + "@sha256:" + strings.Repeat("a", 64)
+		if err := catalog.Apply(&request); err == nil {
+			t.Fatal("unreviewed PWN digest was accepted")
+		}
+	}
+}
