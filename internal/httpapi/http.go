@@ -24,23 +24,30 @@ type API struct {
 }
 
 func NewHandler(createWorkload provisioner.CreateWorkloadUseCase, authConfig ServiceAuthConfig) http.Handler {
-	return newHandler(createWorkload, nil, authConfig, nil)
+	return newHandler(createWorkload, nil, authConfig, nil, nil)
 }
 
 func NewHandlerWithRuntime(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase, authConfig ServiceAuthConfig) http.Handler {
-	return newHandler(createWorkload, runtime, authConfig, nil)
+	return newHandler(createWorkload, runtime, authConfig, nil, nil)
 }
 
 func NewHandlerWithRuntimePolicies(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase, authConfig ServiceAuthConfig, policies *ImagePolicyCatalog) http.Handler {
-	return newHandler(createWorkload, runtime, authConfig, policies)
+	return newHandler(createWorkload, runtime, authConfig, policies, nil)
 }
 
-func newHandler(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase, authConfig ServiceAuthConfig, policies *ImagePolicyCatalog) http.Handler {
+func NewHandlerWithRuntimeReadiness(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase, authConfig ServiceAuthConfig, policies *ImagePolicyCatalog, readiness ReadinessConfig) http.Handler {
+	return newHandler(createWorkload, runtime, authConfig, policies, &readiness)
+}
+
+func newHandler(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase, authConfig ServiceAuthConfig, policies *ImagePolicyCatalog, readiness *ReadinessConfig) http.Handler {
 	api := &API{createWorkload: createWorkload, runtime: runtime, imagePolicies: policies, ciSmokeTeamID: authConfig.CISmokeTeamID, ciSmokeTargetID: authConfig.CISmokeTargetID}
 	if runtime == nil {
 		api.directResolver = isolation.NewStaticResolver()
 	}
 	mux := http.NewServeMux()
+	if readiness != nil {
+		mux.HandleFunc("GET /internal/v1/healthz", readiness.handle)
+	}
 	mux.HandleFunc("POST /internal/v1/instances", api.handleCreateInstance)
 	if runtime != nil {
 		mux.HandleFunc("GET /internal/v1/instances/{instance_id}/runtime-status", api.handleRuntimeStatus)

@@ -235,6 +235,7 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 	var operationStore operations.Store = operations.NewMemoryStore(nil)
 	var deleteCoordinator runtimeops.DeleteCoordinator
 	var closeStore func() error
+	readiness := httpapi.ReadinessConfig{StoreMode: config.RuntimeStore.Mode, APIOnly: config.APIOnly}
 	if config.RuntimeStore.Mode == "postgres" {
 		openStore := runtimepg.Open
 		if config.APIOnly {
@@ -248,6 +249,7 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 		operationStore = database.Operations()
 		deleteCoordinator = database.DeleteCoordinator()
 		closeStore = database.Close
+		readiness.CheckDatabase = database.CheckReadiness
 	}
 	service, err := runtimeops.NewService(
 		createAdapter,
@@ -279,7 +281,7 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 		return nil, err
 	}
 	return &application{
-		handler:   httpapi.NewHandlerWithRuntimePolicies(service, service, config.ServiceAuth, imagePolicies),
+		handler:   httpapi.NewHandlerWithRuntimeReadiness(service, service, config.ServiceAuth, imagePolicies, readiness),
 		runWorker: service.Run,
 		close:     closeStore,
 	}, nil
