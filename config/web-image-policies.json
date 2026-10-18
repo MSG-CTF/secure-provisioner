@@ -86,6 +86,34 @@
       "writable_paths": [{"path": "/tmp", "size_mib": 64}]
     },
     {
+      "image": "ghcr.io/msg-ctf/challenges/web-notebook/web@sha256:61cebc237880b45ec1157b60d892429bfa6b237fbee83f339cd4e73d659b4a8b",
+      "container": "web",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "ci_smoke_enabled": false,
+      "readiness_http": {"path": "/", "port": 8080},
+      "run_as_user": 10001,
+      "ports": [8080],
+      "exposed_ports": [8080],
+      "writable_paths": [{"path": "/tmp", "size_mib": 64}]
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web-notebook/db@sha256:2bcb74bbea090364d812459b3039d6a79ce0521a24a4d3fee7ff8a4f6d32bf3d",
+      "container": "db",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "ci_smoke_enabled": false,
+      "requires_flag": true,
+      "run_as_user": 70,
+      "ports": [5432],
+      "exposed_ports": [],
+      "writable_paths": [
+        {"path": "/tmp", "size_mib": 64},
+        {"path": "/var/lib/postgresql/data", "size_mib": 256},
+        {"path": "/var/run/postgresql", "size_mib": 16}
+      ]
+    },
+    {
       "image": "ghcr.io/msg-ctf/challenges/web-notebook/web@sha256:d4249f02fb0745df557dc65382911ec00da883e2fa6bde434c5b63c14cb81db3",
       "container": "web",
       "isolation_profile": "WEB",
