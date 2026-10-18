@@ -11,14 +11,30 @@ from unittest.mock import patch
 from release import CONFIG, DeploymentError, deploy, read_bundle
 
 TOKEN = "a" * 48
-ENV = ("SCHEDULER_API_TOKEN=" + TOKEN + "\nSPRING_PROFILES_ACTIVE=dev\nSPRING_DOCKER_COMPOSE_ENABLED=false\nSPRING_DATASOURCE_URL=jdbc:postgresql://127.0.0.1/db\nSPRING_DATASOURCE_USERNAME=test\nSPRING_DATASOURCE_PASSWORD=test\nSPRING_DATA_REDIS_HOST=127.0.0.1\nSPRING_DATA_REDIS_PORT=6379\n").encode()
-RUNTIME_ENV = b"PROVISIONER_SERVICE_TOKEN_FILE=/etc/secure-provisioner/service-token\nPROVISIONER_IMAGE_POLICIES=/etc/secure-provisioner/image-policies.json\n"
+ENV = (
+    "SCHEDULER_API_TOKEN="
+    + TOKEN
+    + "\nSPRING_PROFILES_ACTIVE=dev\nSPRING_DOCKER_COMPOSE_ENABLED=false\nSPRING_DATASOURCE_URL=jdbc:postgresql://127.0.0.1/db\nSPRING_DATASOURCE_USERNAME=test\nSPRING_DATASOURCE_PASSWORD=test\nSPRING_DATA_REDIS_HOST=127.0.0.1\nSPRING_DATA_REDIS_PORT=6379\n"
+).encode()
+RUNTIME_ENV = b"PROVISIONER_SERVICE_TOKEN_FILE=/etc/secure-provisioner/service-token\nPROVISIONER_IMAGE_POLICIES=/etc/secure-provisioner/image-policies.json\nPROVISIONER_STORE_MODE=postgres\nPROVISIONER_DATABASE_URL=postgresql://localhost/test\n"
 
-def bundle(component="scheduler", extra=None, corrupt=False, artifact=b"new artifact", env=None):
-    files = {"artifact": artifact, "app.env": env or (ENV if component == "scheduler" else RUNTIME_ENV)}
+
+def bundle(
+    component="scheduler", extra=None, corrupt=False, artifact=b"new artifact", env=None
+):
+    files = {
+        "artifact": artifact,
+        "app.env": env or (ENV if component == "scheduler" else RUNTIME_ENV),
+    }
     if component == "runtime":
         files["service-token"] = TOKEN.encode()
-    manifest = {"component": component, "source_sha": "b" * 40, "checksums": {k: hashlib.sha256(v).hexdigest() for k, v in files.items()}}
+    manifest = {
+        "component": component,
+        "source_sha": "b" * 40,
+        "checksums": {k: hashlib.sha256(v).hexdigest() for k, v in files.items()},
+    }
+    if component == "runtime":
+        manifest["deployment_strategy"] = "runtime_api_bridge_v1"
     if corrupt:
         manifest["checksums"]["artifact"] = "0" * 64
     files["release.json"] = json.dumps(manifest).encode()
@@ -33,16 +49,55 @@ def bundle(component="scheduler", extra=None, corrupt=False, artifact=b"new arti
     buffer.seek(0)
     return buffer
 
+
 class Service:
     def __init__(self, root, component, fail=False):
         self.root, self.component, self.fail = root, component, fail
         self.restarts = 0
+        self.bridge_started = False
+        self.events = []
+
     def reload(self):
         pass
+
     def restart(self, service):
         self.restarts += 1
+        self.events.append("restart")
+
     def active(self, service):
+        if service == "secure-provisioner-bridge":
+            return self.bridge_started
         return True
+
+    def reload_proxy(self):
+        self.events.append(
+            "proxy:"
+            + (self.root / "etc/nginx/snippets/msgctf-runtime-upstream.conf")
+            .read_text()
+            .strip()
+        )
+
+    def start_bridge(self):
+        self.bridge_started = True
+        self.events.append("start_bridge")
+
+    def bridge_mode_verified(self):
+        return True
+
+    def stop_bridge(self):
+        self.bridge_started = False
+        self.events.append("stop_bridge")
+
+    def handoff_stop(self, values):
+        self.events.append("handoff_stop")
+
+    def port_request(self, path, token=None, port=8080):
+        return (
+            (404, {"error": {"code": "OPERATION_NOT_FOUND"}})
+            if token == TOKEN
+            else (401, {})
+        )
+
     def request(self, path, token=None):
         artifact = self.root / CONFIG[self.component]["artifact"].lstrip("/")
         if self.fail and artifact.read_bytes() == b"new artifact":
@@ -55,32 +110,50 @@ class Service:
             return 404, {"error": {"code": "OPERATION_NOT_FOUND"}}
         return 200, {"code": "SUCCESS", "data": {"items": [], "next_cursor": None}}
 
+
 class DeploymentTests(unittest.TestCase):
     def fixture(self, root, component):
-        for key, value in (("artifact", b"old artifact"), ("env", ENV if component == "scheduler" else RUNTIME_ENV), ("marker", b'{"source_commit":"old"}')):
+        for key, value in (
+            ("artifact", b"old artifact"),
+            ("env", ENV if component == "scheduler" else RUNTIME_ENV),
+            ("marker", b'{"source_commit":"old"}'),
+        ):
             target = root / CONFIG[component][key].lstrip("/")
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(value)
             target.chmod(0o600)
         if component == "runtime":
             (root / "etc/secure-provisioner/service-token").write_text(TOKEN)
+            site = root / "etc/nginx/sites-available/secure-provisioner-ip"
+            site.parent.mkdir(parents=True)
+            site.write_text("location / { proxy_pass http://127.0.0.1:8080; }\n")
 
     def test_success_updates_artifact_metadata_and_authentication(self):
         for component in CONFIG:
-            with self.subTest(component=component), tempfile.TemporaryDirectory() as name:
+            with self.subTest(
+                component=component
+            ), tempfile.TemporaryDirectory() as name:
                 root = Path(name)
                 self.fixture(root, component)
                 service = Service(root, component)
                 result = deploy(component, bundle(component), root, service, 1, 0)
                 self.assertEqual(result["status"], "verified")
                 self.assertEqual(service.restarts, 1)
-                self.assertEqual((root / CONFIG[component]["artifact"].lstrip("/")).read_bytes(), b"new artifact")
+                self.assertEqual(
+                    (root / CONFIG[component]["artifact"].lstrip("/")).read_bytes(),
+                    b"new artifact",
+                )
                 env = root / CONFIG[component]["env"].lstrip("/")
-                self.assertEqual(env.stat().st_mode & 0o777, 0o640 if component == "runtime" else 0o600)
+                self.assertEqual(
+                    env.stat().st_mode & 0o777,
+                    0o640 if component == "runtime" else 0o600,
+                )
 
     def test_failed_health_restores_artifact_environment_marker_and_dropin(self):
         for component in CONFIG:
-            with self.subTest(component=component), tempfile.TemporaryDirectory() as name:
+            with self.subTest(
+                component=component
+            ), tempfile.TemporaryDirectory() as name:
                 root = Path(name)
                 self.fixture(root, component)
                 before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
@@ -89,8 +162,19 @@ class DeploymentTests(unittest.TestCase):
                     deploy(component, bundle(component), root, service, 1, 0)
                 self.assertEqual(service.restarts, 2)
                 for p, data in before.items():
+                    if component == "runtime" and "nginx" in p.parts:
+                        self.assertIn(
+                            "include /etc/nginx/snippets/msgctf-runtime-upstream.conf;",
+                            p.read_text(),
+                        )
+                        continue
                     self.assertEqual(p.read_bytes(), data)
-                self.assertFalse((root / "etc/systemd/system/mjsec-scheduler.service.d/60-ci-artifact.conf").exists())
+                self.assertFalse(
+                    (
+                        root
+                        / "etc/systemd/system/mjsec-scheduler.service.d/60-ci-artifact.conf"
+                    ).exists()
+                )
 
     def test_corrupt_artifact_changes_no_service_files(self):
         with tempfile.TemporaryDirectory() as name:
@@ -100,7 +184,10 @@ class DeploymentTests(unittest.TestCase):
             with self.assertRaises(DeploymentError):
                 deploy("scheduler", bundle(corrupt=True), root, service, 1, 0)
             self.assertEqual(service.restarts, 0)
-            self.assertEqual((root / "opt/msgctf-scheduler/scheduler.jar").read_bytes(), b"old artifact")
+            self.assertEqual(
+                (root / "opt/msgctf-scheduler/scheduler.jar").read_bytes(),
+                b"old artifact",
+            )
 
     def test_service_can_read_artifact_directory_with_private_umask(self):
         with tempfile.TemporaryDirectory() as name:
@@ -116,7 +203,11 @@ class DeploymentTests(unittest.TestCase):
             self.assertEqual(directory.stat().st_mode & 0o777, 0o755)
 
     def test_rejects_traversal_symlink_and_duplicate_entries(self):
-        for name, kind in (("../escape", tarfile.REGTYPE), ("app.env", tarfile.SYMTYPE), ("artifact", tarfile.REGTYPE)):
+        for name, kind in (
+            ("../escape", tarfile.REGTYPE),
+            ("app.env", tarfile.SYMTYPE),
+            ("artifact", tarfile.REGTYPE),
+        ):
             with self.subTest(name=name, kind=kind):
                 entry = tarfile.TarInfo(name)
                 entry.type = kind
@@ -127,7 +218,11 @@ class DeploymentTests(unittest.TestCase):
     def test_rejects_component_and_unsafe_environment(self):
         with self.assertRaises(DeploymentError):
             read_bundle(bundle(), "runtime")
-        for suffix in (b"LD_PRELOAD=/tmp/code\n", b"SCHEDULER_API_TOKEN=duplicate\n", b"not an env file\n"):
+        for suffix in (
+            b"LD_PRELOAD=/tmp/code\n",
+            b"SCHEDULER_API_TOKEN=duplicate\n",
+            b"not an env file\n",
+        ):
             with self.assertRaises(DeploymentError):
                 read_bundle(bundle(env=ENV + suffix), "scheduler")
 
@@ -138,13 +233,25 @@ class DeploymentTests(unittest.TestCase):
                 self.fixture(root, "scheduler")
                 service = Service(root, "scheduler")
                 original = service.request
+
                 def request(path, token=None):
                     current = (root / "opt/msgctf-scheduler/scheduler.jar").read_bytes()
                     if current == b"new artifact":
                         if insecure and path == "/actuator/health":
                             return 200, {"status": "UP"}
-                        return (200, {"code": "SUCCESS", "data": {"items": [], "next_cursor": None}}) if insecure else (200, None)
+                        return (
+                            (
+                                200,
+                                {
+                                    "code": "SUCCESS",
+                                    "data": {"items": [], "next_cursor": None},
+                                },
+                            )
+                            if insecure
+                            else (200, None)
+                        )
                     return original(path, token)
+
                 service.request = request
                 with self.assertRaises(DeploymentError):
                     deploy("scheduler", bundle(), root, service, 1, 0)
@@ -180,7 +287,13 @@ class DeploymentTests(unittest.TestCase):
             with patch("builtins.print") as output:
                 with self.assertRaises(DeploymentError):
                     deploy("scheduler", bundle(), root, service, 1, 0)
-                self.assertFalse(any("ROLLBACK_RESULT=" in str(call) for call in output.call_args_list))
+                self.assertFalse(
+                    any(
+                        "ROLLBACK_RESULT=" in str(call)
+                        for call in output.call_args_list
+                    )
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
