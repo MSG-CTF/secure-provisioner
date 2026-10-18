@@ -2,6 +2,7 @@ import io
 import json
 from pathlib import Path
 import tempfile
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -9,6 +10,7 @@ from release import (
     DeploymentError,
     RUNTIME_BRIDGE,
     RUNTIME_UPSTREAM,
+    SystemService,
     deploy,
     read_bundle,
 )
@@ -17,6 +19,30 @@ from test_release import RUNTIME_ENV, Service, TOKEN, bundle
 
 
 class RuntimeBridgeTests(unittest.TestCase):
+    def test_bridge_capability_probe_has_no_credentials_and_uses_service_identity(self):
+        calls = []
+
+        def run(command, **kwargs):
+            calls.append((command, kwargs))
+            output = (
+                b'{"protocol":1,"api_only":true,"handoff_lock":true}'
+                if len(calls) == 1
+                else "User=provisioner\nGroup=provisioner\nWorkingDirectory=/var/lib/secure-provisioner\n"
+            )
+            return subprocess.CompletedProcess(command, 0, output, "")
+
+        with patch("release.subprocess.run", side_effect=run):
+            SystemService().start_bridge()
+        self.assertEqual(
+            calls[0][0][:4], ["/usr/sbin/runuser", "-u", "provisioner", "--"]
+        )
+        self.assertEqual(calls[0][1]["env"], {"PATH": "/usr/bin:/bin"})
+        self.assertEqual(
+            SystemService().handoff_command()[:4],
+            ["/usr/sbin/runuser", "-u", "provisioner", "--"],
+        )
+        self.assertTrue(all(not kwargs.get("shell") for _, kwargs in calls))
+
     def fixture(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)

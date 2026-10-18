@@ -245,7 +245,7 @@ class SystemService:
         # environment so it cannot initialize a worker if it lacks the protocol.
         result = subprocess.run(
             [
-                "runuser",
+                "/usr/sbin/runuser",
                 "-u",
                 "provisioner",
                 "--",
@@ -392,7 +392,7 @@ class SystemService:
 
     def handoff_command(self):
         return [
-            "runuser",
+            "/usr/sbin/runuser",
             "-u",
             "provisioner",
             "--",
