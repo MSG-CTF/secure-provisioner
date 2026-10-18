@@ -46,6 +46,7 @@ func newHandler(createWorkload provisioner.CreateWorkloadUseCase, runtime Runtim
 		mux.HandleFunc("GET /internal/v1/instances/{instance_id}/runtime-status", api.handleRuntimeStatus)
 		mux.HandleFunc("DELETE /internal/v1/instances/{instance_id}", api.handleDeleteInstance)
 		mux.HandleFunc("GET /internal/v1/operations/{operation_id}", api.handleGetOperation)
+		mux.HandleFunc("POST /internal/v1/instances/{instance_id}/reconcile_create", api.handleReconcileCreate)
 	}
 	return newServiceAuthenticator(authConfig).wrap(requestSizeLimit(mux))
 }

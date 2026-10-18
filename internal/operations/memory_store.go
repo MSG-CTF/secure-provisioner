@@ -191,6 +191,32 @@ func (s *MemoryStore) EnqueueCreate(command provisioner.CreateWorkloadCommand, m
 	return operation, true, nil
 }
 
+func (s *MemoryStore) ReconcileCreate(command provisioner.CreateWorkloadCommand, maxAttempts int) (Operation, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id, err := s.idGenerator()
+	if err != nil {
+		return Operation{}, false, err
+	}
+	operation, err := NewUnacceptedCreateOperation(id, command, maxAttempts)
+	if err != nil {
+		return Operation{}, false, err
+	}
+	if existing, found := s.operationForRequest(command.RequestID); found {
+		if existing.SameRequest(operation) {
+			return copyOperation(*existing), false, nil
+		}
+		return Operation{}, false, ErrIdempotencyConflict
+	}
+	if _, exists := s.operations[id]; exists {
+		return Operation{}, false, ErrOperationIDConflict
+	}
+	s.operations[id] = &operation
+	s.requestIDs[operation.RequestID] = operation.ID
+	// Terminal fences never enter the execution queue.
+	return copyOperation(operation), true, nil
+}
+
 func (s *MemoryStore) EnqueueDelete(command provisioner.DeleteWorkloadCommand, maxAttempts int) (Operation, bool, error) {
 	s.mu.Lock()
 	operation, created, err := s.enqueueDelete(command, maxAttempts)
