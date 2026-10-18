@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "managed_repositories": [
+    "ghcr.io/msg-ctf/challenges/pwn-random6/random6",
+    "ghcr.io/msg-ctf/challenges/pwn-note/service",
+    "ghcr.io/msg-ctf/challenges/pwn-ghost-file/chall",
+    "ghcr.io/msg-ctf/challenges/pwn-price-tag/price-tag"
+  ],
+  "images": [
+    {
+      "image": "ghcr.io/msg-ctf/challenges/pwn-random6/random6@sha256:b1984430b5a4fe4761a9dcd425359fa398bc95ca5bddef6d4f3d53948f4fdd9d",
+      "container": "random6",
+      "isolation_profile": "PWN",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 31337,
+      "ports": [
+        6666
+      ],
+      "exposed_ports": [
+        6666
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 32
+        }
+      ]
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/pwn-note/service@sha256:c449da75a6a3eb0560b1d43034771749338897219afc560104da5c9b6c6a5471",
+      "container": "service",
+      "isolation_profile": "PWN",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 1001,
+      "ports": [
+        9999
+      ],
+      "exposed_ports": [
+        9999
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 32
+        }
+      ],
+      "flag_file_path": "/home/ctf/flag.txt"
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/pwn-ghost-file/chall@sha256:fe5c7242ce948ea3817d2bfe8b3c146f324af5dbb0bbf617bc3fbd36ceb8046b",
+      "container": "chall",
+      "isolation_profile": "PWN",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 1000,
+      "ports": [
+        31337
+      ],
+      "exposed_ports": [
+        31337
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 32
+        }
+      ],
+      "flag_file_path": "/flag"
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/pwn-price-tag/price-tag@sha256:1556a19564052695fec77b15c81c70a9b9e609df0f51681eae4d00fe667b87ac",
+      "container": "price-tag",
+      "isolation_profile": "PWN",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 1000,
+      "ports": [
+        9999
+      ],
+      "exposed_ports": [
+        9999
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 32
+        }
+      ],
+      "flag_file_path": "/home/player/flag.txt"
+    }
+  ]
+}

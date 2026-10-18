@@ -15,6 +15,9 @@ const environmentSecretName = "challenge-env"
 func addSecretResources(ctx context.Context, resources *ResourceSet, command provisioner.CreateWorkloadCommand, resolver SecretResolver) error {
 	data := make(map[string][]byte)
 	for _, container := range command.Containers {
+		if container.FlagFilePath != "" && (!container.RequiresFlag || !provisioner.ValidFlagFilePath(container.FlagFilePath)) {
+			return newRuntimeError("SECRET_RESOLUTION_FAILED", false, nil)
+		}
 		if container.SecretRef == "" {
 			if container.RequiresFlag {
 				return newRuntimeError("SECRET_RESOLUTION_FAILED", false, nil)
@@ -66,6 +69,23 @@ func addSecretResources(ctx context.Context, resources *ResourceSet, command pro
 						LocalObjectReference: corev1.LocalObjectReference{Name: environmentSecretName}, Key: key,
 					}}},
 				)
+			}
+			if container.FlagFilePath != "" {
+				// Project only this container's FLAG; other resolved secrets stay env-only.
+				pod := &deployment.Spec.Template.Spec
+				group := *pod.SecurityContext.RunAsGroup
+				pod.SecurityContext.FSGroup = &group
+				mode := int32(0440)
+				pod.Volumes = append(pod.Volumes, corev1.Volume{
+					Name: "backend-flag",
+					VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+						SecretName: environmentSecretName, DefaultMode: &mode,
+						Items: []corev1.KeyToPath{{Key: container.Name + ".FLAG", Path: "flag"}},
+					}},
+				})
+				pod.Containers[0].VolumeMounts = append(pod.Containers[0].VolumeMounts, corev1.VolumeMount{
+					Name: "backend-flag", MountPath: container.FlagFilePath, SubPath: "flag", ReadOnly: true,
+				})
 			}
 		}
 		if !matched {

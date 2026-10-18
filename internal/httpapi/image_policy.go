@@ -29,6 +29,7 @@ type ImagePolicy struct {
 	Status           string                     `json:"status"`
 	BlockedReason    string                     `json:"blocked_reason,omitempty"`
 	RequiresFlag     bool                       `json:"requires_flag,omitempty"`
+	FlagFilePath     string                     `json:"flag_file_path,omitempty"`
 	CISmokeEnabled   bool                       `json:"ci_smoke_enabled,omitempty"`
 	RunAsUser        int64                      `json:"run_as_user"`
 	Ports            []int                      `json:"ports"`
@@ -57,6 +58,18 @@ func (catalog *ImagePolicyCatalog) AllowsFlag(image string) bool {
 	}
 	policy, found := catalog.images[image]
 	return found && policy.RequiresFlag
+}
+
+func (catalog *ImagePolicyCatalog) RequiredFlagFiles() map[string]string {
+	files := make(map[string]string)
+	if catalog != nil {
+		for image, policy := range catalog.images {
+			if policy.Status == "create_enabled" && policy.FlagFilePath != "" {
+				files[image] = policy.FlagFilePath
+			}
+		}
+	}
+	return files
 }
 
 type imagePolicyFile struct {
@@ -150,6 +163,9 @@ func (catalog *ImagePolicyCatalog) AllowsCISmoke(image string) bool {
 }
 
 func validateImagePolicyRequirements(policy ImagePolicy) error {
+	if policy.FlagFilePath != "" && (!policy.RequiresFlag || !provisioner.ValidFlagFilePath(policy.FlagFilePath)) {
+		return errors.New("flag_file_path requires FLAG and an approved challenge flag path")
+	}
 	if policy.RunAsUser <= 0 || len(policy.Ports) == 0 || policy.ExposedPorts == nil || len(policy.WritablePaths) == 0 {
 		return errors.New("run_as_user, ports, exposed_ports, and writable_paths are required")
 	}
@@ -235,6 +251,7 @@ func (catalog *ImagePolicyCatalog) Apply(request *CreateWorkloadRequest) error {
 	for index, policy := range selected {
 		container := &request.Workload.Containers[index]
 		container.requiresFlag = policy.RequiresFlag
+		container.flagFilePath = policy.FlagFilePath
 		container.RunAsUser = policy.RunAsUser
 		container.Expose = false
 		container.ExposedPorts = slices.Clone(policy.ExposedPorts)
