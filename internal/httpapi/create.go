@@ -49,6 +49,7 @@ type RuntimeContainer struct {
 	SecretRef     string            `json:"secret_ref,omitempty"`
 	readinessHTTP *provisioner.HTTPReadiness
 	requiresFlag  bool
+	flagFilePath  string
 }
 
 func (container *RuntimeContainer) UnmarshalJSON(data []byte) error {
@@ -373,6 +374,7 @@ func (request CreateWorkloadRequest) normalizedContainers() ([]provisioner.Workl
 		normalized := provisioner.WorkloadContainer{
 			Name: container.Name, Image: container.Image, Ports: ports, Expose: container.Expose,
 			Env: maps.Clone(container.Env), SecretRef: container.SecretRef, RequiresFlag: container.requiresFlag,
+			FlagFilePath: container.flagFilePath,
 		}
 		if container.readinessHTTP != nil {
 			readiness := *container.readinessHTTP

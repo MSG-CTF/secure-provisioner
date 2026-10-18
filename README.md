@@ -131,6 +131,10 @@ Registry 예시:
 Pwn workload는 `NODE_PORT` Target에만 배치되며 `runtime_classes`에 `gvisor`가
 선언돼야 합니다. Web-only Target은 `runtime_classes`를 생략할 수 있습니다.
 
+PWN 노드 설치와 이미지별 FLAG 전달은 [PWN 실행 안내](docs/operations/pwn-live-validation.md)를 참고합니다
+환경변수 방식과 기존 파일 방식 모두 백엔드 비밀값 참조를 사용합니다
+파일 경로는 운영자 이미지 정책에서만 정하며 생성 API에서는 받지 않습니다
+
 활성화된 target은 `network_policy_enforced`,
 `supplemental_groups_policy_strict`, `pod_pid_limit_enforced`를 모두 명시해야 합니다. 필드가 없거나
 `null`이면 Registry 설정이 유효하지 않습니다. 명시적인 `false`는 진단을 위해

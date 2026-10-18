@@ -40,6 +40,7 @@ type WorkloadContainer struct {
 	Env           map[string]string `json:",omitempty"`
 	SecretRef     string            `json:",omitempty"`
 	RequiresFlag  bool              `json:",omitempty"`
+	FlagFilePath  string            `json:",omitempty"`
 }
 
 type HTTPReadiness struct {

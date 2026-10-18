@@ -191,6 +191,7 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 		RollbackTimeout:    config.RollbackTimeout,
 		Secrets:            secretResolver,
 		RequiredFlagImages: imagePolicies.RequiredFlagImages(),
+		RequiredFlagFiles:  imagePolicies.RequiredFlagFiles(),
 	})
 	if err != nil {
 		return nil, err

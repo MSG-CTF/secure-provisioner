@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"maps"
 	"strconv"
 	"strings"
 	"time"
@@ -29,6 +30,7 @@ type AdapterConfig struct {
 	RollbackTimeout    time.Duration
 	Secrets            SecretResolver
 	RequiredFlagImages []string
+	RequiredFlagFiles  map[string]string
 }
 
 type Adapter struct {
@@ -60,6 +62,12 @@ func NewAdapter(registry *Registry, config AdapterConfig) (*Adapter, error) {
 		requiredFlags[image] = true
 	}
 	config.RequiredFlagImages = append([]string(nil), config.RequiredFlagImages...)
+	config.RequiredFlagFiles = maps.Clone(config.RequiredFlagFiles)
+	for image, filename := range config.RequiredFlagFiles {
+		if !requiredFlags[image] || !provisioner.ValidFlagFilePath(filename) {
+			return nil, newRuntimeError("CONFIG_INVALID", false, nil)
+		}
+	}
 	return &Adapter{registry: registry, config: config, workloadLocks: newWorkloadLockSet(), requiredFlagImages: requiredFlags}, nil
 }
 
@@ -103,6 +111,9 @@ func (a *Adapter) createWorkload(ctx context.Context, command provisioner.Create
 	// HTTP admission is bypassed when a queued command is replayed after an upgrade.
 	for _, container := range normalizedCommandContainers(command) {
 		if a.requiredFlagImages[container.Image] && (!container.RequiresFlag || container.SecretRef == "") {
+			return provisioner.CreateWorkloadResult{}, a.failBeforeNamespace(command, newRuntimeError("SECRET_RESOLUTION_FAILED", false, nil))
+		}
+		if filename := a.config.RequiredFlagFiles[container.Image]; filename != "" && container.FlagFilePath != filename {
 			return provisioner.CreateWorkloadResult{}, a.failBeforeNamespace(command, newRuntimeError("SECRET_RESOLUTION_FAILED", false, nil))
 		}
 	}
