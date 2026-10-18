@@ -276,6 +276,16 @@ class RuntimeIntegrationTests(unittest.TestCase):
                             and value.get("error", {}).get("code")
                             == "OPERATION_NOT_FOUND"
                         )
+                        code, health = request(
+                            service.proxy_port, "/internal/v1/healthz"
+                        )
+                        outcomes.append(
+                            code == 200
+                            and health.get("status") == "ok"
+                            and health.get("store_mode") == "postgres"
+                            and health.get("database") == "ok"
+                            and health.get("mode") in {"primary", "deployment_bridge"}
+                        )
                     except Exception:
                         outcomes.append(False)
                     stop.wait(0.005)

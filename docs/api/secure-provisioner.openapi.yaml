@@ -17,6 +17,38 @@ servers:
 security:
   - ServiceBearerAuth: []
 paths:
+  /internal/v1/healthz:
+    get:
+      summary: 런타임 API와 영속 저장소의 현재 조회 가능 여부
+      operationId: getRuntimeReadiness
+      description: |
+        일반 서비스 토큰으로만 조회하며 CI smoke 토큰은 허용하지 않는다
+        PostgreSQL의 Operation·Binding 조회 스키마와 연결을 2초 이내 읽기 전용 쿼리로 확인한다
+        memory 모드는 영속 저장소가 없으므로 503을 반환한다
+        배포 브리지는 worker 없이 API와 같은 저장소를 제공하므로 정상일 때 200을 반환한다
+        클러스터·문제 컨테이너 상태와 worker 처리 성능은 이 응답의 검증 범위에 포함하지 않는다
+        응답은 Cache-Control no-store로 제공하며 비밀값이나 내부 오류를 포함하지 않는다
+      responses:
+        "200":
+          description: API와 PostgreSQL 저장소 조회 정상
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuntimeReadiness"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          description: CI smoke token cannot inspect control-plane readiness
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: 저장소 조회 실패·기한 초과 또는 영속 저장소 미설정
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuntimeReadiness"
   /internal/v1/instances/{instance_id}/reconcile_create:
     post:
       summary: 생성 응답을 잃은 요청의 접수 여부 확정
@@ -600,6 +632,32 @@ components:
                 max_attempts: 3
                 created: true
   schemas:
+    RuntimeReadiness:
+      type: object
+      additionalProperties: false
+      required: [status, store_mode, database, mode, checked_at]
+      properties:
+        status:
+          type: string
+          enum: [ok, down]
+        store_mode:
+          type: string
+          enum: [postgres, memory]
+        database:
+          type: string
+          enum: [ok, down, not_configured]
+        mode:
+          type: string
+          enum: [primary, deployment_bridge]
+        checked_at:
+          type: string
+          format: date-time
+      examples:
+        - status: ok
+          store_mode: postgres
+          database: ok
+          mode: primary
+          checked_at: "2026-10-18T18:00:00Z"
     RuntimeTarget:
       type: object
       additionalProperties: false

@@ -67,3 +67,10 @@ func (database *Database) Operations() *OperationStore           { return databa
 func (database *Database) Bindings() *BindingStore               { return database.bindings }
 func (database *Database) DeleteCoordinator() *DeleteCoordinator { return database.deletes }
 func (database *Database) Close() error                          { return database.db.Close() }
+
+// CheckReadiness verifies live access to both durable stores with a read-only,
+// constant-size query. Empty tables are ready; missing schemas are not.
+func (database *Database) CheckReadiness(ctx context.Context) error {
+	var hasOperations, hasBindings bool
+	return database.db.QueryRowContext(ctx, "SELECT EXISTS ("+operationSelect+"), EXISTS ("+bindingSelect+")").Scan(&hasOperations, &hasBindings)
+}
