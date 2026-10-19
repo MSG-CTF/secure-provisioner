@@ -13,7 +13,10 @@
     "ghcr.io/msg-ctf/challenges/web-afterimage/exporter",
     "ghcr.io/msg-ctf/challenges/web-afterimage/inventory-metadata",
     "ghcr.io/msg-ctf/challenges/web-afterimage/indexer",
-    "ghcr.io/msg-ctf/challenges/web-afterimage/case-vault"
+    "ghcr.io/msg-ctf/challenges/web-afterimage/case-vault",
+    "ghcr.io/msg-ctf/challenges/web3-split-brain-oracle/challenge",
+    "ghcr.io/msg-ctf/challenges/crypto-reused-seal/chall",
+    "ghcr.io/msg-ctf/challenges/pwn-price-tag/price-tag"
   ],
   "images": [
     {
@@ -163,6 +166,135 @@
         {"path": "/var/lib/postgresql/data", "size_mib": 256},
         {"path": "/var/run/postgresql", "size_mib": 16}
       ]
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web-daily-point/web@sha256:6640cad2d5e9c83cc6ba6bb86f38ccd7ce6317a9eaeab715e2dea74773994489",
+      "container": "web",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "ci_smoke_enabled": false,
+      "run_as_user": 10001,
+      "ports": [
+        8080
+      ],
+      "exposed_ports": [
+        8080
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 64
+        },
+        {
+          "path": "/app/data",
+          "size_mib": 64
+        }
+      ],
+      "readiness_http": {
+        "path": "/",
+        "port": 8080
+      },
+      "requires_flag": true
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web3-split-brain-oracle/challenge@sha256:2eb556ab51dc5214c1e4c7ae73a7a1c63d81cb35d980bf40923597456da2ffc4",
+      "container": "challenge",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "ci_smoke_enabled": false,
+      "run_as_user": 10001,
+      "ports": [
+        8000
+      ],
+      "exposed_ports": [
+        8000
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 64
+        },
+        {
+          "path": "/app/state",
+          "size_mib": 64
+        },
+        {
+          "path": "/app/cache",
+          "size_mib": 64
+        }
+      ],
+      "readiness_http": {
+        "path": "/health",
+        "port": 8000
+      },
+      "requires_flag": true
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web-open-house/web@sha256:ad459de4ec1b5687be9b17cf445973344cf8aaee150bc759a5f02e79435d236d",
+      "container": "web",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "ci_smoke_enabled": false,
+      "run_as_user": 10001,
+      "ports": [
+        8080
+      ],
+      "exposed_ports": [
+        8080
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 64
+        }
+      ],
+      "readiness_http": {
+        "path": "/",
+        "port": 8080
+      }
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/crypto-reused-seal/chall@sha256:ac142a1d23fc645823d5de28adc05e980133620638bf784ebaff4e78b68ab1b7",
+      "container": "chall",
+      "isolation_profile": "PWN",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "flag_file_path": "/home/ctf/flag.txt",
+      "ci_smoke_enabled": false,
+      "run_as_user": 1000,
+      "ports": [
+        31337
+      ],
+      "exposed_ports": [
+        31337
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 64
+        }
+      ]
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/pwn-price-tag/price-tag@sha256:1556a19564052695fec77b15c81c70a9b9e609df0f51681eae4d00fe667b87ac",
+      "container": "price-tag",
+      "isolation_profile": "PWN",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 1000,
+      "ports": [
+        9999
+      ],
+      "exposed_ports": [
+        9999
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 32
+        }
+      ],
+      "flag_file_path": "/home/player/flag.txt"
     }
   ]
 }
