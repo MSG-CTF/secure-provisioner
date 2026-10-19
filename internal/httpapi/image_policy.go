@@ -36,6 +36,7 @@ type ImagePolicy struct {
 	ExposedPorts     []int                      `json:"exposed_ports"`
 	WritablePaths    []WritablePath             `json:"writable_paths"`
 	ReadinessHTTP    *provisioner.HTTPReadiness `json:"readiness_http,omitempty"`
+	TCPStartupOnly   bool                       `json:"tcp_startup_only,omitempty"`
 }
 
 func (catalog *ImagePolicyCatalog) RequiredFlagImages() []string {
@@ -163,6 +164,9 @@ func (catalog *ImagePolicyCatalog) AllowsCISmoke(image string) bool {
 }
 
 func validateImagePolicyRequirements(policy ImagePolicy) error {
+	if policy.TCPStartupOnly && (policy.IsolationProfile != "PWN" || policy.ReadinessHTTP != nil) {
+		return errors.New("tcp_startup_only requires a PWN image without HTTP readiness")
+	}
 	if policy.FlagFilePath != "" && (!policy.RequiresFlag || !provisioner.ValidFlagFilePath(policy.FlagFilePath)) {
 		return errors.New("flag_file_path requires FLAG and an approved challenge flag path")
 	}
@@ -252,6 +256,7 @@ func (catalog *ImagePolicyCatalog) Apply(request *CreateWorkloadRequest) error {
 		container := &request.Workload.Containers[index]
 		container.requiresFlag = policy.RequiresFlag
 		container.flagFilePath = policy.FlagFilePath
+		container.tcpStartupOnly = policy.TCPStartupOnly
 		container.RunAsUser = policy.RunAsUser
 		container.Expose = false
 		container.ExposedPorts = slices.Clone(policy.ExposedPorts)

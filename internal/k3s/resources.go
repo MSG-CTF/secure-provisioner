@@ -169,7 +169,16 @@ func buildResourceSetForOperation(cluster Cluster, command provisioner.CreateWor
 				Name: name, Value: strings.ReplaceAll(container.Env[name], "$", "$$"),
 			})
 		}
-		if container.ReadinessHTTP != nil {
+		if container.TCPStartupOnly {
+			// Interactive services may start an expensive session for each connection.
+			// Reviewed images opt into a bounded startup check that stops after success.
+			podContainer.StartupProbe = &corev1.Probe{
+				ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{
+					Port: intstr.FromInt(container.PublicPorts()[0]),
+				}},
+				TimeoutSeconds: 1, PeriodSeconds: 2, SuccessThreshold: 1, FailureThreshold: 30,
+			}
+		} else if container.ReadinessHTTP != nil {
 			podContainer.ReadinessProbe = &corev1.Probe{
 				ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{
 					Path:   container.ReadinessHTTP.Path,
@@ -494,6 +503,10 @@ func validWorkloadCommand(
 				!provisioner.ValidHTTPReadinessPath(container.ReadinessHTTP.Path) {
 				return false
 			}
+		}
+		if container.TCPStartupOnly && (container.ReadinessHTTP != nil ||
+			command.Policy.EndpointProtocol != isolation.EndpointProtocolTCP || len(container.PublicPorts()) != 1) {
+			return false
 		}
 		if !isolation.ValidPublicPorts(container.Ports, container.Expose, container.ExposedPorts) {
 			return false

@@ -157,6 +157,7 @@ func sameCreateCommand(first, second provisioner.CreateWorkloadCommand) bool {
 		if firstContainer.Name != secondContainer.Name ||
 			firstContainer.SecretRef != secondContainer.SecretRef ||
 			firstContainer.RequiresFlag != secondContainer.RequiresFlag ||
+			firstContainer.TCPStartupOnly != secondContainer.TCPStartupOnly ||
 			!maps.Equal(firstContainer.Env, secondContainer.Env) ||
 			firstContainer.Image != secondContainer.Image ||
 			firstContainer.Expose != secondContainer.Expose ||
