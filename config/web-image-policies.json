@@ -16,7 +16,8 @@
     "ghcr.io/msg-ctf/challenges/web-afterimage/case-vault",
     "ghcr.io/msg-ctf/challenges/web3-split-brain-oracle/challenge",
     "ghcr.io/msg-ctf/challenges/crypto-reused-seal/chall",
-    "ghcr.io/msg-ctf/challenges/pwn-price-tag/price-tag"
+    "ghcr.io/msg-ctf/challenges/pwn-price-tag/price-tag",
+    "ghcr.io/msg-ctf/challenges/rev-tinyvm/tinyvm"
   ],
   "images": [
     {
@@ -295,6 +296,18 @@
         }
       ],
       "flag_file_path": "/home/player/flag.txt"
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/rev-tinyvm/tinyvm@sha256:45b676934b4f4f139ee9e2a1739c14e9ac8d3e8831d279f8998a1458ce0c94da",
+      "container": "tinyvm",
+      "isolation_profile": "PWN",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 10001,
+      "ports": [1337],
+      "exposed_ports": [1337],
+      "writable_paths": [{"path": "/tmp", "size_mib": 64}],
+      "tcp_startup_only": true
     }
   ]
 }
