@@ -14,6 +14,7 @@
     "ghcr.io/msg-ctf/challenges/web-afterimage/inventory-metadata",
     "ghcr.io/msg-ctf/challenges/web-afterimage/indexer",
     "ghcr.io/msg-ctf/challenges/web-afterimage/case-vault",
+    "ghcr.io/msg-ctf/challenges/web3-infinite-pack/server",
     "ghcr.io/msg-ctf/challenges/web3-split-brain-oracle/challenge",
     "ghcr.io/msg-ctf/challenges/crypto-reused-seal/chall",
     "ghcr.io/msg-ctf/challenges/pwn-price-tag/price-tag",
@@ -417,6 +418,17 @@
           "size_mib": 64
         }
       ]
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web3-infinite-pack/server@sha256:43cc32512af5ce6a06d5a1541be1f9ca2397a1dab744d37580d4bfc4a04b437b",
+      "container": "server",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 10001,
+      "ports": [31337],
+      "exposed_ports": [31337],
+      "writable_paths": [{"path": "/tmp", "size_mib": 64}]
     }
   ]
 }
