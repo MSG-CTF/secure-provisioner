@@ -195,7 +195,10 @@ func (r *Router) call(ctx context.Context, t Target, body map[string]any) (Reply
 		return Reply{}, operations.NewExecutionError("VM_UNAVAILABLE", true, nil)
 	}
 	if !x.OK {
-		err := operations.NewExecutionError(x.Code, false, nil)
+		// A daemon restart or interrupted helper must not permanently fail a
+		// partially completed delete. Retrying retains the same owner generation.
+		retryable := x.Code == "VM_DOCKER_FAILED" || x.Code == "VM_AGENT_FAILED"
+		err := operations.NewExecutionError(x.Code, retryable, nil)
 		if x.CleanupCompleted {
 			return x, provisioner.WithCreateCleanupCompleted(err)
 		}

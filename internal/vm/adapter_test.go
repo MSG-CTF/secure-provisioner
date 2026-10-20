@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/MSG-CTF/secure-provisioner/internal/httpapi"
 	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
+	"github.com/MSG-CTF/secure-provisioner/internal/operations"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 	"github.com/MSG-CTF/secure-provisioner/internal/runtimebinding"
 	"testing"
@@ -94,5 +95,41 @@ func TestDeleteRequiresAllBindingIdentities(t *testing.T) {
 	c.TeamID = b.TeamID
 	if err := r.DeleteWorkload(context.Background(), c, b); err != nil || transport.count != 1 {
 		t.Fatal("valid deletion did not reach VM", err)
+	}
+}
+
+type guestReplies struct {
+	replies []Reply
+	bodies  []map[string]any
+}
+
+func (g *guestReplies) Call(_ context.Context, _ Target, body map[string]any) (Reply, error) {
+	g.bodies = append(g.bodies, body)
+	x := g.replies[0]
+	g.replies = g.replies[1:]
+	return x, nil
+}
+
+func TestDeleteRetriesTemporaryGuestFailureWithSameGeneration(t *testing.T) {
+	for _, code := range []string{"VM_DOCKER_FAILED", "VM_AGENT_FAILED"} {
+		t.Run(code, func(t *testing.T) {
+			cfg := target()
+			transport := &guestReplies{replies: []Reply{{Code: code}, {OK: true, Deleted: true}}}
+			r := &Router{targets: map[string]Target{cfg.ID: cfg}, transport: transport}
+			b := runtimebinding.Binding{InstanceID: "00000000-0000-4000-8000-000000000001", TeamID: "00000000-0000-4000-8000-000000000002", TargetID: cfg.ID, NamespaceUID: "unchanged-generation", RuntimeWorkloadID: "vm/workload"}
+			c := provisioner.DeleteWorkloadCommand{RuntimeType: provisioner.RuntimeTypeVM, InstanceID: b.InstanceID, TeamID: b.TeamID, TargetID: b.TargetID, RuntimeWorkloadID: b.RuntimeWorkloadID}
+			err := r.DeleteWorkload(t.Context(), c, b)
+			if got, retryable := operations.ClassifyExecutionError(err); got != code || !retryable {
+				t.Fatalf("temporary guest failure: code=%s retryable=%v", got, retryable)
+			}
+			if err := r.DeleteWorkload(t.Context(), c, b); err != nil {
+				t.Fatal("cleanup did not recover", err)
+			}
+			for _, body := range transport.bodies {
+				if body["uid"] != b.NamespaceUID || body["instance_id"] != b.InstanceID || body["team_id"] != b.TeamID || body["target_id"] != b.TargetID {
+					t.Fatal("retry changed the resource owner")
+				}
+			}
+		})
 	}
 }

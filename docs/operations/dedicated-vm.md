@@ -14,6 +14,8 @@ The runtime resolves backend secret references immediately before creation and s
 
 Do not remove a target from the runtime catalog while it has a create, delete, or cleanup operation. Withdraw it from broker placement first, wait for reservations and bindings to finish, then remove the catalog entry. A queued VM create with a missing catalog entry remains cleanup-pending; it cannot fall through to Kubernetes or release its reservation as if deletion were proven.
 
+Temporary Docker or helper failures are retryable within the existing worker attempt limit. Each retry carries the same instance, team, target and owner generation. Policy and ownership rejections remain terminal errors.
+
 ## Verified flow
 
 On 2026-10-20, a private Afterimage revision 578 deployment test traversed the deployed backend, scheduler, broker, runtime and dedicated VM. Seven digest-pinned containers became ready. All 42 configured variables matched the backend release in Docker and process environments; `FLAG` appeared only in `case-vault`. The original, unchanged solver completed 88/88 and returned the injected test flag. External HTTP returned 200 from the permitted QA source; the six private ports and cloud metadata/control addresses were unreachable. A runtime restart kept the same seven container IDs and one successful create operation. Admin deletion left no instance containers, networks, volumes or temporary configuration. The broker recorded one reservation release and then offered the VM again. QA ingress was source-IP restricted; broad participant access and VM auto-creation were not tested.
