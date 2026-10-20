@@ -285,6 +285,18 @@
       }
     },
     {
+      "image": "ghcr.io/msg-ctf/challenges/web-open-house/web@sha256:8d8492c1746836790691930c3ae937f01705f9a824ebc821fd939da80b3b5ea7",
+      "container": "web",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 10001,
+      "ports": [8080],
+      "exposed_ports": [8080],
+      "writable_paths": [{"path": "/tmp", "size_mib": 64}],
+      "readiness_http": {"path": "/", "port": 8080}
+    },
+    {
       "image": "ghcr.io/msg-ctf/challenges/crypto-reused-seal/chall@sha256:ac142a1d23fc645823d5de28adc05e980133620638bf784ebaff4e78b68ab1b7",
       "container": "chall",
       "isolation_profile": "PWN",
