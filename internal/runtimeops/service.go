@@ -3,6 +3,7 @@ package runtimeops
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -410,7 +411,8 @@ func (s *Service) Run(ctx context.Context) error {
 func deleteMatchesBinding(command provisioner.DeleteWorkloadCommand, binding runtimebinding.Binding) bool {
 	return command.InstanceID == binding.InstanceID &&
 		command.TeamID == binding.TeamID &&
-		command.RuntimeType == provisioner.RuntimeTypeKubernetes &&
+		((command.RuntimeType == provisioner.RuntimeTypeKubernetes && !strings.HasPrefix(binding.IsolationProfile, "DEDICATED_VM@")) ||
+			(command.RuntimeType == provisioner.RuntimeTypeVM && strings.HasPrefix(binding.IsolationProfile, "DEDICATED_VM@"))) &&
 		command.TargetID == binding.TargetID &&
 		command.RuntimeWorkloadID == binding.RuntimeWorkloadID
 }

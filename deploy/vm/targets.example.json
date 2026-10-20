@@ -1,0 +1,160 @@
+{
+  "schema_version": 1,
+  "targets": [
+    {
+      "target_id": "vm-afterimage-20261020",
+      "ssh_host": "REPLACE_VM_PRIVATE_IP",
+      "ssh_port": 22,
+      "ssh_user": "msgvm",
+      "identity_file": "/etc/secure-provisioner/vm-afterimage-key",
+      "known_hosts_file": "/etc/secure-provisioner/vm-known-hosts",
+      "profile_sha256": "5db3aa5cbee93da4999fb1c6ed07d9425eccb3fc5c1b2209f879838e1839e8a0",
+      "public_url": "http://REPLACE_VM_PUBLIC_IP:18080",
+      "resource_limits": {
+        "cpu_millicores": 2000,
+        "memory_mib": 4000,
+        "ephemeral_storage_mib": 2048
+      },
+      "containers": [
+        {
+          "name": "portal",
+          "image": "ghcr.io/msg-ctf/challenges/web-afterimage/portal@sha256:d6afb41a588fea8218f8889e1c99e666ab33b65f5f46446cd7a57305af595674",
+          "ports": [
+            8080
+          ],
+          "public_ports": [
+            8080
+          ],
+          "env_names": [
+            "BIND_HOST",
+            "CARTRIDGE_HOST",
+            "CARTRIDGE_PORT",
+            "CORE_HOST",
+            "CORE_PORT",
+            "EXPORTER_HOST",
+            "EXPORTER_PORT",
+            "INTERNAL_TOKEN",
+            "PORT"
+          ],
+          "secret_names": [
+            "INTERNAL_TOKEN"
+          ]
+        },
+        {
+          "name": "core",
+          "image": "ghcr.io/msg-ctf/challenges/web-afterimage/core@sha256:94783ad7da386efe96ecb1191883373ea61e8495c02fba47da09f6b7e3724026",
+          "ports": [
+            3000
+          ],
+          "public_ports": [],
+          "env_names": [
+            "BIND_HOST",
+            "BOT_URL",
+            "CARTRIDGE_KEY",
+            "CASE_VAULT_HOST",
+            "CASE_VAULT_PORT",
+            "INTERNAL_TOKEN",
+            "PORT"
+          ],
+          "secret_names": [
+            "CARTRIDGE_KEY",
+            "INTERNAL_TOKEN"
+          ]
+        },
+        {
+          "name": "bot",
+          "image": "ghcr.io/msg-ctf/challenges/web-afterimage/bot@sha256:23df4e201846c3f12f03a10c36b9ff8a23ac54a0732dfd209f238bf053234f5b",
+          "ports": [
+            4000
+          ],
+          "public_ports": [],
+          "env_names": [
+            "BIND_HOST",
+            "BOT_CONCURRENCY",
+            "BOT_MAX_PENDING_PER_USER",
+            "CHROME_PATH",
+            "CORE_INTERNAL_URL",
+            "INTERNAL_TOKEN",
+            "PORT",
+            "PUBLIC_BASE_URL",
+            "PUBLIC_COOKIE_DOMAIN",
+            "VISIT_MS"
+          ],
+          "secret_names": [
+            "INTERNAL_TOKEN"
+          ]
+        },
+        {
+          "name": "exporter",
+          "image": "ghcr.io/msg-ctf/challenges/web-afterimage/exporter@sha256:02da90eb73db1fbecad291655086410615ddb8db723447c73f845f6828f4c098",
+          "ports": [
+            4100
+          ],
+          "public_ports": [],
+          "env_names": [
+            "BIND_HOST",
+            "MAX_BYTES",
+            "PORT"
+          ],
+          "secret_names": []
+        },
+        {
+          "name": "inventory-metadata",
+          "image": "ghcr.io/msg-ctf/challenges/web-afterimage/inventory-metadata@sha256:dc452c26c081bc351964013e2246061a57c288a3fd5497065dcfecee5e3a5eb1",
+          "ports": [
+            4200
+          ],
+          "public_ports": [],
+          "env_names": [
+            "BIND_HOST",
+            "INVENTORY_SIGNING_KEY",
+            "PORT"
+          ],
+          "secret_names": [
+            "INVENTORY_SIGNING_KEY"
+          ]
+        },
+        {
+          "name": "indexer",
+          "image": "ghcr.io/msg-ctf/challenges/web-afterimage/indexer@sha256:2b22f2d3617c7b1286382d2771e60a52ee1d3e5a0aad71c82bf09c2d7defcd1e",
+          "ports": [
+            4300
+          ],
+          "public_ports": [],
+          "env_names": [
+            "BIND_HOST",
+            "CARTRIDGE_KEY",
+            "PORT",
+            "REEL_FRAGMENT"
+          ],
+          "secret_names": [
+            "CARTRIDGE_KEY",
+            "REEL_FRAGMENT"
+          ]
+        },
+        {
+          "name": "case-vault",
+          "image": "ghcr.io/msg-ctf/challenges/web-afterimage/case-vault@sha256:3b083576ed6e04877b0707797d307a9d7f22c4bbb9268744ab4f935a4f84df28",
+          "ports": [
+            4400
+          ],
+          "public_ports": [],
+          "env_names": [
+            "BIND_HOST",
+            "FLAG",
+            "INTERNAL_TOKEN",
+            "INVENTORY_SIGNING_KEY",
+            "PORT",
+            "REEL_FRAGMENT"
+          ],
+          "secret_names": [
+            "FLAG",
+            "INTERNAL_TOKEN",
+            "INVENTORY_SIGNING_KEY",
+            "REEL_FRAGMENT"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -11,6 +11,7 @@ import (
 type RuntimeType string
 
 const RuntimeTypeKubernetes RuntimeType = "KUBERNETES"
+const RuntimeTypeVM RuntimeType = "VM"
 
 var ErrRuntimeUnavailable = errors.New("runtime adapter is unavailable")
 
