@@ -110,6 +110,53 @@ func (g *guestReplies) Call(_ context.Context, _ Target, body map[string]any) (R
 	return x, nil
 }
 
+func TestPreflightSecretFailureConfirmsGuestAbsenceBeforeReleasingReservation(t *testing.T) {
+	cfg := target()
+	cfg.Containers[0].SecretNames = []string{"FLAG"}
+	cfg.Containers[0].EnvNames = []string{"PORT", "FLAG"}
+	command := provisioner.CreateWorkloadCommand{
+		RuntimeType: provisioner.RuntimeTypeVM, TargetID: cfg.ID,
+		InstanceID:    "00000000-0000-4000-8000-000000000001",
+		TeamID:        "00000000-0000-4000-8000-000000000002",
+		PolicyRequest: isolation.Request{VMProfile: cfg.Profile},
+		Containers: []provisioner.WorkloadContainer{{Name: "portal", Image: cfg.Containers[0].Image,
+			Env: map[string]string{"PORT": "8080"}, SecretRef: "unavailable-secret"}},
+	}
+	for _, test := range []struct {
+		name      string
+		deleted   bool
+		confirmed bool
+	}{
+		{name: "guest confirms absence", deleted: true, confirmed: true},
+		{name: "guest still owns generation", deleted: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			transport := &guestReplies{replies: []Reply{{OK: true, Deleted: test.deleted}}}
+			r := &Router{targets: map[string]Target{cfg.ID: cfg}, transport: transport}
+			_, err := r.CreateWorkloadForOperation(t.Context(), command, "create-operation")
+			if err == nil || len(transport.bodies) != 1 || transport.bodies[0]["action"] != "status" ||
+				transport.bodies[0]["uid"] != identity(command) {
+				t.Fatal("preflight did not inspect the exact guest generation", err)
+			}
+			var complete interface{ CreateCleanupCompleted() bool }
+			if got := errors.As(err, &complete) && complete.CreateCleanupCompleted(); got != test.confirmed {
+				t.Fatalf("cleanup confirmation = %v, want %v", got, test.confirmed)
+			}
+			if !test.confirmed {
+				var pending interface {
+					PendingCreateCleanup() provisioner.CreateCleanup
+				}
+				if !errors.As(err, &pending) || pending.PendingCreateCleanup().NamespaceUID != identity(command) {
+					t.Fatal("uncertain guest generation was not retained for cleanup")
+				}
+				if _, retryable := operations.ClassifyExecutionError(err); !retryable {
+					t.Fatal("cleanup uncertainty would stop worker retries")
+				}
+			}
+		})
+	}
+}
+
 func TestDeleteRetriesTemporaryGuestFailureWithSameGeneration(t *testing.T) {
 	for _, code := range []string{"VM_DOCKER_FAILED", "VM_AGENT_FAILED"} {
 		t.Run(code, func(t *testing.T) {

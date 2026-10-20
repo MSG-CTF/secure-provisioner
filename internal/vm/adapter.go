@@ -227,7 +227,18 @@ func (r *Router) CreateWorkloadForOperation(ctx context.Context, c provisioner.C
 	started := false
 	defer func() {
 		if err != nil && !started {
-			err = provisioner.WithCreateCleanupPending(err, provisioner.CreateCleanup{NamespaceUID: identity(c), RuntimeWorkloadID: workID(t.ID, c.InstanceID), FailureCode: "VM_CREATE_FAILED"})
+			uid := identity(c)
+			cleanup := provisioner.CreateCleanup{NamespaceUID: uid, RuntimeWorkloadID: workID(t.ID, c.InstanceID), FailureCode: "VM_CREATE_FAILED"}
+			// A replay may have reached the guest before this preflight failed. Ask
+			// the guest about the exact generation before claiming it is absent.
+			status, statusErr := r.call(ctx, t, map[string]any{"action": "status", "instance_id": c.InstanceID, "team_id": c.TeamID, "uid": uid, "target_id": t.ID})
+			if statusErr == nil && status.Deleted {
+				err = provisioner.WithCreateCleanupCompleted(err)
+			} else {
+				// A preflight rejection is often terminal, but uncertain cleanup
+				// must still be checkpointed and retried by the worker.
+				err = provisioner.WithCreateCleanupPending(operations.NewExecutionError("VM_CLEANUP_UNCONFIRMED", true, err), cleanup)
+			}
 		}
 	}()
 	if c.RuntimeType != provisioner.RuntimeTypeVM || c.PolicyRequest.VMProfile != t.Profile {
