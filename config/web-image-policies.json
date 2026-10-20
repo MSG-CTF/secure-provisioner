@@ -328,6 +328,18 @@
       "flag_file_path": "/home/player/flag.txt"
     },
     {
+      "image": "ghcr.io/msg-ctf/challenges/pwn-price-tag/price-tag@sha256:fb15aab14664eafbcccfa94edec0597e81f6d78c575b8b562547bc8955dee751",
+      "container": "price-tag",
+      "isolation_profile": "PWN",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 1000,
+      "ports": [9999],
+      "exposed_ports": [9999],
+      "writable_paths": [{"path": "/tmp", "size_mib": 32}],
+      "flag_file_path": "/home/player/flag.txt"
+    },
+    {
       "image": "ghcr.io/msg-ctf/challenges/rev-tinyvm/tinyvm@sha256:45b676934b4f4f139ee9e2a1739c14e9ac8d3e8831d279f8998a1458ce0c94da",
       "container": "tinyvm",
       "isolation_profile": "PWN",

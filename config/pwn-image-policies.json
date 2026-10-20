@@ -89,6 +89,42 @@
         }
       ],
       "flag_file_path": "/home/player/flag.txt"
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/pwn-note/service@sha256:3c1dcb4478d82564ad298b1cddee770f5d786a6d1052b1f842a538f91439868e",
+      "container": "service",
+      "isolation_profile": "PWN",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 1001,
+      "ports": [9999],
+      "exposed_ports": [9999],
+      "writable_paths": [{"path": "/tmp", "size_mib": 32}],
+      "flag_file_path": "/home/ctf/flag.txt"
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/pwn-ghost-file/chall@sha256:59bdd9111ad77a9a682f0e862eade12193b62d9fd6fd77b9ee810cd7e06460bc",
+      "container": "chall",
+      "isolation_profile": "PWN",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 1000,
+      "ports": [31337],
+      "exposed_ports": [31337],
+      "writable_paths": [{"path": "/tmp", "size_mib": 32}],
+      "flag_file_path": "/flag"
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/pwn-price-tag/price-tag@sha256:fb15aab14664eafbcccfa94edec0597e81f6d78c575b8b562547bc8955dee751",
+      "container": "price-tag",
+      "isolation_profile": "PWN",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 1000,
+      "ports": [9999],
+      "exposed_ports": [9999],
+      "writable_paths": [{"path": "/tmp", "size_mib": 32}],
+      "flag_file_path": "/home/player/flag.txt"
     }
   ]
 }

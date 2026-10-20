@@ -46,8 +46,17 @@ func TestPublishedPwnCatalogRequiresBackendFlags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(catalog.RequiredFlagImages()) != 4 || len(catalog.RequiredFlagFiles()) != 3 {
+	if len(catalog.RequiredFlagImages()) != 7 || len(catalog.RequiredFlagFiles()) != 6 {
 		t.Fatal("PWN FLAG policy is incomplete")
+	}
+	for image, expectedPath := range map[string]string{
+		"ghcr.io/msg-ctf/challenges/pwn-note/service@sha256:3c1dcb4478d82564ad298b1cddee770f5d786a6d1052b1f842a538f91439868e": "/home/ctf/flag.txt",
+		"ghcr.io/msg-ctf/challenges/pwn-ghost-file/chall@sha256:59bdd9111ad77a9a682f0e862eade12193b62d9fd6fd77b9ee810cd7e06460bc": "/flag",
+		"ghcr.io/msg-ctf/challenges/pwn-price-tag/price-tag@sha256:fb15aab14664eafbcccfa94edec0597e81f6d78c575b8b562547bc8955dee751": "/home/player/flag.txt",
+	} {
+		if catalog.RequiredFlagFiles()[image] != expectedPath {
+			t.Fatalf("wrong FLAG mount for %s", image)
+		}
 	}
 	for image, policy := range catalog.images {
 		if policy.IsolationProfile != "PWN" || policy.CISmokeEnabled || !policy.RequiresFlag {
