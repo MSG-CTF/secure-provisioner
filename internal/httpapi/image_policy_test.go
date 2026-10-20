@@ -269,10 +269,20 @@ func TestPublishedWebImagePoliciesKeepUnverifiedChallengesBlocked(t *testing.T) 
 		{"ghcr.io/msg-ctf/challenges/web-logout-please/service@sha256:c1736999c957b408c09dda518d49eecbfcb37ffae0d9227e6a378a666f931909", true},
 		{"ghcr.io/msg-ctf/challenges/web-notebook/db@sha256:7a40ab203a9f16d06269a4506f1f99b770e2991bb0d5c4ee072fddaea722cea0", false},
 		{"ghcr.io/msg-ctf/challenges/rev-tinyvm/tinyvm@sha256:5abc2be5407e74b513404da172a04fac15360edc2323b016025afb790b69add7", true},
+		{"ghcr.io/msg-ctf/challenges/web-grade-tampering/web@sha256:3a3de9c6c3670eed8e4e771ae4d4ad981825144796b80f1d523fba2403652fdb", true},
+		{"ghcr.io/msg-ctf/challenges/web-daily-point/web@sha256:fc7c762ba95b154c2b00154ed89aedd1ba5f86020408a5300d06a9f8d92a4816", true},
 	} {
 		policy, found := catalog.images[test.image]
 		if !found || (policy.Status == "create_enabled") != test.ready {
 			t.Fatalf("image policy for %q = %+v, found = %v", test.image, policy, found)
+		}
+	}
+	for _, image := range []string{
+		"ghcr.io/msg-ctf/challenges/web-grade-tampering/web@sha256:3a3de9c6c3670eed8e4e771ae4d4ad981825144796b80f1d523fba2403652fdb",
+		"ghcr.io/msg-ctf/challenges/web-daily-point/web@sha256:fc7c762ba95b154c2b00154ed89aedd1ba5f86020408a5300d06a9f8d92a4816",
+	} {
+		if !catalog.AllowsFlag(image) {
+			t.Fatalf("approved image must require FLAG: %s", image)
 		}
 	}
 	if _, managed := catalog.managed["ghcr.io/msg-ctf/challenges/web-afterimage/indexer"]; !managed {
