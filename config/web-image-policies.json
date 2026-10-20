@@ -51,6 +51,21 @@
       ]
     },
     {
+      "image": "ghcr.io/msg-ctf/challenges/web-grade-tampering/web@sha256:3a3de9c6c3670eed8e4e771ae4d4ad981825144796b80f1d523fba2403652fdb",
+      "container": "web",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 10001,
+      "ports": [8080],
+      "exposed_ports": [8080],
+      "writable_paths": [
+        {"path": "/tmp", "size_mib": 32},
+        {"path": "/app/instance", "size_mib": 32}
+      ],
+      "readiness_http": {"path": "/", "port": 8080}
+    },
+    {
       "image": "ghcr.io/msg-ctf/challenges/web-daily-point/web@sha256:98c98088662fd5ff538ae9e163fb4a68ad73580e0f4f703624b0650d4a2b499a",
       "container": "web",
       "isolation_profile": "WEB",
@@ -196,6 +211,21 @@
         "port": 8080
       },
       "requires_flag": true
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web-daily-point/web@sha256:fc7c762ba95b154c2b00154ed89aedd1ba5f86020408a5300d06a9f8d92a4816",
+      "container": "web",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 10001,
+      "ports": [8080],
+      "exposed_ports": [8080],
+      "writable_paths": [
+        {"path": "/tmp", "size_mib": 64},
+        {"path": "/app/data", "size_mib": 64}
+      ],
+      "readiness_http": {"path": "/", "port": 8080}
     },
     {
       "image": "ghcr.io/msg-ctf/challenges/web3-split-brain-oracle/challenge@sha256:2eb556ab51dc5214c1e4c7ae73a7a1c63d81cb35d980bf40923597456da2ffc4",
