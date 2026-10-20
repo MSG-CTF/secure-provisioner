@@ -272,6 +272,7 @@ func TestPublishedWebImagePoliciesKeepUnverifiedChallengesBlocked(t *testing.T) 
 		{"ghcr.io/msg-ctf/challenges/web-grade-tampering/web@sha256:3a3de9c6c3670eed8e4e771ae4d4ad981825144796b80f1d523fba2403652fdb", true},
 		{"ghcr.io/msg-ctf/challenges/web-daily-point/web@sha256:fc7c762ba95b154c2b00154ed89aedd1ba5f86020408a5300d06a9f8d92a4816", true},
 		{"ghcr.io/msg-ctf/challenges/web-open-house/web@sha256:8d8492c1746836790691930c3ae937f01705f9a824ebc821fd939da80b3b5ea7", true},
+		{"ghcr.io/msg-ctf/challenges/web3-infinite-pack/server@sha256:43cc32512af5ce6a06d5a1541be1f9ca2397a1dab744d37580d4bfc4a04b437b", true},
 	} {
 		policy, found := catalog.images[test.image]
 		if !found || (policy.Status == "create_enabled") != test.ready {
@@ -282,6 +283,7 @@ func TestPublishedWebImagePoliciesKeepUnverifiedChallengesBlocked(t *testing.T) 
 		"ghcr.io/msg-ctf/challenges/web-grade-tampering/web@sha256:3a3de9c6c3670eed8e4e771ae4d4ad981825144796b80f1d523fba2403652fdb",
 		"ghcr.io/msg-ctf/challenges/web-daily-point/web@sha256:fc7c762ba95b154c2b00154ed89aedd1ba5f86020408a5300d06a9f8d92a4816",
 		"ghcr.io/msg-ctf/challenges/web-open-house/web@sha256:8d8492c1746836790691930c3ae937f01705f9a824ebc821fd939da80b3b5ea7",
+		"ghcr.io/msg-ctf/challenges/web3-infinite-pack/server@sha256:43cc32512af5ce6a06d5a1541be1f9ca2397a1dab744d37580d4bfc4a04b437b",
 	} {
 		if !catalog.AllowsFlag(image) {
 			t.Fatalf("approved image must require FLAG: %s", image)
