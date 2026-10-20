@@ -3,6 +3,7 @@ package runtimepg
 import (
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/MSG-CTF/secure-provisioner/internal/operations"
@@ -30,7 +31,8 @@ func (coordinator *DeleteCoordinator) BeginDelete(command provisioner.DeleteWork
 	if err != nil {
 		return operations.Operation{}, false, err
 	}
-	if command.TeamID != binding.TeamID || command.TargetID != binding.TargetID || command.RuntimeWorkloadID != binding.RuntimeWorkloadID {
+	vmBinding := strings.HasPrefix(binding.IsolationProfile, "DEDICATED_VM@")
+	if (vmBinding && command.RuntimeType != provisioner.RuntimeTypeVM) || (!vmBinding && command.RuntimeType != provisioner.RuntimeTypeKubernetes) || command.TeamID != binding.TeamID || command.TargetID != binding.TargetID || command.RuntimeWorkloadID != binding.RuntimeWorkloadID {
 		return operations.Operation{}, false, runtimebinding.ErrConflict
 	}
 	if binding.State == runtimebinding.StateDeleted {

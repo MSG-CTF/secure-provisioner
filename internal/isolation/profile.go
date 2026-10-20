@@ -102,6 +102,7 @@ const (
 )
 
 type Request struct {
+	VMProfile       string `json:",omitempty"`
 	WorkloadProfile WorkloadProfile
 	Containers      []ContainerRequirement
 	// 기존 v1 Operation snapshot 복원 전용. 신규 요청에서는 사용하지 않는다.

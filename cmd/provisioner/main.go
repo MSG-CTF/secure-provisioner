@@ -20,12 +20,14 @@ import (
 	"github.com/MSG-CTF/secure-provisioner/internal/runtimebinding"
 	"github.com/MSG-CTF/secure-provisioner/internal/runtimeops"
 	"github.com/MSG-CTF/secure-provisioner/internal/runtimepg"
+	"github.com/MSG-CTF/secure-provisioner/internal/vm"
 )
 
 type appConfig struct {
 	APIOnly               bool
 	Address               string
 	RegistryPath          string
+	VMTargetsPath         string
 	ImagePoliciesPath     string
 	BackendSecretURL      string
 	BackendSecretToken    string
@@ -92,6 +94,7 @@ func loadConfig(getenv func(string) string) (appConfig, error) {
 		return appConfig{}, errors.New("environment reader is required")
 	}
 	config := appConfig{
+		VMTargetsPath:      strings.TrimSpace(getenv("PROVISIONER_VM_TARGETS")),
 		Address:            valueOrDefault(getenv("PROVISIONER_ADDR"), "127.0.0.1:8080"),
 		RegistryPath:       strings.TrimSpace(getenv("PROVISIONER_CLUSTER_REGISTRY")),
 		ImagePoliciesPath:  strings.TrimSpace(getenv("PROVISIONER_IMAGE_POLICIES")),
@@ -251,13 +254,28 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 		closeStore = database.Close
 		readiness.CheckDatabase = database.CheckReadiness
 	}
+	var create runtimeops.CreateAdapter = createAdapter
+	var status runtimeops.StatusSource = statusReader
+	var deleteWorkload runtimeops.DeleteAdapter = deleteAdapter
+	var resolver isolation.Resolver = isolation.NewStaticResolver()
+	var vmPolicy func(*httpapi.CreateWorkloadRequest) error
+	if config.VMTargetsPath != "" {
+		route, routeErr := vm.Load(config.VMTargetsPath, secretResolver, createAdapter, statusReader, deleteAdapter)
+		if routeErr != nil {
+			if closeStore != nil {
+				_ = closeStore()
+			}
+			return nil, routeErr
+		}
+		create, status, deleteWorkload, resolver, vmPolicy = route, route, route, route, route.Apply
+	}
 	service, err := runtimeops.NewService(
-		createAdapter,
-		statusReader,
-		deleteAdapter,
+		create,
+		status,
+		deleteWorkload,
 		bindingStore,
 		operationStore,
-		isolation.NewStaticResolver(),
+		resolver,
 		runtimeops.Config{
 			MaxAttempts:       config.MaxAttempts,
 			CleanupTimeout:    config.RollbackTimeout,
@@ -281,7 +299,7 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 		return nil, err
 	}
 	return &application{
-		handler:   httpapi.NewHandlerWithRuntimeReadiness(service, service, config.ServiceAuth, imagePolicies, readiness),
+		handler:   httpapi.NewHandlerWithVM(service, service, config.ServiceAuth, imagePolicies, readiness, vmPolicy),
 		runWorker: service.Run,
 		close:     closeStore,
 	}, nil

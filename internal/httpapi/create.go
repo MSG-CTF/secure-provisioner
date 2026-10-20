@@ -17,6 +17,7 @@ import (
 type RuntimeType string
 
 const RuntimeTypeKubernetes RuntimeType = "KUBERNETES"
+const RuntimeTypeVM RuntimeType = "VM"
 
 type RuntimeTarget struct {
 	RuntimeType RuntimeType `json:"runtime_type"`
@@ -135,6 +136,7 @@ type ResourceLimits struct {
 }
 
 type CreateWorkloadRequest struct {
+	VMProfile        string             `json:"-"`
 	RequestID        string             `json:"request_id"`
 	InstanceID       string             `json:"instance_id"`
 	TeamID           provisioner.TeamID `json:"team_id"`
@@ -252,7 +254,7 @@ func (request *CreateWorkloadRequest) Validate() error {
 		request.IsolationProfile != string(isolation.WorkloadProfilePwn) {
 		return fmt.Errorf("isolation_profile must be WEB or PWN")
 	}
-	if request.Target.RuntimeType != RuntimeTypeKubernetes {
+	if request.Target.RuntimeType != RuntimeTypeKubernetes && request.Target.RuntimeType != RuntimeTypeVM {
 		return fmt.Errorf("runtime_type must be %s", RuntimeTypeKubernetes)
 	}
 	if strings.TrimSpace(request.Target.TargetID) == "" {
@@ -504,6 +506,7 @@ func (request CreateWorkloadRequest) toPolicyRequest(containers []provisioner.Wo
 		}
 	}
 	return isolation.Request{
+		VMProfile:       request.VMProfile,
 		WorkloadProfile: isolation.WorkloadProfile(request.IsolationProfile),
 		Containers:      requirements,
 		ResourceLimits: isolation.ResourceLimits{

@@ -15,6 +15,7 @@ import (
 )
 
 type API struct {
+	vmPolicy        func(*CreateWorkloadRequest) error
 	createWorkload  provisioner.CreateWorkloadUseCase
 	runtime         RuntimeUseCase
 	directResolver  isolation.Resolver
@@ -39,10 +40,17 @@ func NewHandlerWithRuntimeReadiness(createWorkload provisioner.CreateWorkloadUse
 	return newHandler(createWorkload, runtime, authConfig, policies, &readiness)
 }
 
-func newHandler(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase, authConfig ServiceAuthConfig, policies *ImagePolicyCatalog, readiness *ReadinessConfig) http.Handler {
+func NewHandlerWithVM(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase, authConfig ServiceAuthConfig, policies *ImagePolicyCatalog, readiness ReadinessConfig, vmPolicy func(*CreateWorkloadRequest) error) http.Handler {
+	return newHandler(createWorkload, runtime, authConfig, policies, &readiness, vmPolicy)
+}
+
+func newHandler(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase, authConfig ServiceAuthConfig, policies *ImagePolicyCatalog, readiness *ReadinessConfig, vmPolicies ...func(*CreateWorkloadRequest) error) http.Handler {
 	api := &API{createWorkload: createWorkload, runtime: runtime, imagePolicies: policies, ciSmokeTeamID: authConfig.CISmokeTeamID, ciSmokeTargetID: authConfig.CISmokeTargetID}
 	if runtime == nil {
 		api.directResolver = isolation.NewStaticResolver()
+	}
+	if len(vmPolicies) > 0 {
+		api.vmPolicy = vmPolicies[0]
 	}
 	mux := http.NewServeMux()
 	if readiness != nil {
@@ -98,7 +106,20 @@ func (api *API) handleCreateInstance(writer http.ResponseWriter, request *http.R
 			return
 		}
 	}
-	if err := api.imagePolicies.Apply(&createRequest); err != nil {
+	if api.vmPolicy != nil {
+		if err := api.vmPolicy(&createRequest); err != nil {
+			writeAPIError(writer, http.StatusUnprocessableEntity, "VM_POLICY_REJECTED", "dedicated VM policy rejected the workload")
+			return
+		}
+	} else if createRequest.Target.RuntimeType == RuntimeTypeVM {
+		writeAPIError(writer, http.StatusUnprocessableEntity, "VM_POLICY_REJECTED", "dedicated VM targets are not configured")
+		return
+	}
+	var policyErr error
+	if createRequest.Target.RuntimeType != RuntimeTypeVM {
+		policyErr = api.imagePolicies.Apply(&createRequest)
+	}
+	if err := policyErr; err != nil {
 		writeAPIError(writer, http.StatusUnprocessableEntity, "IMAGE_POLICY_REJECTED", err.Error())
 		return
 	}

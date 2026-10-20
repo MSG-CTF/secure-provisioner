@@ -669,6 +669,7 @@ components:
           type: string
           enum:
             - KUBERNETES
+            - VM
         target_id:
           type: string
           minLength: 1
