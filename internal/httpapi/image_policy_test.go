@@ -268,6 +268,7 @@ func TestPublishedWebImagePoliciesKeepUnverifiedChallengesBlocked(t *testing.T) 
 		{"ghcr.io/msg-ctf/challenges/web-open-house/web@sha256:6a3ab6373bdee16229dfda362d41dd10bd59ede5b05249557d332a3d5d22b8bd", true},
 		{"ghcr.io/msg-ctf/challenges/web-logout-please/service@sha256:c1736999c957b408c09dda518d49eecbfcb37ffae0d9227e6a378a666f931909", true},
 		{"ghcr.io/msg-ctf/challenges/web-notebook/db@sha256:7a40ab203a9f16d06269a4506f1f99b770e2991bb0d5c4ee072fddaea722cea0", false},
+		{"ghcr.io/msg-ctf/challenges/rev-tinyvm/tinyvm@sha256:5abc2be5407e74b513404da172a04fac15360edc2323b016025afb790b69add7", true},
 	} {
 		policy, found := catalog.images[test.image]
 		if !found || (policy.Status == "create_enabled") != test.ready {
