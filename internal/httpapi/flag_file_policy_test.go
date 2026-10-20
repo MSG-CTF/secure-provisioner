@@ -46,8 +46,14 @@ func TestPublishedPwnCatalogRequiresBackendFlags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(catalog.RequiredFlagImages()) != 7 || len(catalog.RequiredFlagFiles()) != 6 {
+	if len(catalog.RequiredFlagImages()) != 8 || len(catalog.RequiredFlagFiles()) != 6 {
 		t.Fatal("PWN FLAG policy is incomplete")
+	}
+	random6 := "ghcr.io/msg-ctf/challenges/pwn-random6/random6@sha256:8005b9a77163b476a4638d06905f8a18b5770311fa033e163fc706000d3b834a"
+	policy, found := catalog.images[random6]
+	if !found || policy.RunAsUser != 31337 || len(policy.Ports) != 1 || policy.Ports[0] != 6666 ||
+		len(policy.ExposedPorts) != 1 || policy.ExposedPorts[0] != 6666 {
+		t.Fatal("Random6 release policy does not match the author service")
 	}
 	for image, expectedPath := range map[string]string{
 		"ghcr.io/msg-ctf/challenges/pwn-note/service@sha256:3c1dcb4478d82564ad298b1cddee770f5d786a6d1052b1f842a538f91439868e": "/home/ctf/flag.txt",

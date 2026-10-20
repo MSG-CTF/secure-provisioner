@@ -28,6 +28,17 @@
       ]
     },
     {
+      "image": "ghcr.io/msg-ctf/challenges/pwn-random6/random6@sha256:8005b9a77163b476a4638d06905f8a18b5770311fa033e163fc706000d3b834a",
+      "container": "random6",
+      "isolation_profile": "PWN",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 31337,
+      "ports": [6666],
+      "exposed_ports": [6666],
+      "writable_paths": [{"path": "/tmp", "size_mib": 32}]
+    },
+    {
       "image": "ghcr.io/msg-ctf/challenges/pwn-note/service@sha256:c449da75a6a3eb0560b1d43034771749338897219afc560104da5c9b6c6a5471",
       "container": "service",
       "isolation_profile": "PWN",
