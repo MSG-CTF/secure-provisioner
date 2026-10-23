@@ -1,2 +1,3 @@
 deploy/vm/*.py text eol=lf
 deploy/vm/*.sh text eol=lf
+deploy/vm/profiles/*.json -text
