@@ -1,6 +1,6 @@
 # Runtime → Gateway v1 연동 검토
 
-상태: **설계 초안. 제품 구현·운영 설정 변경 없음.**
+상태: **사용자 범위 확정(A안), 구현은 별도 feature 브랜치에서 진행. 이 PR은 문서만 포함.**
 
 추적: [Runtime issue #73](https://github.com/MSG-CTF/secure-provisioner/issues/73).
 
@@ -19,7 +19,9 @@ secure-provisioner `origin/dev`의 `a4c1f47d5a96f44222c87cc3fd458943771a61b7`이
 권장하는 첫 범위는 **다중 컨테이너를 유지하되 공개 endpoint가 정확히 하나인
 NodePort target**이다. 내부 보조 컨테이너와 그 준비 검증은 유지한다. 공개
 endpoint가 여러 개인 요청을 몰래 첫 포트로 줄이거나, 일부 주소만 반환하면 안 된다.
-이 범위는 제안이며 사용자가 확정한 선택이 아니다.
+사용자가 이 범위를 확정했다: "v1 그대로: 보조 컨테이너는 유지하고 공개 endpoint
+1개·NodePort부터 지원". 첫 구현은 K3s NodePort target의 명시적 opt-in으로 제한하고
+기본값은 off다. Compose VM은 첫 구현에서 제외한다.
 
 | 접근 | 장점 | 제약·필요한 합의 |
 | --- | --- | --- |
