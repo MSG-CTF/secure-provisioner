@@ -36,6 +36,9 @@ func buildNetworkPolicies(
 		if policy.IsolationRef.Version != "v2" {
 			return nil, false
 		}
+		if policy.WorkloadNetwork.Mode != isolation.NetworkModeExplicitTCPV1 && policy.WorkloadNetwork.Mode != isolation.NetworkModePeerGroupsV1 {
+			return nil, false
+		}
 		requested = make([]isolation.InternalConnection, 0, len(policy.WorkloadNetwork.Allow))
 		for _, edge := range policy.WorkloadNetwork.Allow {
 			requested = append(requested, isolation.InternalConnection{SourceContainer: edge.From, DestinationContainer: edge.To, Protocol: isolation.ProtocolTCP, Port: edge.Port})
@@ -83,6 +86,11 @@ func buildNetworkPolicies(
 		policies = append(policies, buildInstanceInternalNetworkPolicy(namespace, ownerLabels))
 		return policies, true
 	}
+	if policy.WorkloadNetwork != nil && policy.WorkloadNetwork.Mode == isolation.NetworkModePeerGroupsV1 {
+		for _, group := range policy.WorkloadNetwork.PeerGroups {
+			policies = append(policies, buildPeerGroupNetworkPolicy(namespace, ownerLabels, group))
+		}
+	}
 
 	// 기존 v1 snapshot은 저장된 연결 그래프만 재생한다.
 	connectionsBySource := make(map[string][]approvedInternalConnection)
@@ -107,7 +115,55 @@ func buildNetworkPolicies(
 			connectionsByDestination[destination],
 		))
 	}
+	if policy.WorkloadNetwork != nil {
+		policies = append(policies, buildExternalEgressNetworkPolicies(namespace, ownerLabels, policy.WorkloadNetwork.Egress)...)
+	}
 	return policies, true
+}
+
+func buildPeerGroupNetworkPolicy(namespace string, ownerLabels map[string]string, group isolation.NetworkPeerGroup) *networkingv1.NetworkPolicy {
+	members := append([]string(nil), group.Members...)
+	sort.Strings(members)
+	selector := metav1.LabelSelector{
+		MatchLabels:      copyLabels(ownerLabels),
+		MatchExpressions: []metav1.LabelSelectorRequirement{{Key: containerNameLabel, Operator: metav1.LabelSelectorOpIn, Values: members}},
+	}
+	return &networkingv1.NetworkPolicy{
+		ObjectMeta: networkPolicyMetadata("allow-peer-group-"+group.Name, namespace, ownerLabels),
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: selector,
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress},
+			Ingress:     []networkingv1.NetworkPolicyIngressRule{{From: []networkingv1.NetworkPolicyPeer{{PodSelector: selector.DeepCopy()}}}},
+			Egress:      []networkingv1.NetworkPolicyEgressRule{{To: []networkingv1.NetworkPolicyPeer{{PodSelector: selector.DeepCopy()}}}},
+		},
+	}
+}
+
+func buildExternalEgressNetworkPolicies(namespace string, ownerLabels map[string]string, rules []isolation.NetworkEgress) []*networkingv1.NetworkPolicy {
+	bySource := make(map[string][]isolation.NetworkEgress)
+	for _, rule := range rules {
+		bySource[rule.From] = append(bySource[rule.From], rule)
+	}
+	sources := make([]string, 0, len(bySource))
+	for source := range bySource {
+		sources = append(sources, source)
+	}
+	sort.Strings(sources)
+	policies := make([]*networkingv1.NetworkPolicy, 0, len(sources))
+	for _, source := range sources {
+		egress := make([]networkingv1.NetworkPolicyEgressRule, 0, len(bySource[source]))
+		for _, rule := range bySource[source] {
+			egress = append(egress, networkingv1.NetworkPolicyEgressRule{
+				To:    []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: rule.CIDR}}},
+				Ports: tcpNetworkPolicyPorts(rule.Ports),
+			})
+		}
+		policies = append(policies, &networkingv1.NetworkPolicy{
+			ObjectMeta: networkPolicyMetadata("allow-external-egress-"+source, namespace, ownerLabels),
+			Spec:       networkingv1.NetworkPolicySpec{PodSelector: containerSelector(ownerLabels, source), PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress}, Egress: egress},
+		})
+	}
+	return policies
 }
 
 func buildInstanceInternalNetworkPolicy(namespace string, ownerLabels map[string]string) *networkingv1.NetworkPolicy {

@@ -77,10 +77,11 @@ func (catalog *ImagePolicyCatalog) RequiredFlagFiles() map[string]string {
 }
 
 type imagePolicyFile struct {
-	SchemaVersion       int                         `json:"schema_version"`
-	ManagedRepositories []string                    `json:"managed_repositories"`
-	Images              []ImagePolicy               `json:"images"`
-	WorkloadNetworks    []isolation.WorkloadNetwork `json:"workload_networks,omitempty"`
+	SchemaVersion               int                         `json:"schema_version"`
+	ManagedRepositories         []string                    `json:"managed_repositories"`
+	Images                      []ImagePolicy               `json:"images"`
+	WorkloadNetworks            []isolation.WorkloadNetwork `json:"workload_networks,omitempty"`
+	NetworkRequiredRepositories []string                    `json:"network_required_repositories,omitempty"`
 }
 
 var ErrImagePolicyRejected = errors.New("image policy rejected")
@@ -109,7 +110,7 @@ func ParseImagePolicies(contents []byte) (*ImagePolicyCatalog, error) {
 	if err := decoder.Decode(new(any)); err != io.EOF {
 		return nil, errors.New("image policy file must contain one JSON object")
 	}
-	if (config.SchemaVersion != 1 && config.SchemaVersion != 2) || len(config.ManagedRepositories) == 0 || len(config.Images) == 0 || (config.SchemaVersion == 1 && config.WorkloadNetworks != nil) {
+	if (config.SchemaVersion != 1 && config.SchemaVersion != 2) || len(config.ManagedRepositories) == 0 || len(config.Images) == 0 || (config.SchemaVersion == 1 && (config.WorkloadNetworks != nil || config.NetworkRequiredRepositories != nil)) {
 		return nil, errors.New("image policy file requires schema_version 1 or 2, managed_repositories, and images; networks require version 2")
 	}
 	catalog := &ImagePolicyCatalog{managed: make(map[string]struct{}), images: make(map[string]ImagePolicy), graphByImage: make(map[string]*isolation.WorkloadNetwork), graphManagedRepositories: make(map[string]struct{})}
@@ -121,6 +122,15 @@ func ParseImagePolicies(contents []byte) (*ImagePolicyCatalog, error) {
 			return nil, fmt.Errorf("duplicate managed image repository %q", repository)
 		}
 		catalog.managed[repository] = struct{}{}
+	}
+	for _, repository := range config.NetworkRequiredRepositories {
+		if _, managed := catalog.managed[repository]; !managed {
+			return nil, fmt.Errorf("network-required image repository is not managed: %q", repository)
+		}
+		if _, duplicate := catalog.graphManagedRepositories[repository]; duplicate {
+			return nil, fmt.Errorf("duplicate network-required image repository: %q", repository)
+		}
+		catalog.graphManagedRepositories[repository] = struct{}{}
 	}
 	for _, policy := range config.Images {
 		if !validImmutableImageReference(policy.Image) {
