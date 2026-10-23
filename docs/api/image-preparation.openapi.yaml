@@ -1,0 +1,420 @@
+openapi: 3.1.0
+info:
+  title: B Image Preparation Contract Proposal
+  version: 0.1.0-proposal
+  description: >-
+    Unimplemented contract for advisory image preparation on Linux K3s.
+    These paths are not available in the current Runtime. See image-preparation-b-contract.md.
+    Readiness never authorizes create, reserves capacity, or requires placement on a ready node.
+servers:
+  - url: https://runtime.example.invalid
+security:
+  - ServiceBearer: []
+paths:
+  /v1/image-readiness/query:
+    post:
+      operationId: queryImageReadiness
+      summary: Read recorded image observations for candidate targets
+      description: >-
+        Scheduler-only batch lookup; no synchronous node scan or pull. Known targets are returned
+        once each; unknown targets are omitted, even if all targets are unknown. Never-observed
+        known targets return false, zero counts and null timestamps. Current digest policy is
+        checked; timestamps refer to actual observations, not API/cache access. Stale evidence
+        cannot yield true. Counts and observed_at use the conservative oldest contributing
+        observation. Ready requires every image on the same runnable node and valid policy.
+        Failed, absent or expired hints must not block otherwise valid create operations.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ReadinessQuery'}
+      responses:
+        '200':
+          description: Known requested targets; an empty targets list is valid
+          headers:
+            Cache-Control:
+              schema: {type: string, const: no-store}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReadinessResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /v1/image-preparations:
+    post:
+      operationId: createImagePreparation
+      summary: Accept a durable Backend preparation operation
+      description: >-
+        Backend preparation scope only, not CI smoke. Validate the complete container image
+        set and approved policy. Same principal scope, endpoint, request_id and normalized
+        body replay the same operation; different content conflicts. Freeze eligible node UIDs
+        at execution planning. Admission is not completion and does not block ordinary create.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PreparationRequest'}
+      responses:
+        '202': {$ref: '#/components/responses/Accepted'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/PolicyRejected'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /v1/image-preparations/{operation_id}:
+    parameters:
+      - {$ref: '#/components/parameters/OperationId'}
+    get:
+      operationId: getImagePreparation
+      summary: Read immutable operation history and per-node image progress
+      description: >-
+        Backend preparation scope only. SUCCEEDED requires every frozen node to have every
+        image; PARTIAL has at least one ready node after all tasks finish. No eligible nodes
+        fails with NO_ELIGIBLE_NODES. Operation history is not current image readiness.
+      responses:
+        '200':
+          description: Preparation operation
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PreparationOperation'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /v1/image-preparations/{operation_id}/retry:
+    parameters:
+      - {$ref: '#/components/parameters/OperationId'}
+    post:
+      operationId: retryImagePreparation
+      summary: Create an idempotent child retry of a failed or partial operation
+      description: >-
+        Backend scope only. Original operation must be terminal PARTIAL or FAILED; otherwise
+        return 409. Optional node_uids must belong to its frozen scope. If omitted, retry all
+        unsuccessful nodes; if given, select only unsuccessful original nodes. Do not map a
+        replacement node by name. Revalidate current policy and reuse successful image work
+        only after verification. Same scoped request_id and body replay the same child
+        operation. Check for this replay before validating the parent's current retryability.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RetryRequest'}
+      responses:
+        '202': {$ref: '#/components/responses/Accepted'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/PolicyRejected'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+components:
+  securitySchemes:
+    ServiceBearer:
+      type: http
+      scheme: bearer
+      description: Existing service auth extended with Backend/Scheduler/agent permissions; no token values in examples.
+  parameters:
+    OperationId:
+      in: path
+      name: operation_id
+      required: true
+      schema: {type: string, minLength: 1, maxLength: 128}
+  responses:
+    Accepted:
+      description: Accepted or exact replay; not download completion
+      headers:
+        Location:
+          schema: {type: string}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/PreparationAccepted'}
+    BadRequest:
+      description: Invalid JSON, immutable ref, bounds, duplicate values or retry node scope
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Unauthenticated:
+      description: Invalid or missing service credential
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Forbidden:
+      description: Credential lacks permission for this API or target scope
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    NotFound:
+      description: Unknown operation; unknown readiness targets are instead omitted
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Conflict:
+      description: Request ID reused with different input, or parent is not retryable
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    PolicyRejected:
+      description: Digest policy rejected, unsupported platform, or unknown/disabled preparation target
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Unavailable:
+      description: Observation/operation store unavailable; Scheduler falls back only for advisory lookup
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+  schemas:
+    Architecture:
+      type: string
+      enum: [AMD64, ARM64]
+      description: Linux platform, mapped to OCI amd64 or arm64; no automatic architecture substitution
+    ImageRef:
+      type: string
+      maxLength: 512
+      pattern: '^ghcr[.]io/[a-z0-9][a-z0-9._/-]*@sha256:[a-f0-9]{64}$'
+      description: Full lowercase immutable GHCR ref; normal repository-path validation also applies
+    ImageSetId:
+      type: string
+      pattern: '^sha256:[a-f0-9]{64}$'
+    TargetIds:
+      type: array
+      minItems: 1
+      maxItems: 50
+      uniqueItems: true
+      items: {type: string, minLength: 1, maxLength: 128}
+    OptionalObservedAt:
+      type: [string, 'null']
+      format: date-time
+    ReadinessQuery:
+      type: object
+      additionalProperties: false
+      required: [architecture, images, target_ids]
+      properties:
+        architecture: {$ref: '#/components/schemas/Architecture'}
+        images:
+          type: array
+          minItems: 1
+          maxItems: 32
+          uniqueItems: true
+          items: {$ref: '#/components/schemas/ImageRef'}
+        target_ids: {$ref: '#/components/schemas/TargetIds'}
+    ReadinessTarget:
+      type: object
+      additionalProperties: false
+      required: [target_id, ready, ready_node_count, eligible_node_count, observed_at, valid_until]
+      properties:
+        target_id: {type: string, minLength: 1, maxLength: 128}
+        ready: {type: boolean}
+        ready_node_count: {type: integer, minimum: 0}
+        eligible_node_count: {type: integer, minimum: 0}
+        observed_at: {$ref: '#/components/schemas/OptionalObservedAt'}
+        valid_until: {$ref: '#/components/schemas/OptionalObservedAt'}
+      allOf:
+        - if:
+            properties: {ready: {const: true}}
+            required: [ready]
+          then:
+            properties:
+              ready_node_count: {minimum: 1}
+              eligible_node_count: {minimum: 1}
+              observed_at: {type: string, format: date-time}
+              valid_until: {type: string, format: date-time}
+          else:
+            properties: {ready_node_count: {const: 0}}
+        - if:
+            properties: {observed_at: {type: 'null'}}
+            required: [observed_at]
+          then:
+            properties:
+              ready: {const: false}
+              eligible_node_count: {const: 0}
+              valid_until: {type: 'null'}
+          else:
+            properties: {valid_until: {type: string, format: date-time}}
+      description: >-
+        Enforce ready_node_count <= eligible_node_count and timestamp ordering in implementation.
+        No CPU reservation guarantee. Stale observations retain timestamps but cannot yield ready=true.
+    ReadinessResponse:
+      type: object
+      additionalProperties: false
+      required: [image_set_id, architecture, targets]
+      properties:
+        image_set_id: {$ref: '#/components/schemas/ImageSetId'}
+        architecture: {$ref: '#/components/schemas/Architecture'}
+        targets:
+          type: array
+          maxItems: 50
+          items: {$ref: '#/components/schemas/ReadinessTarget'}
+    PreparationContainer:
+      type: object
+      additionalProperties: false
+      required: [name, image, ports]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 63}
+        image: {$ref: '#/components/schemas/ImageRef'}
+        ports:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {type: integer, minimum: 1, maximum: 65535}
+    PreparationRequest:
+      type: object
+      additionalProperties: false
+      required: [request_id, architecture, isolation_profile, containers, target_ids]
+      properties:
+        request_id: {type: string, minLength: 1, maxLength: 128}
+        release_id: {type: string, format: uuid}
+        architecture: {$ref: '#/components/schemas/Architecture'}
+        isolation_profile: {type: string, enum: [WEB, PWN]}
+        containers:
+          type: array
+          minItems: 1
+          maxItems: 32
+          items: {$ref: '#/components/schemas/PreparationContainer'}
+        target_ids: {$ref: '#/components/schemas/TargetIds'}
+      description: Container names must be unique. Duplicate image refs across containers are deduplicated for the image-set hash only.
+    RetryRequest:
+      type: object
+      additionalProperties: false
+      required: [request_id]
+      properties:
+        request_id: {type: string, minLength: 1, maxLength: 128}
+        node_uids:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {type: string, minLength: 1, maxLength: 128}
+    OperationStatus:
+      type: string
+      enum: [QUEUED, RUNNING, SUCCEEDED, PARTIAL, FAILED]
+    PreparationAccepted:
+      type: object
+      additionalProperties: false
+      required: [operation_id, image_set_id, status]
+      properties:
+        operation_id: {type: string, minLength: 1}
+        parent_operation_id: {type: string, minLength: 1}
+        image_set_id: {$ref: '#/components/schemas/ImageSetId'}
+        status: {$ref: '#/components/schemas/OperationStatus'}
+    PreparationOperation:
+      type: object
+      additionalProperties: false
+      required: [operation_id, request_id, image_set_id, architecture, status, nodes]
+      properties:
+        operation_id: {type: string, minLength: 1}
+        parent_operation_id: {type: string, minLength: 1}
+        request_id: {type: string, minLength: 1}
+        release_id: {type: string, format: uuid}
+        image_set_id: {$ref: '#/components/schemas/ImageSetId'}
+        architecture: {$ref: '#/components/schemas/Architecture'}
+        status: {$ref: '#/components/schemas/OperationStatus'}
+        error_code: {type: string, minLength: 1}
+        nodes:
+          type: array
+          items: {$ref: '#/components/schemas/PreparationNode'}
+      allOf:
+        - if:
+            properties: {status: {const: SUCCEEDED}}
+            required: [status]
+          then:
+            properties:
+              nodes:
+                minItems: 1
+                items:
+                  properties: {status: {const: READY}}
+        - if:
+            properties: {status: {const: PARTIAL}}
+            required: [status]
+          then:
+            properties:
+              nodes:
+                minItems: 2
+                contains:
+                  properties: {status: {const: READY}}
+                items:
+                  properties: {status: {enum: [READY, FAILED]}}
+            not:
+              properties:
+                nodes:
+                  items:
+                    properties: {status: {const: READY}}
+        - if:
+            properties: {status: {const: FAILED}}
+            required: [status]
+          then:
+            properties:
+              nodes:
+                items:
+                  properties: {status: {const: FAILED}}
+    PreparationNode:
+      type: object
+      additionalProperties: false
+      required: [target_id, node_uid, node_name, architecture, status, observed_at, images]
+      properties:
+        target_id: {type: string, minLength: 1}
+        node_uid: {type: string, minLength: 1}
+        node_name: {type: string, minLength: 1}
+        architecture: {$ref: '#/components/schemas/Architecture'}
+        status: {type: string, enum: [QUEUED, PULLING, VERIFYING, READY, FAILED]}
+        observed_at: {$ref: '#/components/schemas/OptionalObservedAt'}
+        images:
+          type: array
+          minItems: 1
+          items: {$ref: '#/components/schemas/PreparationImage'}
+      allOf:
+        - if:
+            properties: {status: {const: READY}}
+            required: [status]
+          then:
+            properties:
+              observed_at: {type: string, format: date-time}
+              images:
+                items:
+                  properties: {status: {const: READY}}
+    PreparationImage:
+      type: object
+      additionalProperties: false
+      required: [image, status, attempts, observed_at]
+      properties:
+        image: {$ref: '#/components/schemas/ImageRef'}
+        resolved_manifest_digest:
+          type: string
+          pattern: '^sha256:[a-f0-9]{64}$'
+        status: {type: string, enum: [QUEUED, PULLING, VERIFYING, READY, FAILED]}
+        attempts: {type: integer, minimum: 0}
+        observed_at: {$ref: '#/components/schemas/OptionalObservedAt'}
+        error_code: {type: string, minLength: 1}
+      allOf:
+        - if:
+            properties: {status: {const: READY}}
+            required: [status]
+          then:
+            required: [resolved_manifest_digest]
+            properties:
+              observed_at: {type: string, format: date-time}
+              attempts: {minimum: 0}
+    CreateTracingExtension:
+      type: object
+      description: >-
+        Extension fields only, not a complete create request. Add to the existing create schema
+        before callers send them. Omitting either is backward-compatible; explicit null is
+        invalid. Preserve original payloads on replay, reconcile and reset. Both are fixed
+        request-fingerprint input, not mutable readiness hints. release_id is trace-only.
+      properties:
+        release_id: {type: string, format: uuid}
+        architecture: {$ref: '#/components/schemas/Architecture'}
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code: {type: string, minLength: 1}
+            message: {type: string, minLength: 1}

@@ -1,0 +1,25 @@
+{
+  "request_id": "prepare-example-001",
+  "release_id": "c181d657-1bd8-4aad-ad99-cbc8c6119750",
+  "architecture": "AMD64",
+  "isolation_profile": "WEB",
+  "containers": [
+    {
+      "name": "web",
+      "image": "ghcr.io/msg-ctf/challenges/example/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ports": [
+        8080
+      ]
+    },
+    {
+      "name": "db",
+      "image": "ghcr.io/msg-ctf/challenges/example/db@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ports": [
+        5432
+      ]
+    }
+  ],
+  "target_ids": [
+    "target-a"
+  ]
+}
