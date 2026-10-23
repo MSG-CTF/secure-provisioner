@@ -177,6 +177,41 @@ DB connection을 계속 점유하지 않는다.
 컨테이너 150건을 실행하고, 접수/큐/Ready p95, timeout/rollback, API throttle,
 노드 CPU·메모리·disk·network를 함께 측정해야 운영 완료 시간을 확정할 수 있다.
 
+## Scheduler와 같은 처리 방식을 가져올 수 있는 범위
+
+Scheduler `dev`의 `d9bb3c3fe7f4a52fd3c6e8db0d1d2bebdaf66d41`를 확인했다.
+실연동 프로파일은 `parallelism=8`, 단계별 `batch-size=200`,
+`min-poll-interval=5s`다. Runtime 생성 접수의 202/operation ID를 저장하면
+스레드를 반환하고, DB의 다음 조회 시각이 된 행을 이후 주기에 다시 조회한다.
+따라서 Scheduler 스레드 8개가 배포 중인 인스턴스 8개를 뜻하지 않는다.
+batch 200도 동시에 200건을 완료할 수 있다는 측정 결과가 아니다.
+단계의 선택·실행·전체 대기가 끝나면 다음 단계로 넘어가는 구조이므로,
+느린 외부 HTTP 호출은 같은 단계와 뒤 단계의 진행을 늦출 수 있다.
+
+| 항목 | Scheduler | 현재 Provisioner |
+| --- | --- | --- |
+| API 접수 | DB에 REQUESTED 저장 후 반환 | operation DB 저장 후 HTTP 202 |
+| Worker가 한 번에 하는 일 | 접수 또는 operation 상태 조회 | K3s apply부터 Pod Ready·결과 저장까지 |
+| 대기 정보 | 다음 poll 시각·기한을 DB에 보존 | 실행 중인 Worker가 Ready를 기다림 |
+| 스레드 수의 의미 | 동시에 수행할 짧은 처리 단계 수 | 동시에 실행·Ready 대기할 작업 수 |
+
+가져올 부분은 스레드 수 8이라는 값보다 **긴 대기를 DB 상태로 보존하고 슬롯을
+반환하는 방식**이다. Runtime을 바꾼다면 apply / Ready 대기 / 결과 확정의 진행을
+저장하고, 아직 준비되지 않은 정상 대기는 실패 재시도 횟수와 분리하는 방향이 맞다.
+재시작 후 같은 resource UID와 소유권을 검증하고 절대 Ready 기한·lease fencing·rollback
+정리를 이어가야 한다. API 호출 수 자체는 줄지 않으므로 target의 API budget도 함께
+검증해야 한다. 이번 부하 시험 PR에는 이 실행 상태 구조 변경을 포함하지 않았다.
+
+Scheduler 기본 poll timeout 10분에는 Runtime 큐 대기도 포함된다. Provisioner의
+Ready timeout 2분은 apply 후부터여서 시작점이 다르다. 앞의 단일 target API 호출
+하한 계산은 10분을 넘으므로 Worker 수만 늘려도 상류 timeout이 해결된다고 볼 수 없다.
+
+근거: Scheduler의 고정 commit에 있는
+[실연동 설정](https://github.com/MSG-CTF/instance-scheduler/blob/d9bb3c3fe7f4a52fd3c6e8db0d1d2bebdaf66d41/src/main/resources/application-real.yaml),
+[Worker 단계 처리](https://github.com/MSG-CTF/instance-scheduler/blob/d9bb3c3fe7f4a52fd3c6e8db0d1d2bebdaf66d41/src/main/kotlin/kr/msgctf/scheduler/instance/worker/InstanceOperationWorker.kt),
+[Runtime 접수·폴링 저장](https://github.com/MSG-CTF/instance-scheduler/blob/d9bb3c3fe7f4a52fd3c6e8db0d1d2bebdaf66d41/src/main/kotlin/kr/msgctf/scheduler/instance/service/InstanceOperationService.kt),
+[Operation 기본 기한](https://github.com/MSG-CTF/instance-scheduler/blob/d9bb3c3fe7f4a52fd3c6e8db0d1d2bebdaf66d41/src/main/kotlin/kr/msgctf/scheduler/instance/config/OperationProperties.kt).
+
 ## 검증 기록
 
 - Opt-in 150건 matrix 18 case: 모두 PASS, raw JSON의 표본 수·중복 ID·요청별 시도 수·
