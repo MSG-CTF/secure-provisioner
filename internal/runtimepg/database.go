@@ -11,10 +11,12 @@ import (
 )
 
 type Database struct {
-	db         *sql.DB
-	operations *OperationStore
-	bindings   *BindingStore
-	deletes    *DeleteCoordinator
+	db                *sql.DB
+	gatewayLocks      *sql.DB
+	gatewayLockBudget chan struct{}
+	operations        *OperationStore
+	bindings          *BindingStore
+	deletes           *DeleteCoordinator
 }
 
 func Open(ctx context.Context, dsn string) (*Database, error) {
@@ -56,7 +58,17 @@ func open(ctx context.Context, dsn string, applyMigrations bool) (*Database, err
 			_ = rows.Close()
 		}
 	}
-	database := &Database{db: db}
+	locks, lockErr := sql.Open("pgx", dsn)
+	if lockErr != nil {
+		_ = db.Close()
+		return nil, lockErr
+	}
+	// Remote Gateway requests can take 90s. Their session-lock connections must
+	// never consume the operation/binding/lease renewal pool.
+	locks.SetMaxOpenConns(gatewayLockConnections)
+	locks.SetMaxIdleConns(2)
+	locks.SetConnMaxLifetime(30 * time.Minute)
+	database := &Database{db: db, gatewayLocks: locks, gatewayLockBudget: make(chan struct{}, gatewayLockConnections)}
 	database.operations = &OperationStore{db: db}
 	database.bindings = &BindingStore{db: db}
 	database.deletes = &DeleteCoordinator{db: db}
@@ -66,7 +78,9 @@ func open(ctx context.Context, dsn string, applyMigrations bool) (*Database, err
 func (database *Database) Operations() *OperationStore           { return database.operations }
 func (database *Database) Bindings() *BindingStore               { return database.bindings }
 func (database *Database) DeleteCoordinator() *DeleteCoordinator { return database.deletes }
-func (database *Database) Close() error                          { return database.db.Close() }
+func (database *Database) Close() error {
+	return errors.Join(database.gatewayLocks.Close(), database.db.Close())
+}
 
 // CheckReadiness verifies live access to both durable stores with a read-only,
 // constant-size query. Empty tables are ready; missing schemas are not.

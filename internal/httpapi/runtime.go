@@ -28,6 +28,7 @@ type RuntimeStatusResponse struct {
 	RuntimeWorkloadID string                    `json:"runtime_workload_id"`
 	Phase             string                    `json:"phase"`
 	EndpointReady     bool                      `json:"endpoint_ready"`
+	CleanupPending    bool                      `json:"cleanup_pending,omitempty"`
 	MetricsAvailable  bool                      `json:"metrics_available"`
 	ObservedAt        time.Time                 `json:"observed_at"`
 	Node              NodeStatusResponse        `json:"node"`
@@ -93,10 +94,14 @@ type OperationResultResponse struct {
 }
 
 type WorkloadEndpointResponse struct {
-	ContainerName string `json:"container_name"`
-	Port          int    `json:"port"`
-	Protocol      string `json:"protocol"`
-	ServiceURL    string `json:"service_url"`
+	ContainerName  string `json:"container_name"`
+	Port           int    `json:"port"`
+	Protocol       string `json:"protocol"`
+	ServiceURL     string `json:"service_url"`
+	Hostname       string `json:"hostname,omitempty"`
+	ConnectionPort int    `json:"connection_port,omitempty"`
+	TLS            bool   `json:"tls,omitempty"`
+	ServerName     string `json:"server_name,omitempty"`
 }
 
 func (api *API) handleRuntimeStatus(writer http.ResponseWriter, request *http.Request) {
@@ -233,6 +238,7 @@ func newRuntimeStatusResponse(status k3s.RuntimeStatus) RuntimeStatusResponse {
 		RuntimeWorkloadID: status.RuntimeWorkloadID,
 		Phase:             status.Phase,
 		EndpointReady:     status.EndpointReady,
+		CleanupPending:    status.CleanupPending,
 		MetricsAvailable:  status.MetricsAvailable,
 		ObservedAt:        status.ObservedAt,
 		Node: NodeStatusResponse{
@@ -295,7 +301,7 @@ func newOperationResponse(operation operations.Operation) OperationResponse {
 		Attempt:          operation.Attempt,
 		MaxAttempts:      operation.MaxAttempts,
 		LastErrorCode:    operation.LastErrorCode,
-		CleanupCompleted: operation.Type == operations.OperationTypeCreate && operation.Status == operations.OperationStatusFailed && operation.Result.CreateCleanupCompleted,
+		CleanupCompleted: (operation.Type == operations.OperationTypeCreate && operation.Status == operations.OperationStatusFailed && operation.Result.CreateCleanupCompleted) || (operation.Type == operations.OperationTypeDelete && operation.Status == operations.OperationStatusSucceeded && operation.Result.DeleteCompleted),
 		Result:           newOperationResultResponse(operation),
 	}
 }
@@ -337,5 +343,6 @@ func newWorkloadEndpointResponse(endpoint provisioner.WorkloadEndpoint) Workload
 		Port:          endpoint.Port,
 		Protocol:      string(endpoint.Protocol),
 		ServiceURL:    endpoint.ServiceURL,
+		Hostname:      endpoint.Hostname, ConnectionPort: endpoint.ConnectionPort, TLS: endpoint.TLS, ServerName: endpoint.ServerName,
 	}
 }

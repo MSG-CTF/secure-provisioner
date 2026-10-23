@@ -1032,6 +1032,18 @@ components:
         service_url:
           type: string
           format: uri
+        hostname:
+          type: string
+          description: Gateway TLS hostname; omitted for legacy endpoints.
+        connection_port:
+          type: integer
+          const: 443
+        tls:
+          type: boolean
+          const: true
+        server_name:
+          type: string
+          description: Required TLS SNI name when Gateway metadata is present. TCP service_url uses tls://hostname:443; port remains the internal container port.
     DeleteOperationResult:
       type: object
       additionalProperties: false
@@ -1076,9 +1088,11 @@ components:
         cleanup_completed:
           type: boolean
           description: >-
-            Present as true only for a terminal FAILED CREATE whose owned namespace
-            has been removed. Absence or false does not prove that resources are gone.
-            Never confirmed after reclaiming an expired CREATE worker lease.
+            True for a terminal FAILED CREATE with verified cleanup, or a SUCCEEDED
+            DELETE. Gateway-enabled cleanup additionally requires confirmed DELETE204
+            and actual workload absence before releasing the NodePort claim.
+            Absence or false never proves cleanup; attempt exhaustion does not either.
+            CREATE cleanup is never confirmed after reclaiming an expired worker lease.
         result:
           oneOf:
             - $ref: "#/components/schemas/CreateOperationResult"
@@ -1197,6 +1211,9 @@ components:
             - TERMINATED
         endpoint_ready:
           type: boolean
+        cleanup_pending:
+          type: boolean
+          description: Outstanding durable Gateway intent or cleanup; phase TERMINATING cannot prove absence even if the binding or namespace is missing.
         metrics_available:
           type: boolean
         observed_at:

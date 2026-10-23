@@ -120,6 +120,13 @@ func (s *Service) EnqueueCreate(command provisioner.CreateWorkloadCommand) (oper
 	if err != nil {
 		return operations.Operation{}, false, err
 	}
+	if validator, ok := s.create.(interface {
+		ValidateCreateCommand(provisioner.CreateWorkloadCommand) error
+	}); ok {
+		if err := validator.ValidateCreateCommand(command); err != nil {
+			return operations.Operation{}, false, err
+		}
+	}
 	operation, created, err := s.operations.EnqueueCreate(command, s.maxAttempts)
 	if errors.Is(err, operations.ErrIdempotencyConflict) {
 		// 다른 버전의 replica가 조회와 INSERT 사이에 같은 요청을 접수할 수 있다.
@@ -337,6 +344,23 @@ func profileIdentity(ref isolation.ProfileRef) string {
 
 func (s *Service) GetRuntimeStatus(ctx context.Context, instanceID string) (k3s.RuntimeStatus, error) {
 	binding, err := s.bindings.Get(instanceID)
+	var journalBinding runtimebinding.Binding
+	hasJournal := false
+	if recovery, ok := s.create.(gatewayRecovery); ok {
+		recovered, recoveryErr := recovery.RecoveryBinding(ctx, instanceID)
+		journalBinding = recovered
+		if recoveryErr != nil && !errors.Is(recoveryErr, runtimebinding.ErrNotFound) {
+			return k3s.RuntimeStatus{}, recoveryErr
+		}
+		hasJournal = recoveryErr == nil
+		pending, pendingErr := recovery.CleanupPending(ctx, instanceID)
+		if pendingErr != nil {
+			return k3s.RuntimeStatus{}, pendingErr
+		}
+		if hasJournal && (pending || errors.Is(err, runtimebinding.ErrNotFound) || binding.State == runtimebinding.StateDeleted) {
+			return pendingGatewayStatus(journalBinding, s.now()), nil
+		}
+	}
 	if err != nil {
 		return k3s.RuntimeStatus{}, err
 	}
@@ -351,12 +375,43 @@ func (s *Service) GetRuntimeStatus(ctx context.Context, instanceID string) (k3s.
 			Containers:        []k3s.ContainerRuntimeStatus{},
 		}, nil
 	}
-	return s.status.Get(ctx, binding)
+	status, statusErr := s.status.Get(ctx, binding)
+	if hasJournal && statusErr == nil && status.Phase == "TERMINATED" {
+		return pendingGatewayStatus(journalBinding, s.now()), nil
+	}
+	return status, statusErr
+}
+
+type gatewayRecovery interface {
+	RecoveryBinding(context.Context, string) (runtimebinding.Binding, error)
+	CleanupPending(context.Context, string) (bool, error)
+}
+
+func pendingGatewayStatus(b runtimebinding.Binding, now time.Time) k3s.RuntimeStatus {
+	return k3s.RuntimeStatus{InstanceID: b.InstanceID, TeamID: b.TeamID, TargetID: b.TargetID, RuntimeWorkloadID: b.RuntimeWorkloadID, Phase: "TERMINATING", CleanupPending: true, ObservedAt: now.UTC(), Containers: []k3s.ContainerRuntimeStatus{}}
 }
 
 func (s *Service) EnqueueDelete(command provisioner.DeleteWorkloadCommand) (operations.Operation, bool, error) {
 	s.enqueueMu.Lock()
 	defer s.enqueueMu.Unlock()
+	if _, bindingErr := s.bindings.Get(command.InstanceID); errors.Is(bindingErr, runtimebinding.ErrNotFound) {
+		if recovery, ok := s.create.(gatewayRecovery); ok {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			binding, recoveryErr := recovery.RecoveryBinding(ctx, command.InstanceID)
+			if recoveryErr == nil {
+				if !deleteMatchesBinding(command, binding) {
+					return operations.Operation{}, false, ErrBindingMismatch
+				}
+				if _, _, saveErr := s.bindings.SaveCreated(binding); saveErr != nil {
+					return operations.Operation{}, false, saveErr
+				}
+			}
+			if recoveryErr != nil && !errors.Is(recoveryErr, runtimebinding.ErrNotFound) {
+				return operations.Operation{}, false, recoveryErr
+			}
+		}
+	}
 	if s.deleteCoordinator != nil {
 		return s.deleteCoordinator.BeginDelete(command, s.maxAttempts, s.now().UTC())
 	}
