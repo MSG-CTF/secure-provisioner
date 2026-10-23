@@ -36,7 +36,7 @@
 - [x] Adapter: journal before PUT, replay result, Gateway-aware delete/failed-create cleanup, Service retained until204, held retry semantics on uncertain remote state.
 - [x] Wiring and TCP metadata: hostname, connection_port, tls, server_name copied through create/checkpoint/Binding/API; operator configuration and Scheduler cleanup contract docs.
 - [x] Focused RED→GREEN tests, PostgreSQL recovery tests, current-source Linux full suite and OpenAPI validation.
-- [ ] Final vet/diff evidence, commit and draft implementation PR.
+- [x] Final vet/diff evidence, commit and draft implementation PR #75 (attached to task).
 
 ## Execution ledger
 
@@ -46,3 +46,4 @@
 - Ruling: use a separate 8-connection lock pool and nonblocking lifecycle admission, preserving the 30-connection operation/lease pool. A real PG regression first exhausted a shared one-connection pool, then passed with separate pools. Eight is a fixed safety bound, not a measured optimum.
 - Independent parent review repaired backend runtime-error/cleanup-proof classification and foreign-route TARGET_IN_USE ownership: durable CONFLICT_HOLD, quiesce, immutable same-tuple PUT positive proof, DELETE204, then actual deletion. No foreign ID guessing/deletion. Crash/commit and SQL phase-regression tests pin this behavior.
 - Final current-source `GOOS=linux CGO_ENABLED=0 go test -exec <WSL wrapper> -gcflags=all=-trimpath=<Windows repo>=><WSL repo> -p 1 ./... -count=1 -timeout 5m`: 13 packages passed, including real dedicated local PostgreSQL integration. Fake TLS Gateway and fake Kubernetes only; no production Gateway calls or real K3s test.
+- `go vet ./...`, OpenAPI validator + TCP endpoint example, and staged `git diff --check` passed. Implementation commit `3adf09e`; draft implementation PR https://github.com/MSG-CTF/secure-provisioner/pull/75. Consumer Scheduler PR #77 and Backend issue #147 remain required for full participant transport/cleanup behavior.
