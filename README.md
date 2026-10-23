@@ -239,3 +239,6 @@ resident-node/metadata host boundary는 각각 `#11`, `#32`의 검증이 끝날 
 production 완료로 간주하지 않습니다.
 
 실행 설정 전환: [백엔드 비밀값 주입](docs/operations/backend-secret-injection.md)
+
+설계 검토: [Runtime → Gateway v1 연동 차이와 복구 설계 초안](docs/api/runtime-gateway-v1-integration-assessment.md)
+— 현재 지원 기능이나 운영 설정이 아닌, 제공받은 외부 Gateway 계약의 검토 문서입니다.
