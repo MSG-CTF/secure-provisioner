@@ -36,7 +36,7 @@ Files: `docs/api/image-preparation-b-contract.md`, `docs/api/image-preparation.o
 - [x] 요청·응답과 retry child 작업의 OpenAPI/가상 예시를 작성한다.
 - [x] schema validator와 오류 예시 검증을 실행하고 독립 리뷰의 중요 항목을 해결한다.
 - [x] [Runtime #69](https://github.com/MSG-CTF/secure-provisioner/issues/69), [Scheduler #75](https://github.com/MSG-CTF/instance-scheduler/issues/75), [Broker #8](https://github.com/MSG-CTF/resource-broker/issues/8)를 연결한다.
-- [ ] 계약 PR을 draft로 제출한다. 실제 기능 완료로 처리하지 않는다.
+- [x] [계약 PR #70](https://github.com/MSG-CTF/secure-provisioner/pull/70)을 draft로 제출했다. 실제 기능 완료로 처리하지 않는다.
 
 ## Task 2: Runtime 관측 모델과 batch query (별도 구현 PR)
 
