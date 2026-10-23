@@ -35,7 +35,7 @@ Files: `docs/api/image-preparation-b-contract.md`, `docs/api/image-preparation.o
 - [x] 사용자 조건을 반영한 B 역할·오류·관측·같은 노드·보안·배포 순서 명세를 작성한다.
 - [x] 요청·응답과 retry child 작업의 OpenAPI/가상 예시를 작성한다.
 - [x] schema validator와 오류 예시 검증을 실행하고 독립 리뷰의 중요 항목을 해결한다.
-- [x] [Runtime #69](https://github.com/MSG-CTF/secure-provisioner/issues/69), [Scheduler #75](https://github.com/MSG-CTF/instance-scheduler/issues/75), [Broker #8](https://github.com/MSG-CTF/resource-broker/issues/8)를 연결한다.
+- [x] [Runtime #69](https://github.com/MSG-CTF/secure-provisioner/issues/69), [Scheduler #75](https://github.com/MSG-CTF/instance-scheduler/issues/75), [Broker #8](https://github.com/MSG-CTF/resource-broker/issues/8), [Backend #139](https://github.com/MSG-CTF/msg-backend/issues/139)를 연결한다.
 - [x] [계약 PR #70](https://github.com/MSG-CTF/secure-provisioner/pull/70)을 draft로 제출했다. 실제 기능 완료로 처리하지 않는다.
 
 ## Task 2: Runtime 관측 모델과 batch query (별도 구현 PR)
@@ -94,3 +94,11 @@ ResourceCandidateSelector, InstanceOperationService, 원본 스펙 보존 경로
 - [ ] runtime_ready·자원 observation freshness와 image_readiness를 결합하지 않는다.
 - [ ] 후보 target_id와 Runtime Registry 매핑, 예약 응답이 target을 변경하는 경우를 검증한다.
 - [ ] 이미지 준비 정보를 reservation의 필수 조건으로 추가하지 않는다.
+
+## Task 7: Backend 준비 요청 및 작업 추적 ([Backend #139](https://github.com/MSG-CTF/msg-backend/issues/139))
+
+- [ ] 승인 release 확정 후 비동기 준비 전달 기록과 안정적인 request_id를 보존한다.
+- [ ] 전체 containers·architecture·release_id와 신뢰된 허용 target 범위를 Runtime에 직접 전달한다.
+- [ ] operation_id/image_set_id와 부분 실패·child 재시도를 추적하며 준비 실패를 생성 gate로 쓰지 않는다.
+- [ ] 기존 Scheduler 전달과 release 일관성, 중복 이벤트·응답 유실·재시작 복구·비밀값 비노출을 시험한다.
+- [ ] Runtime 지원 후 비활성 flag로 배포하고 시범 대상에서 Backend→Scheduler→Runtime E2E를 확인한다.

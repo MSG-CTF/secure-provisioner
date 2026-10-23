@@ -6,7 +6,8 @@
 
 연결 이슈: [Runtime #69](https://github.com/MSG-CTF/secure-provisioner/issues/69),
 [Scheduler #75](https://github.com/MSG-CTF/instance-scheduler/issues/75),
-[Broker #8](https://github.com/MSG-CTF/resource-broker/issues/8).
+[Broker #8](https://github.com/MSG-CTF/resource-broker/issues/8),
+[Backend #139](https://github.com/MSG-CTF/msg-backend/issues/139).
 
 기계 판독 계약은 [image-preparation.openapi.yaml](image-preparation.openapi.yaml),
 검증용 예시는 [examples/image-preparation](examples/image-preparation/)에 있다.
