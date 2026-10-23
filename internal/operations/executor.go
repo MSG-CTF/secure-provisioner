@@ -63,6 +63,21 @@ type ExecutionError struct {
 	cause     error
 }
 
+// HeldExecutionError retains ownership of resources whose remote cleanup or
+// mutation is uncertain. Attempt exhaustion is not evidence of absence.
+type HeldExecutionError struct{ cause *ExecutionError }
+
+func NewHeldExecutionError(code string, cause error) *HeldExecutionError {
+	return &HeldExecutionError{NewExecutionError(code, true, cause)}
+}
+func (e *HeldExecutionError) Error() string   { return e.cause.Error() }
+func (e *HeldExecutionError) Unwrap() error   { return e.cause }
+func (e *HeldExecutionError) HoldRetry() bool { return true }
+func heldRetry(err error) bool {
+	var held interface{ HoldRetry() bool }
+	return errors.As(err, &held) && held.HoldRetry()
+}
+
 func NewExecutionError(code string, retryable bool, cause error) *ExecutionError {
 	if code == "" {
 		code = defaultExecutionErrorCode

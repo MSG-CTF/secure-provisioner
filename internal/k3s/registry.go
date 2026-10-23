@@ -1,6 +1,7 @@
 package k3s
 
 import (
+	"net/netip"
 	"net/url"
 	"reflect"
 	"strings"
@@ -114,6 +115,17 @@ func validateClusterConfig(config ClusterConfig, seenTargetIDs map[string]struct
 	if config.ExposureMode != ExposureModeIngressPath && config.ExposureMode != ExposureModeNodePort {
 		return ClusterConfig{}, newRuntimeError("CONFIG_INVALID", false, nil)
 	}
+	if config.Gateway != nil {
+		copied := *config.Gateway
+		config.Gateway = &copied
+		if copied.Enabled {
+			ip, err := netip.ParseAddr(copied.UpstreamIP)
+			if config.ExposureMode != ExposureModeNodePort || err != nil || ip.Zone() != "" || !ip.IsGlobalUnicast() || ip.IsPrivate() {
+				return ClusterConfig{}, newRuntimeError("CONFIG_INVALID", false, nil)
+			}
+			config.Gateway.UpstreamIP = ip.Unmap().String()
+		}
+	}
 	if config.Enabled && !validSecurityCapabilities(config.SecurityCapabilities, config.ExposureMode) {
 		return ClusterConfig{}, newRuntimeError("CONFIG_INVALID", false, nil)
 	}
@@ -134,8 +146,22 @@ func validateClusterConfig(config ClusterConfig, seenTargetIDs map[string]struct
 }
 
 func copyCluster(cluster Cluster) Cluster {
+	if cluster.Config.Gateway != nil {
+		copy := *cluster.Config.Gateway
+		cluster.Config.Gateway = &copy
+	}
 	cluster.Config.SecurityCapabilities = copySecurityCapabilities(cluster.Config.SecurityCapabilities)
 	return cluster
+}
+
+func (r *Registry) GatewayTargets() map[string]string {
+	out := map[string]string{}
+	for id, c := range r.targets {
+		if c.Config.Gateway != nil && c.Config.Gateway.Enabled {
+			out[id] = c.Config.Gateway.UpstreamIP
+		}
+	}
+	return out
 }
 
 func copySecurityCapabilities(capabilities SecurityCapabilities) SecurityCapabilities {

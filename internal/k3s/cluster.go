@@ -32,7 +32,13 @@ type ClusterConfig struct {
 	IngressClass         string               `json:"ingress_class,omitempty"`
 	ExposureMode         ExposureMode         `json:"exposure_mode,omitempty"`
 	Enabled              bool                 `json:"enabled"`
+	Gateway              *GatewayConfig       `json:"gateway,omitempty"`
 	SecurityCapabilities SecurityCapabilities `json:"security_capabilities"`
+}
+
+type GatewayConfig struct {
+	Enabled    bool   `json:"enabled"`
+	UpstreamIP string `json:"upstream_ip"`
 }
 
 // SecurityCapabilities records operator-declared lab configuration. It is not
