@@ -268,10 +268,25 @@ func TestPublishedWebImagePoliciesKeepUnverifiedChallengesBlocked(t *testing.T) 
 		{"ghcr.io/msg-ctf/challenges/web-open-house/web@sha256:6a3ab6373bdee16229dfda362d41dd10bd59ede5b05249557d332a3d5d22b8bd", true},
 		{"ghcr.io/msg-ctf/challenges/web-logout-please/service@sha256:c1736999c957b408c09dda518d49eecbfcb37ffae0d9227e6a378a666f931909", true},
 		{"ghcr.io/msg-ctf/challenges/web-notebook/db@sha256:7a40ab203a9f16d06269a4506f1f99b770e2991bb0d5c4ee072fddaea722cea0", false},
+		{"ghcr.io/msg-ctf/challenges/rev-tinyvm/tinyvm@sha256:5abc2be5407e74b513404da172a04fac15360edc2323b016025afb790b69add7", true},
+		{"ghcr.io/msg-ctf/challenges/web-grade-tampering/web@sha256:3a3de9c6c3670eed8e4e771ae4d4ad981825144796b80f1d523fba2403652fdb", true},
+		{"ghcr.io/msg-ctf/challenges/web-daily-point/web@sha256:fc7c762ba95b154c2b00154ed89aedd1ba5f86020408a5300d06a9f8d92a4816", true},
+		{"ghcr.io/msg-ctf/challenges/web-open-house/web@sha256:8d8492c1746836790691930c3ae937f01705f9a824ebc821fd939da80b3b5ea7", true},
+		{"ghcr.io/msg-ctf/challenges/web3-infinite-pack/server@sha256:43cc32512af5ce6a06d5a1541be1f9ca2397a1dab744d37580d4bfc4a04b437b", true},
 	} {
 		policy, found := catalog.images[test.image]
 		if !found || (policy.Status == "create_enabled") != test.ready {
 			t.Fatalf("image policy for %q = %+v, found = %v", test.image, policy, found)
+		}
+	}
+	for _, image := range []string{
+		"ghcr.io/msg-ctf/challenges/web-grade-tampering/web@sha256:3a3de9c6c3670eed8e4e771ae4d4ad981825144796b80f1d523fba2403652fdb",
+		"ghcr.io/msg-ctf/challenges/web-daily-point/web@sha256:fc7c762ba95b154c2b00154ed89aedd1ba5f86020408a5300d06a9f8d92a4816",
+		"ghcr.io/msg-ctf/challenges/web-open-house/web@sha256:8d8492c1746836790691930c3ae937f01705f9a824ebc821fd939da80b3b5ea7",
+		"ghcr.io/msg-ctf/challenges/web3-infinite-pack/server@sha256:43cc32512af5ce6a06d5a1541be1f9ca2397a1dab744d37580d4bfc4a04b437b",
+	} {
+		if !catalog.AllowsFlag(image) {
+			t.Fatalf("approved image must require FLAG: %s", image)
 		}
 	}
 	if _, managed := catalog.managed["ghcr.io/msg-ctf/challenges/web-afterimage/indexer"]; !managed {

@@ -102,6 +102,7 @@ const (
 )
 
 type Request struct {
+	VMProfile       string `json:",omitempty"`
 	WorkloadProfile WorkloadProfile
 	Containers      []ContainerRequirement
 	WorkloadNetwork *WorkloadNetwork `json:",omitempty"`

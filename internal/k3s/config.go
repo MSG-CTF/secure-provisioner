@@ -65,7 +65,7 @@ func LoadRegistry(path string, factory ClientFactory) (*Registry, error) {
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return nil, newRuntimeError("CONFIG_INVALID", false, err)
 	}
-	if config.Clusters == nil || len(*config.Clusters) == 0 {
+	if config.Clusters == nil {
 		return nil, newRuntimeError("CONFIG_INVALID", false, nil)
 	}
 	clusters := make([]ClusterConfig, len(*config.Clusters))

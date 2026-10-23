@@ -1,0 +1,153 @@
+{
+  "schema_version": 1,
+  "managed_repositories": [
+    "ghcr.io/msg-ctf/challenges/pwn-random6/random6",
+    "ghcr.io/msg-ctf/challenges/pwn-note/service",
+    "ghcr.io/msg-ctf/challenges/pwn-ghost-file/chall",
+    "ghcr.io/msg-ctf/challenges/pwn-price-tag/price-tag"
+  ],
+  "images": [
+    {
+      "image": "ghcr.io/msg-ctf/challenges/pwn-random6/random6@sha256:b1984430b5a4fe4761a9dcd425359fa398bc95ca5bddef6d4f3d53948f4fdd9d",
+      "container": "random6",
+      "isolation_profile": "PWN",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 31337,
+      "ports": [
+        6666
+      ],
+      "exposed_ports": [
+        6666
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 32
+        }
+      ]
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/pwn-random6/random6@sha256:8005b9a77163b476a4638d06905f8a18b5770311fa033e163fc706000d3b834a",
+      "container": "random6",
+      "isolation_profile": "PWN",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 31337,
+      "ports": [6666],
+      "exposed_ports": [6666],
+      "writable_paths": [{"path": "/tmp", "size_mib": 32}]
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/pwn-note/service@sha256:c449da75a6a3eb0560b1d43034771749338897219afc560104da5c9b6c6a5471",
+      "container": "service",
+      "isolation_profile": "PWN",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 1001,
+      "ports": [
+        9999
+      ],
+      "exposed_ports": [
+        9999
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 32
+        }
+      ],
+      "flag_file_path": "/home/ctf/flag.txt"
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/pwn-ghost-file/chall@sha256:fe5c7242ce948ea3817d2bfe8b3c146f324af5dbb0bbf617bc3fbd36ceb8046b",
+      "container": "chall",
+      "isolation_profile": "PWN",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 1000,
+      "ports": [
+        31337
+      ],
+      "exposed_ports": [
+        31337
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 32
+        }
+      ],
+      "flag_file_path": "/flag"
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/pwn-price-tag/price-tag@sha256:1556a19564052695fec77b15c81c70a9b9e609df0f51681eae4d00fe667b87ac",
+      "container": "price-tag",
+      "isolation_profile": "PWN",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 1000,
+      "ports": [
+        9999
+      ],
+      "exposed_ports": [
+        9999
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 32
+        }
+      ],
+      "flag_file_path": "/home/player/flag.txt"
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/pwn-note/service@sha256:3c1dcb4478d82564ad298b1cddee770f5d786a6d1052b1f842a538f91439868e",
+      "container": "service",
+      "isolation_profile": "PWN",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 1001,
+      "ports": [9999],
+      "exposed_ports": [9999],
+      "writable_paths": [{"path": "/tmp", "size_mib": 32}],
+      "flag_file_path": "/home/ctf/flag.txt"
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/pwn-ghost-file/chall@sha256:59bdd9111ad77a9a682f0e862eade12193b62d9fd6fd77b9ee810cd7e06460bc",
+      "container": "chall",
+      "isolation_profile": "PWN",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 1000,
+      "ports": [31337],
+      "exposed_ports": [31337],
+      "writable_paths": [{"path": "/tmp", "size_mib": 32}],
+      "flag_file_path": "/flag"
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/pwn-price-tag/price-tag@sha256:fb15aab14664eafbcccfa94edec0597e81f6d78c575b8b562547bc8955dee751",
+      "container": "price-tag",
+      "isolation_profile": "PWN",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 1000,
+      "ports": [9999],
+      "exposed_ports": [9999],
+      "writable_paths": [{"path": "/tmp", "size_mib": 32}],
+      "flag_file_path": "/home/player/flag.txt"
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/pwn-price-tag/price-tag@sha256:c92f888b7e01c931815409fb61e7224b5ab56d2603fc15edbc3568127aad7169",
+      "container": "price-tag",
+      "isolation_profile": "PWN",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 1000,
+      "ports": [9999],
+      "exposed_ports": [9999],
+      "writable_paths": [{"path": "/tmp", "size_mib": 32}],
+      "flag_file_path": "/home/player/flag.txt"
+    }
+  ]
+}

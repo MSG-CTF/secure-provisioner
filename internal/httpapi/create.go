@@ -17,6 +17,7 @@ import (
 type RuntimeType string
 
 const RuntimeTypeKubernetes RuntimeType = "KUBERNETES"
+const RuntimeTypeVM RuntimeType = "VM"
 
 type RuntimeTarget struct {
 	RuntimeType RuntimeType `json:"runtime_type"`
@@ -38,17 +39,19 @@ type RuntimeHealthcheck struct {
 }
 
 type RuntimeContainer struct {
-	Name          string            `json:"name"`
-	Image         string            `json:"image"`
-	Ports         []int             `json:"ports"`
-	Expose        bool              `json:"expose"`
-	ExposedPorts  []int             `json:"exposed_ports,omitempty"`
-	RunAsUser     int64             `json:"run_as_user"`
-	WritablePaths []WritablePath    `json:"writable_paths,omitempty"`
-	Env           map[string]string `json:"env,omitempty"`
-	SecretRef     string            `json:"secret_ref,omitempty"`
-	readinessHTTP *provisioner.HTTPReadiness
-	requiresFlag  bool
+	Name           string            `json:"name"`
+	Image          string            `json:"image"`
+	Ports          []int             `json:"ports"`
+	Expose         bool              `json:"expose"`
+	ExposedPorts   []int             `json:"exposed_ports,omitempty"`
+	RunAsUser      int64             `json:"run_as_user"`
+	WritablePaths  []WritablePath    `json:"writable_paths,omitempty"`
+	Env            map[string]string `json:"env,omitempty"`
+	SecretRef      string            `json:"secret_ref,omitempty"`
+	readinessHTTP  *provisioner.HTTPReadiness
+	tcpStartupOnly bool
+	requiresFlag   bool
+	flagFilePath   string
 }
 
 func (container *RuntimeContainer) UnmarshalJSON(data []byte) error {
@@ -133,6 +136,7 @@ type ResourceLimits struct {
 }
 
 type CreateWorkloadRequest struct {
+	VMProfile        string             `json:"-"`
 	RequestID        string             `json:"request_id"`
 	InstanceID       string             `json:"instance_id"`
 	TeamID           provisioner.TeamID `json:"team_id"`
@@ -251,7 +255,7 @@ func (request *CreateWorkloadRequest) Validate() error {
 		request.IsolationProfile != string(isolation.WorkloadProfilePwn) {
 		return fmt.Errorf("isolation_profile must be WEB or PWN")
 	}
-	if request.Target.RuntimeType != RuntimeTypeKubernetes {
+	if request.Target.RuntimeType != RuntimeTypeKubernetes && request.Target.RuntimeType != RuntimeTypeVM {
 		return fmt.Errorf("runtime_type must be %s", RuntimeTypeKubernetes)
 	}
 	if strings.TrimSpace(request.Target.TargetID) == "" {
@@ -260,11 +264,6 @@ func (request *CreateWorkloadRequest) Validate() error {
 	containers, err := request.normalizedContainers()
 	if err != nil {
 		return err
-	}
-	for _, container := range containers {
-		if len(container.PublicPorts()) > 1 && container.ReadinessHTTP == nil {
-			return fmt.Errorf("containers exposing multiple ports require an HTTP healthcheck")
-		}
 	}
 	if request.Workload.ResourceLimits.CPUMillicores <= 0 {
 		return fmt.Errorf("cpu_millicores must be positive")
@@ -379,6 +378,8 @@ func (request CreateWorkloadRequest) normalizedContainers() ([]provisioner.Workl
 		normalized := provisioner.WorkloadContainer{
 			Name: container.Name, Image: container.Image, Ports: ports, Expose: container.Expose,
 			Env: maps.Clone(container.Env), SecretRef: container.SecretRef, RequiresFlag: container.requiresFlag,
+			FlagFilePath:   container.flagFilePath,
+			TCPStartupOnly: container.tcpStartupOnly,
 		}
 		if container.readinessHTTP != nil {
 			readiness := *container.readinessHTTP
@@ -421,6 +422,9 @@ func (request CreateWorkloadRequest) withHealthcheck(containers []provisioner.Wo
 	for index := range containers {
 		if containers[index].Name != check.Container {
 			continue
+		}
+		if containers[index].TCPStartupOnly {
+			return nil, fmt.Errorf("reviewed TCP startup policy cannot be combined with an HTTP healthcheck")
 		}
 		for _, port := range containers[index].Ports {
 			if port == check.Port {
@@ -503,6 +507,7 @@ func (request CreateWorkloadRequest) toPolicyRequest(containers []provisioner.Wo
 		}
 	}
 	return isolation.Request{
+		VMProfile:       request.VMProfile,
 		WorkloadProfile: isolation.WorkloadProfile(request.IsolationProfile),
 		Containers:      requirements,
 		WorkloadNetwork: isolation.CloneWorkloadNetwork(request.workloadNetwork),

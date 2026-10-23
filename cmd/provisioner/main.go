@@ -20,11 +20,14 @@ import (
 	"github.com/MSG-CTF/secure-provisioner/internal/runtimebinding"
 	"github.com/MSG-CTF/secure-provisioner/internal/runtimeops"
 	"github.com/MSG-CTF/secure-provisioner/internal/runtimepg"
+	"github.com/MSG-CTF/secure-provisioner/internal/vm"
 )
 
 type appConfig struct {
+	APIOnly               bool
 	Address               string
 	RegistryPath          string
+	VMTargetsPath         string
 	ImagePoliciesPath     string
 	BackendSecretURL      string
 	BackendSecretToken    string
@@ -47,10 +50,30 @@ type application struct {
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	mode, err := deploymentMode(os.Args[1:])
+	if err != nil {
+		logger.Error("invalid startup mode")
+		os.Exit(2)
+	}
+	if mode == "capabilities" {
+		fmt.Println(`{"protocol":1,"api_only":true,"handoff_lock":true}`)
+		return
+	}
+	if mode == "handoff" {
+		if err := runHandoff(os.Getenv, os.Stdin, os.Stdout); err != nil {
+			logger.Error("deployment handoff was not completed")
+			os.Exit(1)
+		}
+		return
+	}
 	config, err := loadConfig(os.Getenv)
 	if err != nil {
 		logger.Error("invalid secure provisioner configuration", "error", err)
 		os.Exit(1)
+	}
+	if mode == "api-only" {
+		config.APIOnly = true
+		config.Address = "127.0.0.1:18080"
 	}
 	app, err := newApplication(config, k3s.KubeconfigClientFactory{})
 	if err != nil {
@@ -71,6 +94,7 @@ func loadConfig(getenv func(string) string) (appConfig, error) {
 		return appConfig{}, errors.New("environment reader is required")
 	}
 	config := appConfig{
+		VMTargetsPath:      strings.TrimSpace(getenv("PROVISIONER_VM_TARGETS")),
 		Address:            valueOrDefault(getenv("PROVISIONER_ADDR"), "127.0.0.1:8080"),
 		RegistryPath:       strings.TrimSpace(getenv("PROVISIONER_CLUSTER_REGISTRY")),
 		ImagePoliciesPath:  strings.TrimSpace(getenv("PROVISIONER_IMAGE_POLICIES")),
@@ -164,6 +188,9 @@ func positiveDurationSetting(getenv func(string) string, key string, fallback ti
 }
 
 func newApplication(config appConfig, factory k3s.ClientFactory) (*application, error) {
+	if config.APIOnly && config.RuntimeStore.Mode != "postgres" {
+		return nil, errors.New("deployment API bridge requires the PostgreSQL store")
+	}
 	registry, err := k3s.LoadRegistry(config.RegistryPath, factory)
 	if err != nil {
 		return nil, err
@@ -191,6 +218,7 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 		RollbackTimeout:    config.RollbackTimeout,
 		Secrets:            secretResolver,
 		RequiredFlagImages: imagePolicies.RequiredFlagImages(),
+		RequiredFlagFiles:  imagePolicies.RequiredFlagFiles(),
 	})
 	if err != nil {
 		return nil, err
@@ -210,8 +238,13 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 	var operationStore operations.Store = operations.NewMemoryStore(nil)
 	var deleteCoordinator runtimeops.DeleteCoordinator
 	var closeStore func() error
+	readiness := httpapi.ReadinessConfig{StoreMode: config.RuntimeStore.Mode, APIOnly: config.APIOnly}
 	if config.RuntimeStore.Mode == "postgres" {
-		database, openErr := runtimepg.Open(context.Background(), config.RuntimeStore.DatabaseURL)
+		openStore := runtimepg.Open
+		if config.APIOnly {
+			openStore = runtimepg.OpenExisting
+		}
+		database, openErr := openStore(context.Background(), config.RuntimeStore.DatabaseURL)
 		if openErr != nil {
 			return nil, openErr
 		}
@@ -219,14 +252,30 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 		operationStore = database.Operations()
 		deleteCoordinator = database.DeleteCoordinator()
 		closeStore = database.Close
+		readiness.CheckDatabase = database.CheckReadiness
+	}
+	var create runtimeops.CreateAdapter = createAdapter
+	var status runtimeops.StatusSource = statusReader
+	var deleteWorkload runtimeops.DeleteAdapter = deleteAdapter
+	var resolver isolation.Resolver = isolation.NewStaticResolver()
+	var vmPolicy func(*httpapi.CreateWorkloadRequest) error
+	if config.VMTargetsPath != "" {
+		route, routeErr := vm.Load(config.VMTargetsPath, secretResolver, createAdapter, statusReader, deleteAdapter)
+		if routeErr != nil {
+			if closeStore != nil {
+				_ = closeStore()
+			}
+			return nil, routeErr
+		}
+		create, status, deleteWorkload, resolver, vmPolicy = route, route, route, route, route.Apply
 	}
 	service, err := runtimeops.NewService(
-		createAdapter,
-		statusReader,
-		deleteAdapter,
+		create,
+		status,
+		deleteWorkload,
 		bindingStore,
 		operationStore,
-		isolation.NewStaticResolver(),
+		resolver,
 		runtimeops.Config{
 			MaxAttempts:       config.MaxAttempts,
 			CleanupTimeout:    config.RollbackTimeout,
@@ -250,7 +299,7 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 		return nil, err
 	}
 	return &application{
-		handler:   httpapi.NewHandlerWithRuntimePolicies(service, service, config.ServiceAuth, imagePolicies),
+		handler:   httpapi.NewHandlerWithVM(service, service, config.ServiceAuth, imagePolicies, readiness, vmPolicy),
 		runWorker: service.Run,
 		close:     closeStore,
 	}, nil
@@ -268,7 +317,8 @@ func runApplication(ctx context.Context, config appConfig, app *application, log
 	if ctx == nil || app == nil || app.handler == nil || app.runWorker == nil || logger == nil {
 		return errors.New("application dependencies are required")
 	}
-	runCtx, cancel := context.WithCancel(ctx)
+	// HTTP requests must finish before cancellation reaches the worker and store.
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
 	server := &http.Server{
 		Addr:              config.Address,
@@ -281,11 +331,15 @@ func runApplication(ctx context.Context, config appConfig, app *application, log
 	serverErrors := make(chan error, 1)
 	workerErrors := make(chan error, 1)
 	go func() { serverErrors <- server.ListenAndServe() }()
-	go func() { workerErrors <- app.runWorker(runCtx) }()
+	if config.APIOnly {
+		logger.Info("deployment API bridge: workers disabled; schema migrations disabled")
+	} else {
+		go func() { workerErrors <- app.runWorker(runCtx) }()
+	}
 	logger.Info("starting secure provisioner", "address", config.Address)
 
 	var runErr error
-	workerStopped := false
+	workerStopped := config.APIOnly
 	select {
 	case <-ctx.Done():
 		logger.Info("shutdown signal received")

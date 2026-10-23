@@ -233,7 +233,6 @@ func TestLoadRegistryRejectsMissingRequiredJSONFields(t *testing.T) {
 	}{
 		{name: "missing clusters", content: `{}`},
 		{name: "null clusters", content: `{"clusters":null}`},
-		{name: "empty clusters", content: `{"clusters":[]}`},
 		{name: "missing enabled", content: `{"clusters":[` + clusterWithoutEnabled + `]}`},
 		{name: "null enabled", content: `{"clusters":[` + strings.TrimSuffix(clusterWithoutEnabled, "}") + `,"enabled":null}]}`},
 	} {
@@ -243,6 +242,20 @@ func TestLoadRegistryRejectsMissingRequiredJSONFields(t *testing.T) {
 				t.Fatalf("code = %q, want CONFIG_INVALID", runtimeErrorCode(t, err))
 			}
 		})
+	}
+}
+
+func TestLoadRegistryAcceptsExplicitEmptyClusterListWithoutKubeconfig(t *testing.T) {
+	factory := &sequenceFactory{}
+	registry, err := LoadRegistry(writeRegistryFile(t, `{"clusters":[]}`), factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if factory.calls != 0 {
+		t.Fatalf("kubeconfig factory calls = %d, want 0", factory.calls)
+	}
+	if _, err := registry.LookupForCreate("unconfigured-target"); runtimeErrorCode(t, err) != "TARGET_NOT_FOUND" {
+		t.Fatalf("empty registry lookup error = %v, want TARGET_NOT_FOUND", err)
 	}
 }
 

@@ -1,0 +1,337 @@
+{
+  "compose": {
+    "networks": {
+      "appnet": {
+        "internal": true
+      },
+      "cartridgenet": {
+        "internal": true
+      },
+      "edge": {},
+      "exportnet": {
+        "internal": true
+      },
+      "vaultnet": {
+        "internal": true
+      }
+    },
+    "services": {
+      "bot": {
+        "cgroup_parent": "msg-afterimage.slice",
+        "depends_on": {
+          "core": {
+            "condition": "service_healthy"
+          }
+        },
+        "expose": [
+          "4000"
+        ],
+        "image": "ghcr.io/msg-ctf/challenges/web-afterimage/bot@sha256:23df4e201846c3f12f03a10c36b9ff8a23ac54a0732dfd209f238bf053234f5b",
+        "logging": {
+          "driver": "json-file",
+          "options": {
+            "max-file": "3",
+            "max-size": "1m"
+          }
+        },
+        "networks": [
+          "appnet"
+        ],
+        "restart": "unless-stopped",
+        "shm_size": "1gb",
+        "storage_opt": {
+          "size": "250M"
+        }
+      },
+      "case-vault": {
+        "cap_drop": [
+          "ALL"
+        ],
+        "cgroup_parent": "msg-afterimage.slice",
+        "cpus": 0.5,
+        "expose": [
+          "4400"
+        ],
+        "healthcheck": {
+          "interval": "3s",
+          "retries": 20,
+          "test": [
+            "CMD",
+            "node",
+            "healthcheck.js"
+          ],
+          "timeout": "2s"
+        },
+        "image": "ghcr.io/msg-ctf/challenges/web-afterimage/case-vault@sha256:3b083576ed6e04877b0707797d307a9d7f22c4bbb9268744ab4f935a4f84df28",
+        "logging": {
+          "driver": "json-file",
+          "options": {
+            "max-file": "3",
+            "max-size": "1m"
+          }
+        },
+        "mem_limit": "96m",
+        "networks": [
+          "vaultnet"
+        ],
+        "pids_limit": 32,
+        "read_only": true,
+        "restart": "unless-stopped",
+        "security_opt": [
+          "no-new-privileges:true"
+        ],
+        "storage_opt": {
+          "size": "250M"
+        },
+        "tmpfs": [
+          "/tmp:rw,noexec,nosuid,size=8m"
+        ]
+      },
+      "core": {
+        "cgroup_parent": "msg-afterimage.slice",
+        "depends_on": {
+          "case-vault": {
+            "condition": "service_healthy"
+          }
+        },
+        "expose": [
+          "3000"
+        ],
+        "healthcheck": {
+          "interval": "3s",
+          "retries": 20,
+          "test": [
+            "CMD",
+            "node",
+            "healthcheck.js"
+          ],
+          "timeout": "2s"
+        },
+        "image": "ghcr.io/msg-ctf/challenges/web-afterimage/core@sha256:94783ad7da386efe96ecb1191883373ea61e8495c02fba47da09f6b7e3724026",
+        "logging": {
+          "driver": "json-file",
+          "options": {
+            "max-file": "3",
+            "max-size": "1m"
+          }
+        },
+        "networks": [
+          "appnet",
+          "vaultnet"
+        ],
+        "restart": "unless-stopped",
+        "storage_opt": {
+          "size": "250M"
+        }
+      },
+      "exporter": {
+        "cgroup_parent": "msg-afterimage.slice",
+        "expose": [
+          "4100"
+        ],
+        "healthcheck": {
+          "interval": "3s",
+          "retries": 20,
+          "test": [
+            "CMD",
+            "node",
+            "healthcheck.js"
+          ],
+          "timeout": "2s"
+        },
+        "image": "ghcr.io/msg-ctf/challenges/web-afterimage/exporter@sha256:02da90eb73db1fbecad291655086410615ddb8db723447c73f845f6828f4c098",
+        "logging": {
+          "driver": "json-file",
+          "options": {
+            "max-file": "3",
+            "max-size": "1m"
+          }
+        },
+        "networks": [
+          "exportnet"
+        ],
+        "restart": "unless-stopped",
+        "storage_opt": {
+          "size": "250M"
+        }
+      },
+      "indexer": {
+        "cap_add": [
+          "SETUID",
+          "SETGID"
+        ],
+        "cap_drop": [
+          "ALL"
+        ],
+        "cgroup_parent": "msg-afterimage.slice",
+        "cpus": 0.75,
+        "expose": [
+          "4300"
+        ],
+        "healthcheck": {
+          "interval": "3s",
+          "retries": 20,
+          "test": [
+            "CMD",
+            "node",
+            "healthcheck.js"
+          ],
+          "timeout": "2s"
+        },
+        "image": "ghcr.io/msg-ctf/challenges/web-afterimage/indexer@sha256:2b22f2d3617c7b1286382d2771e60a52ee1d3e5a0aad71c82bf09c2d7defcd1e",
+        "logging": {
+          "driver": "json-file",
+          "options": {
+            "max-file": "3",
+            "max-size": "1m"
+          }
+        },
+        "mem_limit": "192m",
+        "networks": [
+          "cartridgenet"
+        ],
+        "pids_limit": 48,
+        "read_only": true,
+        "restart": "unless-stopped",
+        "security_opt": [
+          "no-new-privileges:true"
+        ],
+        "storage_opt": {
+          "size": "250M"
+        },
+        "tmpfs": [
+          "/tmp:rw,noexec,nosuid,size=16m",
+          "/var/spool/m13:rw,noexec,nosuid,size=1m,mode=0755,uid=0,gid=0"
+        ]
+      },
+      "inventory-metadata": {
+        "cgroup_parent": "msg-afterimage.slice",
+        "expose": [
+          "4200"
+        ],
+        "image": "ghcr.io/msg-ctf/challenges/web-afterimage/inventory-metadata@sha256:dc452c26c081bc351964013e2246061a57c288a3fd5497065dcfecee5e3a5eb1",
+        "logging": {
+          "driver": "json-file",
+          "options": {
+            "max-file": "3",
+            "max-size": "1m"
+          }
+        },
+        "networks": [
+          "exportnet"
+        ],
+        "restart": "unless-stopped",
+        "storage_opt": {
+          "size": "250M"
+        }
+      },
+      "portal": {
+        "cgroup_parent": "msg-afterimage.slice",
+        "depends_on": {
+          "core": {
+            "condition": "service_healthy"
+          },
+          "exporter": {
+            "condition": "service_healthy"
+          },
+          "indexer": {
+            "condition": "service_healthy"
+          }
+        },
+        "image": "ghcr.io/msg-ctf/challenges/web-afterimage/portal@sha256:d6afb41a588fea8218f8889e1c99e666ab33b65f5f46446cd7a57305af595674",
+        "logging": {
+          "driver": "json-file",
+          "options": {
+            "max-file": "3",
+            "max-size": "1m"
+          }
+        },
+        "networks": [
+          "edge",
+          "appnet",
+          "exportnet",
+          "cartridgenet"
+        ],
+        "ports": [
+          "0.0.0.0:18080:8080"
+        ],
+        "restart": "unless-stopped",
+        "storage_opt": {
+          "size": "250M"
+        }
+      }
+    }
+  },
+  "compose_source_sha256": "9f8b8d4a5b9244fe66ec0ac3f9e3680bfd3697a0887cf79a404d41b1d5de41a9",
+  "env_names": {
+    "bot": [
+      "BIND_HOST",
+      "BOT_CONCURRENCY",
+      "BOT_MAX_PENDING_PER_USER",
+      "CHROME_PATH",
+      "CORE_INTERNAL_URL",
+      "INTERNAL_TOKEN",
+      "PORT",
+      "PUBLIC_BASE_URL",
+      "PUBLIC_COOKIE_DOMAIN",
+      "VISIT_MS"
+    ],
+    "case-vault": [
+      "BIND_HOST",
+      "FLAG",
+      "INTERNAL_TOKEN",
+      "INVENTORY_SIGNING_KEY",
+      "PORT",
+      "REEL_FRAGMENT"
+    ],
+    "core": [
+      "BIND_HOST",
+      "BOT_URL",
+      "CARTRIDGE_KEY",
+      "CASE_VAULT_HOST",
+      "CASE_VAULT_PORT",
+      "INTERNAL_TOKEN",
+      "PORT"
+    ],
+    "exporter": [
+      "BIND_HOST",
+      "MAX_BYTES",
+      "PORT"
+    ],
+    "indexer": [
+      "BIND_HOST",
+      "CARTRIDGE_KEY",
+      "PORT",
+      "REEL_FRAGMENT"
+    ],
+    "inventory-metadata": [
+      "BIND_HOST",
+      "INVENTORY_SIGNING_KEY",
+      "PORT"
+    ],
+    "portal": [
+      "BIND_HOST",
+      "CARTRIDGE_HOST",
+      "CARTRIDGE_PORT",
+      "CORE_HOST",
+      "CORE_PORT",
+      "EXPORTER_HOST",
+      "EXPORTER_PORT",
+      "INTERNAL_TOKEN",
+      "PORT"
+    ]
+  },
+  "public_readiness": {
+    "path": "/health",
+    "port": 18080
+  },
+  "registry_revision": 578,
+  "resource_limits": {
+    "cpu_millicores": 2000,
+    "ephemeral_storage_mib": 2048,
+    "memory_mib": 4000
+  },
+  "schema_version": 1,
+  "source_sha": "e2199fdf0ce1f05652518246001af8cd3e4c8490",
+  "target_id": "vm-afterimage-20261020"
+}

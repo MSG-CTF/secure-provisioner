@@ -3,6 +3,7 @@ package runtimeops
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -127,6 +128,28 @@ func (s *Service) EnqueueCreate(command provisioner.CreateWorkloadCommand) (oper
 		}
 	}
 	return operation, created, err
+}
+
+// FindCreateByRequest returns an accepted operation without applying today's
+// image policy. Old snapshots without an input fingerprint use the legacy path.
+func (s *Service) FindCreateByRequest(requestID, fingerprint string) (operations.Operation, bool, error) {
+	existing, err := s.operations.GetByRequestID(requestID)
+	if errors.Is(err, operations.ErrOperationNotFound) {
+		return operations.Operation{}, false, nil
+	}
+	if err != nil {
+		return operations.Operation{}, false, err
+	}
+	if existing.Type != operations.OperationTypeCreate || existing.CreateCommand == nil {
+		return operations.Operation{}, false, operations.ErrIdempotencyConflict
+	}
+	if existing.CreateCommand.RequestFingerprint == "" {
+		return operations.Operation{}, false, nil
+	}
+	if fingerprint == "" || existing.CreateCommand.RequestFingerprint != fingerprint {
+		return operations.Operation{}, false, operations.ErrIdempotencyConflict
+	}
+	return existing, true, nil
 }
 
 func (s *Service) existingCreateOperation(command provisioner.CreateWorkloadCommand) (operations.Operation, bool, error) {
@@ -389,7 +412,8 @@ func (s *Service) Run(ctx context.Context) error {
 func deleteMatchesBinding(command provisioner.DeleteWorkloadCommand, binding runtimebinding.Binding) bool {
 	return command.InstanceID == binding.InstanceID &&
 		command.TeamID == binding.TeamID &&
-		command.RuntimeType == provisioner.RuntimeTypeKubernetes &&
+		((command.RuntimeType == provisioner.RuntimeTypeKubernetes && !strings.HasPrefix(binding.IsolationProfile, "DEDICATED_VM@")) ||
+			(command.RuntimeType == provisioner.RuntimeTypeVM && strings.HasPrefix(binding.IsolationProfile, "DEDICATED_VM@"))) &&
 		command.TargetID == binding.TargetID &&
 		command.RuntimeWorkloadID == binding.RuntimeWorkloadID
 }

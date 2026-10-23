@@ -42,7 +42,7 @@ func (request DeleteWorkloadRequest) Validate() error {
 	if !request.TeamID.Valid() {
 		return fmt.Errorf("team_id must be a canonical UUID")
 	}
-	if request.Target.RuntimeType != RuntimeTypeKubernetes {
+	if request.Target.RuntimeType != RuntimeTypeKubernetes && request.Target.RuntimeType != RuntimeTypeVM {
 		return fmt.Errorf("runtime_type must be %s", RuntimeTypeKubernetes)
 	}
 	if strings.TrimSpace(request.Target.TargetID) == "" {

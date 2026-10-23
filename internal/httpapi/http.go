@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -13,6 +15,7 @@ import (
 )
 
 type API struct {
+	vmPolicy        func(*CreateWorkloadRequest) error
 	createWorkload  provisioner.CreateWorkloadUseCase
 	runtime         RuntimeUseCase
 	directResolver  isolation.Resolver
@@ -22,28 +25,43 @@ type API struct {
 }
 
 func NewHandler(createWorkload provisioner.CreateWorkloadUseCase, authConfig ServiceAuthConfig) http.Handler {
-	return newHandler(createWorkload, nil, authConfig, nil)
+	return newHandler(createWorkload, nil, authConfig, nil, nil)
 }
 
 func NewHandlerWithRuntime(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase, authConfig ServiceAuthConfig) http.Handler {
-	return newHandler(createWorkload, runtime, authConfig, nil)
+	return newHandler(createWorkload, runtime, authConfig, nil, nil)
 }
 
 func NewHandlerWithRuntimePolicies(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase, authConfig ServiceAuthConfig, policies *ImagePolicyCatalog) http.Handler {
-	return newHandler(createWorkload, runtime, authConfig, policies)
+	return newHandler(createWorkload, runtime, authConfig, policies, nil)
 }
 
-func newHandler(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase, authConfig ServiceAuthConfig, policies *ImagePolicyCatalog) http.Handler {
+func NewHandlerWithRuntimeReadiness(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase, authConfig ServiceAuthConfig, policies *ImagePolicyCatalog, readiness ReadinessConfig) http.Handler {
+	return newHandler(createWorkload, runtime, authConfig, policies, &readiness)
+}
+
+func NewHandlerWithVM(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase, authConfig ServiceAuthConfig, policies *ImagePolicyCatalog, readiness ReadinessConfig, vmPolicy func(*CreateWorkloadRequest) error) http.Handler {
+	return newHandler(createWorkload, runtime, authConfig, policies, &readiness, vmPolicy)
+}
+
+func newHandler(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase, authConfig ServiceAuthConfig, policies *ImagePolicyCatalog, readiness *ReadinessConfig, vmPolicies ...func(*CreateWorkloadRequest) error) http.Handler {
 	api := &API{createWorkload: createWorkload, runtime: runtime, imagePolicies: policies, ciSmokeTeamID: authConfig.CISmokeTeamID, ciSmokeTargetID: authConfig.CISmokeTargetID}
 	if runtime == nil {
 		api.directResolver = isolation.NewStaticResolver()
 	}
+	if len(vmPolicies) > 0 {
+		api.vmPolicy = vmPolicies[0]
+	}
 	mux := http.NewServeMux()
+	if readiness != nil {
+		mux.HandleFunc("GET /internal/v1/healthz", readiness.handle)
+	}
 	mux.HandleFunc("POST /internal/v1/instances", api.handleCreateInstance)
 	if runtime != nil {
 		mux.HandleFunc("GET /internal/v1/instances/{instance_id}/runtime-status", api.handleRuntimeStatus)
 		mux.HandleFunc("DELETE /internal/v1/instances/{instance_id}", api.handleDeleteInstance)
 		mux.HandleFunc("GET /internal/v1/operations/{operation_id}", api.handleGetOperation)
+		mux.HandleFunc("POST /internal/v1/instances/{instance_id}/reconcile_create", api.handleReconcileCreate)
 	}
 	return newServiceAuthenticator(authConfig).wrap(requestSizeLimit(mux))
 }
@@ -64,7 +82,44 @@ func (api *API) handleCreateInstance(writer http.ResponseWriter, request *http.R
 		writeAPIError(writer, http.StatusForbidden, "FORBIDDEN", "CI smoke token cannot create this workload")
 		return
 	}
-	if err := api.imagePolicies.Apply(&createRequest); err != nil {
+	encodedInput, err := json.Marshal(createRequest)
+	if err != nil {
+		writeAPIError(writer, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
+		return
+	}
+	inputHash := sha256.Sum256(encodedInput)
+	fingerprint := hex.EncodeToString(inputHash[:])
+	if replay, ok := api.runtime.(interface {
+		FindCreateByRequest(string, string) (operations.Operation, bool, error)
+	}); ok {
+		operation, found, err := replay.FindCreateByRequest(createRequest.RequestID, fingerprint)
+		if err != nil {
+			if errors.Is(err, operations.ErrIdempotencyConflict) {
+				writeAPIError(writer, http.StatusConflict, "REQUEST_ID_CONFLICT", "request_id is already used by another operation")
+			} else {
+				writeAPIError(writer, http.StatusBadGateway, "CREATE_QUEUE_FAILED", "workload creation could not be queued")
+			}
+			return
+		}
+		if found {
+			writeAcceptedOperation(writer, operation, false)
+			return
+		}
+	}
+	if api.vmPolicy != nil {
+		if err := api.vmPolicy(&createRequest); err != nil {
+			writeAPIError(writer, http.StatusUnprocessableEntity, "VM_POLICY_REJECTED", "dedicated VM policy rejected the workload")
+			return
+		}
+	} else if createRequest.Target.RuntimeType == RuntimeTypeVM {
+		writeAPIError(writer, http.StatusUnprocessableEntity, "VM_POLICY_REJECTED", "dedicated VM targets are not configured")
+		return
+	}
+	var policyErr error
+	if createRequest.Target.RuntimeType != RuntimeTypeVM {
+		policyErr = api.imagePolicies.Apply(&createRequest)
+	}
+	if err := policyErr; err != nil {
 		writeAPIError(writer, http.StatusUnprocessableEntity, "IMAGE_POLICY_REJECTED", err.Error())
 		return
 	}
@@ -74,7 +129,9 @@ func (api *API) handleCreateInstance(writer http.ResponseWriter, request *http.R
 	}
 
 	if api.runtime != nil {
-		operation, created, err := api.runtime.EnqueueCreate(createRequest.ToCommand())
+		command := createRequest.ToCommand()
+		command.RequestFingerprint = fingerprint
+		operation, created, err := api.runtime.EnqueueCreate(command)
 		if err != nil {
 			if errors.Is(err, isolation.ErrPolicyRejected) {
 				writeAPIError(writer, http.StatusUnprocessableEntity, "ISOLATION_POLICY_REJECTED", "isolation policy was rejected")

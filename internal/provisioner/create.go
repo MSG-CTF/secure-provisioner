@@ -11,6 +11,7 @@ import (
 type RuntimeType string
 
 const RuntimeTypeKubernetes RuntimeType = "KUBERNETES"
+const RuntimeTypeVM RuntimeType = "VM"
 
 var ErrRuntimeUnavailable = errors.New("runtime adapter is unavailable")
 
@@ -35,11 +36,13 @@ type WorkloadContainer struct {
 	Expose bool
 	// ExposedPorts is used for a partial selection. Omitted legacy payloads keep
 	// their original Expose semantics and serialized spec hashes.
-	ExposedPorts  []int             `json:",omitempty"`
-	ReadinessHTTP *HTTPReadiness    `json:",omitempty"`
-	Env           map[string]string `json:",omitempty"`
-	SecretRef     string            `json:",omitempty"`
-	RequiresFlag  bool              `json:",omitempty"`
+	ExposedPorts   []int             `json:",omitempty"`
+	ReadinessHTTP  *HTTPReadiness    `json:",omitempty"`
+	TCPStartupOnly bool              `json:",omitempty"`
+	Env            map[string]string `json:",omitempty"`
+	SecretRef      string            `json:",omitempty"`
+	RequiresFlag   bool              `json:",omitempty"`
+	FlagFilePath   string            `json:",omitempty"`
 }
 
 type HTTPReadiness struct {
@@ -58,15 +61,18 @@ func (container WorkloadContainer) PublicPorts() []int {
 }
 
 type CreateWorkloadCommand struct {
-	RequestID      string
-	InstanceID     string
-	TeamID         TeamID
-	RuntimeType    RuntimeType
-	TargetID       string
-	Containers     []WorkloadContainer
-	ResourceLimits ResourceLimits
-	PolicyRequest  isolation.Request
-	Policy         isolation.ResolvedPolicy
+	// RequestFingerprint identifies the caller input before server-owned policy
+	// overrides. Legacy snapshots decode this field to an empty string.
+	RequestFingerprint string
+	RequestID          string
+	InstanceID         string
+	TeamID             TeamID
+	RuntimeType        RuntimeType
+	TargetID           string
+	Containers         []WorkloadContainer
+	ResourceLimits     ResourceLimits
+	PolicyRequest      isolation.Request
+	Policy             isolation.ResolvedPolicy
 }
 
 type CreateWorkloadResult struct {

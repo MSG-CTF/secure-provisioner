@@ -199,6 +199,78 @@ func TestNewApplicationQueuesCreateThroughRuntimeService(t *testing.T) {
 	}
 }
 
+func TestNewApplicationWithEmptyRegistryFailsCreateWithoutK3s(t *testing.T) {
+	registryPath := filepath.Join(t.TempDir(), "clusters.json")
+	if err := os.WriteFile(registryPath, []byte(`{"clusters":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config, err := loadConfig(environment(map[string]string{
+		"PROVISIONER_CLUSTER_REGISTRY": registryPath,
+		"PROVISIONER_SERVICE_TOKEN":    validCurrentServiceToken,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, err := newApplication(config, nil)
+	if err != nil {
+		t.Fatalf("API-only startup failed: %v", err)
+	}
+
+	body := `{
+		"request_id":"api-only-create-test",
+		"instance_id":"018f3f1e-21b8-7a91-a30b-63b3400fd001",
+		"team_id":"00000000-0000-4000-8000-000000000018",
+		"isolation_profile":"WEB",
+		"target":{"runtime_type":"KUBERNETES","target_id":"unconfigured-target"},
+		"workload":{
+			"image":"registry.example.test/challenge@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"container_port":8080,
+			"resource_limits":{"cpu_millicores":100,"memory_mib":128,"ephemeral_storage_mib":128}
+		}
+	}`
+	request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer "+validCurrentServiceToken)
+	response := httptest.NewRecorder()
+	app.handler.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("create enqueue status = %d, want 202; body = %s", response.Code, response.Body.String())
+	}
+	operationPath := response.Header().Get("Location")
+	if operationPath == "" {
+		t.Fatal("create response has no operation Location")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	workerDone := make(chan error, 1)
+	go func() { workerDone <- app.runWorker(ctx) }()
+	defer func() {
+		cancel()
+		if err := <-workerDone; err != nil {
+			t.Errorf("worker shutdown: %v", err)
+		}
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		operationRequest := httptest.NewRequest(http.MethodGet, operationPath, nil)
+		operationRequest.Header.Set("Authorization", "Bearer "+validCurrentServiceToken)
+		operationResponse := httptest.NewRecorder()
+		app.handler.ServeHTTP(operationResponse, operationRequest)
+		if operationResponse.Code != http.StatusOK {
+			t.Fatalf("operation status = %d, body = %s", operationResponse.Code, operationResponse.Body.String())
+		}
+		if strings.Contains(operationResponse.Body.String(), `"status":"FAILED"`) {
+			if !strings.Contains(operationResponse.Body.String(), `"last_error_code":"TARGET_NOT_FOUND"`) {
+				t.Fatalf("unexpected create failure: %s", operationResponse.Body.String())
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("create operation did not fail for the unconfigured target")
+}
+
 func TestRunApplicationWaitsForWorkerCleanupAfterCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	worker := &cleanupWorker{

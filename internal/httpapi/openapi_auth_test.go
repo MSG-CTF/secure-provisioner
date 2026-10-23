@@ -64,6 +64,7 @@ func TestOpenAPIRequiresServiceBearerAuthentication(t *testing.T) {
 		"delete":         document.Paths["/internal/v1/instances/{instance_id}"].Delete,
 		"operation":      document.Paths["/internal/v1/operations/{operation_id}"].Get,
 		"runtime_status": document.Paths["/internal/v1/instances/{instance_id}/runtime-status"].Get,
+		"readiness":      document.Paths["/internal/v1/healthz"].Get,
 	} {
 		if operation == nil || operation.Responses["401"].Ref != "#/components/responses/Unauthenticated" {
 			t.Fatalf("%s 401 response missing", name)

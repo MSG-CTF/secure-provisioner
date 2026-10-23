@@ -56,7 +56,12 @@ func TestCreateInstanceAcceptsSchedulerContract(t *testing.T) {
 		t.Fatalf("EnqueueCreate() calls = %d, want 1", runtime.createCalls)
 	}
 	wantCommand := validCreateWorkloadRequest().ToCommand()
-	if !reflect.DeepEqual(runtime.createCommand, wantCommand) {
+	gotCommand := runtime.createCommand
+	if len(gotCommand.RequestFingerprint) != 64 {
+		t.Fatal("caller input fingerprint was not recorded")
+	}
+	gotCommand.RequestFingerprint = ""
+	if !reflect.DeepEqual(gotCommand, wantCommand) {
 		t.Fatalf("command = %#v, want %#v", runtime.createCommand, wantCommand)
 	}
 	if got := response.Header().Get("Location"); got != "/internal/v1/operations/operation-create-01" {

@@ -13,7 +13,12 @@
     "ghcr.io/msg-ctf/challenges/web-afterimage/exporter",
     "ghcr.io/msg-ctf/challenges/web-afterimage/inventory-metadata",
     "ghcr.io/msg-ctf/challenges/web-afterimage/indexer",
-    "ghcr.io/msg-ctf/challenges/web-afterimage/case-vault"
+    "ghcr.io/msg-ctf/challenges/web-afterimage/case-vault",
+    "ghcr.io/msg-ctf/challenges/web3-infinite-pack/server",
+    "ghcr.io/msg-ctf/challenges/web3-split-brain-oracle/challenge",
+    "ghcr.io/msg-ctf/challenges/crypto-reused-seal/chall",
+    "ghcr.io/msg-ctf/challenges/pwn-price-tag/price-tag",
+    "ghcr.io/msg-ctf/challenges/rev-tinyvm/tinyvm"
   ],
   "images": [
     {
@@ -45,6 +50,21 @@
         {"path": "/tmp", "size_mib": 32},
         {"path": "/app/instance", "size_mib": 32}
       ]
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web-grade-tampering/web@sha256:3a3de9c6c3670eed8e4e771ae4d4ad981825144796b80f1d523fba2403652fdb",
+      "container": "web",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 10001,
+      "ports": [8080],
+      "exposed_ports": [8080],
+      "writable_paths": [
+        {"path": "/tmp", "size_mib": 32},
+        {"path": "/app/instance", "size_mib": 32}
+      ],
+      "readiness_http": {"path": "/", "port": 8080}
     },
     {
       "image": "ghcr.io/msg-ctf/challenges/web-daily-point/web@sha256:98c98088662fd5ff538ae9e163fb4a68ad73580e0f4f703624b0650d4a2b499a",
@@ -84,6 +104,34 @@
       "ports": [8080, 9090],
       "exposed_ports": [8080],
       "writable_paths": [{"path": "/tmp", "size_mib": 64}]
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web-notebook/web@sha256:61cebc237880b45ec1157b60d892429bfa6b237fbee83f339cd4e73d659b4a8b",
+      "container": "web",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "ci_smoke_enabled": false,
+      "readiness_http": {"path": "/", "port": 8080},
+      "run_as_user": 10001,
+      "ports": [8080],
+      "exposed_ports": [8080],
+      "writable_paths": [{"path": "/tmp", "size_mib": 64}]
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web-notebook/db@sha256:2bcb74bbea090364d812459b3039d6a79ce0521a24a4d3fee7ff8a4f6d32bf3d",
+      "container": "db",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "ci_smoke_enabled": false,
+      "requires_flag": true,
+      "run_as_user": 70,
+      "ports": [5432],
+      "exposed_ports": [],
+      "writable_paths": [
+        {"path": "/tmp", "size_mib": 64},
+        {"path": "/var/lib/postgresql/data", "size_mib": 256},
+        {"path": "/var/run/postgresql", "size_mib": 16}
+      ]
     },
     {
       "image": "ghcr.io/msg-ctf/challenges/web-notebook/web@sha256:d4249f02fb0745df557dc65382911ec00da883e2fa6bde434c5b63c14cb81db3",
@@ -135,6 +183,252 @@
         {"path": "/var/lib/postgresql/data", "size_mib": 256},
         {"path": "/var/run/postgresql", "size_mib": 16}
       ]
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web-daily-point/web@sha256:6640cad2d5e9c83cc6ba6bb86f38ccd7ce6317a9eaeab715e2dea74773994489",
+      "container": "web",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "ci_smoke_enabled": false,
+      "run_as_user": 10001,
+      "ports": [
+        8080
+      ],
+      "exposed_ports": [
+        8080
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 64
+        },
+        {
+          "path": "/app/data",
+          "size_mib": 64
+        }
+      ],
+      "readiness_http": {
+        "path": "/",
+        "port": 8080
+      },
+      "requires_flag": true
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web-daily-point/web@sha256:fc7c762ba95b154c2b00154ed89aedd1ba5f86020408a5300d06a9f8d92a4816",
+      "container": "web",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 10001,
+      "ports": [8080],
+      "exposed_ports": [8080],
+      "writable_paths": [
+        {"path": "/tmp", "size_mib": 64},
+        {"path": "/app/data", "size_mib": 64}
+      ],
+      "readiness_http": {"path": "/", "port": 8080}
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web3-split-brain-oracle/challenge@sha256:2eb556ab51dc5214c1e4c7ae73a7a1c63d81cb35d980bf40923597456da2ffc4",
+      "container": "challenge",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "ci_smoke_enabled": false,
+      "run_as_user": 10001,
+      "ports": [
+        8000
+      ],
+      "exposed_ports": [
+        8000
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 64
+        },
+        {
+          "path": "/app/state",
+          "size_mib": 64
+        },
+        {
+          "path": "/app/cache",
+          "size_mib": 64
+        }
+      ],
+      "readiness_http": {
+        "path": "/health",
+        "port": 8000
+      },
+      "requires_flag": true
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web-open-house/web@sha256:ad459de4ec1b5687be9b17cf445973344cf8aaee150bc759a5f02e79435d236d",
+      "container": "web",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "ci_smoke_enabled": false,
+      "run_as_user": 10001,
+      "ports": [
+        8080
+      ],
+      "exposed_ports": [
+        8080
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 64
+        }
+      ],
+      "readiness_http": {
+        "path": "/",
+        "port": 8080
+      }
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web-open-house/web@sha256:8d8492c1746836790691930c3ae937f01705f9a824ebc821fd939da80b3b5ea7",
+      "container": "web",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 10001,
+      "ports": [8080],
+      "exposed_ports": [8080],
+      "writable_paths": [{"path": "/tmp", "size_mib": 64}],
+      "readiness_http": {"path": "/", "port": 8080}
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/crypto-reused-seal/chall@sha256:ac142a1d23fc645823d5de28adc05e980133620638bf784ebaff4e78b68ab1b7",
+      "container": "chall",
+      "isolation_profile": "PWN",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "flag_file_path": "/home/ctf/flag.txt",
+      "ci_smoke_enabled": false,
+      "run_as_user": 1000,
+      "ports": [
+        31337
+      ],
+      "exposed_ports": [
+        31337
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 64
+        }
+      ]
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/pwn-price-tag/price-tag@sha256:1556a19564052695fec77b15c81c70a9b9e609df0f51681eae4d00fe667b87ac",
+      "container": "price-tag",
+      "isolation_profile": "PWN",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 1000,
+      "ports": [
+        9999
+      ],
+      "exposed_ports": [
+        9999
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 32
+        }
+      ],
+      "flag_file_path": "/home/player/flag.txt"
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/pwn-price-tag/price-tag@sha256:fb15aab14664eafbcccfa94edec0597e81f6d78c575b8b562547bc8955dee751",
+      "container": "price-tag",
+      "isolation_profile": "PWN",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 1000,
+      "ports": [9999],
+      "exposed_ports": [9999],
+      "writable_paths": [{"path": "/tmp", "size_mib": 32}],
+      "flag_file_path": "/home/player/flag.txt"
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/rev-tinyvm/tinyvm@sha256:45b676934b4f4f139ee9e2a1739c14e9ac8d3e8831d279f8998a1458ce0c94da",
+      "container": "tinyvm",
+      "isolation_profile": "PWN",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 10001,
+      "ports": [1337],
+      "exposed_ports": [1337],
+      "writable_paths": [{"path": "/tmp", "size_mib": 64}],
+      "tcp_startup_only": true
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/rev-tinyvm/tinyvm@sha256:f0ade75ca94100b3b384c7b2d2040e12c757ff7d12df97a7fba814f19178cfa3",
+      "container": "tinyvm",
+      "isolation_profile": "PWN",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 10001,
+      "ports": [
+        1337
+      ],
+      "exposed_ports": [
+        1337
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 64
+        }
+      ],
+      "tcp_startup_only": true
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/rev-tinyvm/tinyvm@sha256:5abc2be5407e74b513404da172a04fac15360edc2323b016025afb790b69add7",
+      "container": "tinyvm",
+      "isolation_profile": "PWN",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 10001,
+      "ports": [1337],
+      "exposed_ports": [1337],
+      "writable_paths": [{"path": "/tmp", "size_mib": 64}],
+      "tcp_startup_only": true
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/crypto-reused-seal/chall@sha256:9a6b14660f113ffc98e8efd81c3c9cfe8cab081b994708688b179ba0ca749878",
+      "container": "chall",
+      "isolation_profile": "PWN",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "flag_file_path": "/home/ctf/flag.txt",
+      "ci_smoke_enabled": false,
+      "run_as_user": 1000,
+      "ports": [
+        31337
+      ],
+      "exposed_ports": [
+        31337
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 64
+        }
+      ]
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web3-infinite-pack/server@sha256:43cc32512af5ce6a06d5a1541be1f9ca2397a1dab744d37580d4bfc4a04b437b",
+      "container": "server",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 10001,
+      "ports": [31337],
+      "exposed_ports": [31337],
+      "writable_paths": [{"path": "/tmp", "size_mib": 64}]
     }
   ]
 }

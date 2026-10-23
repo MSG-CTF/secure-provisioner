@@ -171,7 +171,16 @@ func buildResourceSetForOperation(cluster Cluster, command provisioner.CreateWor
 				Name: name, Value: strings.ReplaceAll(container.Env[name], "$", "$$"),
 			})
 		}
-		if container.ReadinessHTTP != nil {
+		if container.TCPStartupOnly {
+			// Interactive services may start an expensive session for each connection.
+			// Reviewed images opt into a bounded startup check that stops after success.
+			podContainer.StartupProbe = &corev1.Probe{
+				ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{
+					Port: intstr.FromInt(container.PublicPorts()[0]),
+				}},
+				TimeoutSeconds: 1, PeriodSeconds: 2, SuccessThreshold: 1, FailureThreshold: 30,
+			}
+		} else if container.ReadinessHTTP != nil {
 			podContainer.ReadinessProbe = &corev1.Probe{
 				ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{
 					Path:   container.ReadinessHTTP.Path,
@@ -181,10 +190,10 @@ func buildResourceSetForOperation(cluster Cluster, command provisioner.CreateWor
 				TimeoutSeconds: 2, PeriodSeconds: 2, SuccessThreshold: 1, FailureThreshold: 3,
 			}
 		} else {
-			// Prefer the one public listener; private-only containers use their
-			// first declared port. Multiple public ports require HTTP readiness.
+			// Keep HTTP healthchecks optional for the Scheduler's multi-port contract.
+			// Use the first public listener, or the first declared port for private containers.
 			readinessPort := requirement.Ports[0]
-			if publicPorts := container.PublicPorts(); len(publicPorts) == 1 {
+			if publicPorts := container.PublicPorts(); len(publicPorts) > 0 {
 				readinessPort = publicPorts[0]
 			}
 			podContainer.ReadinessProbe = &corev1.Probe{
@@ -497,13 +506,14 @@ func validWorkloadCommand(
 				return false
 			}
 		}
+		if container.TCPStartupOnly && (container.ReadinessHTTP != nil ||
+			command.Policy.EndpointProtocol != isolation.EndpointProtocolTCP || len(container.PublicPorts()) != 1) {
+			return false
+		}
 		if !isolation.ValidPublicPorts(container.Ports, container.Expose, container.ExposedPorts) {
 			return false
 		}
 		publicPorts := container.PublicPorts()
-		if len(publicPorts) > 1 && container.ReadinessHTTP == nil {
-			return false
-		}
 		hasExposed = hasExposed || len(publicPorts) > 0
 	}
 	return hasExposed

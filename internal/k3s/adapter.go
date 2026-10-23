@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"maps"
 	"strconv"
 	"strings"
 	"time"
@@ -29,6 +30,7 @@ type AdapterConfig struct {
 	RollbackTimeout    time.Duration
 	Secrets            SecretResolver
 	RequiredFlagImages []string
+	RequiredFlagFiles  map[string]string
 }
 
 type Adapter struct {
@@ -60,6 +62,12 @@ func NewAdapter(registry *Registry, config AdapterConfig) (*Adapter, error) {
 		requiredFlags[image] = true
 	}
 	config.RequiredFlagImages = append([]string(nil), config.RequiredFlagImages...)
+	config.RequiredFlagFiles = maps.Clone(config.RequiredFlagFiles)
+	for image, filename := range config.RequiredFlagFiles {
+		if !requiredFlags[image] || !provisioner.ValidFlagFilePath(filename) {
+			return nil, newRuntimeError("CONFIG_INVALID", false, nil)
+		}
+	}
 	return &Adapter{registry: registry, config: config, workloadLocks: newWorkloadLockSet(), requiredFlagImages: requiredFlags}, nil
 }
 
@@ -103,7 +111,10 @@ func (a *Adapter) createWorkload(ctx context.Context, command provisioner.Create
 	// HTTP admission is bypassed when a queued command is replayed after an upgrade.
 	for _, container := range normalizedCommandContainers(command) {
 		if a.requiredFlagImages[container.Image] && (!container.RequiresFlag || container.SecretRef == "") {
-			return provisioner.CreateWorkloadResult{}, newRuntimeError("SECRET_RESOLUTION_FAILED", false, nil)
+			return provisioner.CreateWorkloadResult{}, a.failBeforeNamespace(command, newRuntimeError("SECRET_RESOLUTION_FAILED", false, nil))
+		}
+		if filename := a.config.RequiredFlagFiles[container.Image]; filename != "" && container.FlagFilePath != filename {
+			return provisioner.CreateWorkloadResult{}, a.failBeforeNamespace(command, newRuntimeError("SECRET_RESOLUTION_FAILED", false, nil))
 		}
 	}
 
@@ -119,7 +130,7 @@ func (a *Adapter) createWorkload(ctx context.Context, command provisioner.Create
 		return provisioner.CreateWorkloadResult{}, err
 	}
 	if err := addSecretResources(ctx, &resources, command, a.config.Secrets); err != nil {
-		return provisioner.CreateWorkloadResult{}, err
+		return provisioner.CreateWorkloadResult{}, a.failBeforeNamespace(command, err)
 	}
 	if cluster.Client == nil {
 		return provisioner.CreateWorkloadResult{}, newRuntimeError("K3S_UNAVAILABLE", true, nil)
@@ -1143,6 +1154,29 @@ func (a *Adapter) failAfterNamespace(
 		return failureWithoutRollback(code, cause)
 	}
 	return a.failWithRollback(client, createdNamespace, code, cause)
+}
+
+// Secret resolution can fail before this attempt writes any Kubernetes objects.
+// Check again after resolution: the admission-time absence check is not proof
+// that a previous or concurrent attempt has left no resources behind.
+func (a *Adapter) failBeforeNamespace(command provisioner.CreateWorkloadCommand, cause error) error {
+	cluster, err := a.registry.LookupForMaintenance(command.TargetID)
+	if err != nil {
+		return cause
+	}
+	namespace, err := NamespaceForInstance(command.InstanceID)
+	if err != nil {
+		return cause
+	}
+	checkCtx, cancel := context.WithTimeout(context.Background(), a.config.RollbackTimeout)
+	defer cancel()
+	_, err = cluster.Client.CoreV1().Namespaces().Get(checkCtx, namespace, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return provisioner.WithCreateCleanupCompleted(cause)
+	}
+	// Existing namespaces and failed reads require reconciliation. Never delete
+	// an object here or infer cleanup from an unavailable Kubernetes API.
+	return cause
 }
 
 func (a *Adapter) failWithRollback(client kubernetes.Interface, namespace *corev1.Namespace, code string, cause error) error {

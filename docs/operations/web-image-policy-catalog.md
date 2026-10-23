@@ -32,16 +32,41 @@ CI 토큰은 전용 팀·Target에서 위 세 WEB digest 중 하나의 단일 �
 
 ## 현재 이미지별 판정
 
+TCP 연결 자체가 문제 세션을 시작하는 이미지에는 운영자 정책의 tcp_startup_only를 사용합니다
+이 값은 PWN 이미지에서만 허용하며 HTTP 준비 확인과 함께 지정하면 거절합니다
+Kubernetes는 시작할 때 공개 포트에 연결하고 첫 성공 이후에는 확인을 멈춥니다
+60초 안에 연결하지 못하면 컨테이너를 재시작하며 런타임 생성 제한 시간과 실패 정리도 그대로 적용합니다
+프로세스가 살아 있는 채 리스너만 멈춘 상태는 이 방식으로 감지하지 못하므로 승인한 이미지에만 사용합니다
+외부 API 요청에는 이 옵션을 받지 않으며 큐에 저장한 생성 명령에는 선택값을 보존합니다
+옵션이 없는 이미지의 기존 HTTP·TCP 준비 확인은 유지합니다
+
 | 문제 | 생성 상태 | 적용 또는 필요한 설정 |
 | --- | --- | --- |
 | Grade Tampering | `create_enabled` | `web` UID 10001, `/tmp` 32 MiB + `/app/instance` 32 MiB, 외부 8080. 해당 digest의 실제 K3s 생성·HTTP 응답·삭제 확인 |
 | Daily Point | `create_enabled` | `web` UID 10001, `/tmp` 64 MiB + `/app/data` 64 MiB, 외부 8080. 해당 digest의 실제 K3s 생성·HTTP 응답·삭제 확인 |
 | Open House | `create_enabled` | `web` UID 10001, `/tmp` 64 MiB, 외부 8080. 해당 digest의 실제 K3s 생성·HTTP 응답·삭제 확인 |
 | Logout Please | `create_enabled` | 최신 발행 digest `c1736999…931909`, UID 10001, `/tmp` 64 MiB, 8080만 공개하고 9090은 내부 health. `requires_flag: true`이며 백엔드의 승인된 비밀값 참조로 Kubernetes Secret에 주입. 기존 VM 방식에서 생성·HTTP·삭제 확인, 백엔드 전환은 추가 검증 필요 |
-| Notebook | 최신 발행본 생성 가능, 이전 digest 차단 유지 | web d4249f02…1db3, db 396878dd…c872 검증 완료. web UID 10001·8080 공개, DB UID 70·5432 비공개. 배포 버전에 PGDATA=/var/lib/postgresql/data/pgdata 설정 필요. 아래 10월 14일 검증 참조 |
+| Notebook | 10월 19일 발행본 추가 승인, 기존 승인본 유지 | web 61cebc23…4a8b, db 2bcb74bb…bf3d 추가, 새 DB에 FLAG 필수 적용, 웹 8080 공개·DB 5432 비공개, 아래 발행본 설정 참조 |
 | AFTERIMAGE | 미발행·차단 | 일곱 이미지 저장소를 관리 대상으로 등록했으며 digest 정책은 아직 없다. indexer의 UID 전환·spool 소유권, 인스턴스별 Secret, bot 자원을 해결하기 전에는 생성하지 않는다 |
 
 `create_enabled`는 위 digest의 기본 생성 smoke가 통과했다는 운영 게이트다. Logout Please는 아래에 적은 공식 풀이도 통과했다. 다른 문제의 풀이, 팀 간·호스트·metadata 경계의 실제 격리 검증, reset, 데이터 보존까지 승인했다는 뜻은 아니다. 현재 두 GCP Target의 capability `true` 선언도 격리 실측을 대신하지 않는다.
+
+## 2026-10-19 Notebook 백엔드 플래그 발행본
+
+[문제 PR #83](https://github.com/MSG-CTF/2026_MSG_CTF/pull/83)을 머지한 뒤 [main CI](https://github.com/MSG-CTF/2026_MSG_CTF/actions/runs/39143988846)가 발행한 웹·DB digest를 추가했습니다
+소스 커밋은 25e7c6b636ba11b16c77e09274563fe92fbb9003입니다
+두 이미지의 취약점·비밀값 검사가 통과했고 실제 K3s가 GHCR에서 내려받는 것과 외부 웹 접속을 확인했습니다
+
+새 DB digest에는 requires_flag를 켰습니다
+관리자는 flag 비밀값을 DB의 FLAG에 연결하고, 웹의 DB_PASS와 DB의 POSTGRES_PASSWORD에는 같은 database_password 비밀값을 연결합니다
+웹에는 FLAG를 전달하지 않으며 DB 5432는 외부에 공개하지 않습니다
+DB는 UID 70으로 실행하고 PGDATA는 /var/lib/postgresql/data/pgdata로 지정합니다
+두 이미지는 웹·DB 묶음과 비밀값이 필요하므로 단일 컨테이너용 CI smoke 승인 대상에서 제외했습니다
+
+플래그를 바꿀 때는 채점 플래그와 비밀값 버전을 맞춘 새 릴리스를 등록한 뒤 인스턴스를 새로 생성합니다
+기존 PostgreSQL 데이터는 재시작만으로 다시 초기화되지 않습니다
+운영 목록에는 새 digest만 추가하고 기존 WEB·PWN 승인은 보존했습니다
+저장소 목록을 운영 목록 전체에 덮어쓰면 서버에 따로 승인한 PWN 항목이 사라질 수 있으므로 추가 항목만 반영해야 합니다
 
 ## 2026-10-14 Notebook 웹·DB 로컬 검증
 
