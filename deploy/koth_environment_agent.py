@@ -432,7 +432,7 @@ class Agent:
 def main():
     import fcntl
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", default="/etc/msgctf-koth/environment-agent.json")
+    parser.add_argument("--config", default="/etc/msgctf-koth-environment/agent.json")
     parser.add_argument("--state-dir", default="/var/lib/msgctf-koth-environment")
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()

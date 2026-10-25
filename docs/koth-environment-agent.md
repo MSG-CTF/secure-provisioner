@@ -35,7 +35,7 @@ protected에는 보호된 연동값의 HMAC을 등록해 백엔드에서 잘못 
 managed_secrets에는 기존 Deployment에서 사용하는 환경변수 전용 Secret만 적는다
 
 - 에이전트 파일: /opt/msgctf-koth/koth_environment_agent.py, root 소유 0755
-- 설정: /etc/msgctf-koth/environment-agent.json, root 소유 0600
+- 설정: /etc/msgctf-koth-environment/agent.json, root 소유 0600
 - 상태: /var/lib/msgctf-koth-environment, root 소유 0700
 - 서비스: deploy/koth-environment-agent.service
 
