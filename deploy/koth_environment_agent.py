@@ -393,6 +393,7 @@ class Agent:
                 check = self.api.get()
                 if check["application_id"] != desired["application_id"]:
                     raise Superseded()
+                validate_desired(self.config, self.game, check)
                 if not check.get("can_apply"):
                     raise Fault("GAME_ACTIVE")
                 current = self.kube.deployment()["spec"]["template"]
