@@ -256,7 +256,9 @@ class Kubernetes:
                 except (ValueError, UnicodeError):
                     raise Fault("ENVIRONMENT_MISMATCH") from None
             for entry in current.get("env", []):
-                if entry["name"] in configured and "value" in entry:
+                if entry["name"] in container["entries"]:
+                    if entry["name"] not in configured or "value" not in entry:
+                        return False
                     injected[entry["name"]] = entry["value"]
             # A subset comparison would falsely adopt an old version while removed
             # variables remain injected. Image-provided defaults are checked separately.
@@ -267,8 +269,8 @@ class Kubernetes:
             for key, entry in container["entries"].items():
                 value = entry["value"]
                 if value is None:
-                    if key in actual:
-                        return False
+                    # No platform injection; preserve defaults baked into the author image.
+                    continue
                 elif key not in actual or not hmac.compare_digest(value.encode(), actual[key].encode()):
                     return False
         return True

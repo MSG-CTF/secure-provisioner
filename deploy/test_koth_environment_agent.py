@@ -274,12 +274,14 @@ class EnvironmentAgentTests(unittest.TestCase):
             if args[0:2] == ['get','secret']:
                 return {'data':{k:base64.b64encode(v.encode()).decode() for k,v in values.items()}}
             if args[0] == 'exec':
-                return ('\0'.join(k+'='+v for k,v in values.items())+'\0PATH=/usr/bin\0').encode()
+                return ('\0'.join(k+'='+v for k,v in values.items())+'\0PATH=/usr/bin\0OPTION=image-default\0').encode()
             raise AssertionError('Unexpected Kubernetes operation')
         kube.run = run
         self.assertFalse(kube.values_match(self.desired))
         del values['REMOVED_SETTING']
         self.assertTrue(kube.values_match(self.desired))
+        deployment['spec']['template']['spec']['containers'][0]['env'] = [{'name':'OPTION','value':'stale-platform-value'}]
+        self.assertFalse(kube.values_match(self.desired))
 
     def test_unrelated_env_sources_and_template_changes_are_rejected(self):
         original = copy.deepcopy(self.kube.original)
