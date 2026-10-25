@@ -36,13 +36,21 @@ type WorkloadContainer struct {
 	Expose bool
 	// ExposedPorts is used for a partial selection. Omitted legacy payloads keep
 	// their original Expose semantics and serialized spec hashes.
-	ExposedPorts   []int             `json:",omitempty"`
-	ReadinessHTTP  *HTTPReadiness    `json:",omitempty"`
-	TCPStartupOnly bool              `json:",omitempty"`
-	Env            map[string]string `json:",omitempty"`
-	SecretRef      string            `json:",omitempty"`
-	RequiresFlag   bool              `json:",omitempty"`
-	FlagFilePath   string            `json:",omitempty"`
+	ExposedPorts      []int             `json:",omitempty"`
+	ReadinessHTTP     *HTTPReadiness    `json:",omitempty"`
+	TCPStartupOnly    bool              `json:",omitempty"`
+	Env               map[string]string `json:",omitempty"`
+	SecretRef         string            `json:",omitempty"`
+	RequiresFlag      bool              `json:",omitempty"`
+	FlagFilePath      string            `json:",omitempty"`
+	EndpointProtocols []PortProtocol    `json:",omitempty"`
+}
+
+// PortProtocol describes an operator-approved connection hint, independently
+// of the workload's security profile and Kubernetes transport protocol.
+type PortProtocol struct {
+	Port     int                        `json:"port"`
+	Protocol isolation.EndpointProtocol `json:"protocol"`
 }
 
 type HTTPReadiness struct {

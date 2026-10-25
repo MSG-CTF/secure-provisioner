@@ -372,6 +372,36 @@ func BuildNodePortEndpoints(
 	return endpoints, nil
 }
 
+func applyEndpointProtocols(endpoints []provisioner.WorkloadEndpoint, containers []provisioner.WorkloadContainer) ([]provisioner.WorkloadEndpoint, error) {
+	for index := range endpoints {
+		endpoint := &endpoints[index]
+		for _, container := range containers {
+			if container.Name != endpoint.ContainerName {
+				continue
+			}
+			for _, hint := range container.EndpointProtocols {
+				if hint.Port != endpoint.Port {
+					continue
+				}
+				if hint.Protocol != isolation.EndpointProtocolHTTP && hint.Protocol != isolation.EndpointProtocolTCP {
+					return nil, newRuntimeError("INVALID_CREATE_COMMAND", false, nil)
+				}
+				parsed, err := url.Parse(endpoint.ServiceURL)
+				if err != nil {
+					return nil, newRuntimeError("INVALID_CREATE_COMMAND", false, err)
+				}
+				if hint.Protocol == isolation.EndpointProtocolTCP {
+					parsed.Scheme = "tcp"
+				} else if parsed.Scheme == "tcp" {
+					parsed.Scheme = "http"
+				}
+				endpoint.Protocol, endpoint.ServiceURL = hint.Protocol, parsed.String()
+			}
+		}
+	}
+	return endpoints, nil
+}
+
 func normalizedCommandContainers(command provisioner.CreateWorkloadCommand) []provisioner.WorkloadContainer {
 	return command.Containers
 }
@@ -514,6 +544,15 @@ func validWorkloadCommand(
 			return false
 		}
 		publicPorts := container.PublicPorts()
+		seenProtocols := make(map[int]bool)
+		for _, hint := range container.EndpointProtocols {
+			if _, declared := ports[hint.Port]; !declared || seenProtocols[hint.Port] ||
+				(hint.Protocol != isolation.EndpointProtocolHTTP && hint.Protocol != isolation.EndpointProtocolTCP) ||
+				(hint.Protocol == isolation.EndpointProtocolTCP && cluster.Config.ExposureMode != ExposureModeNodePort) {
+				return false
+			}
+			seenProtocols[hint.Port] = true
+		}
 		hasExposed = hasExposed || len(publicPorts) > 0
 	}
 	return hasExposed

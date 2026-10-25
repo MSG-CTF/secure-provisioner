@@ -208,6 +208,9 @@ func (a *Adapter) createWorkload(ctx context.Context, command provisioner.Create
 	serviceURL := resources.ServiceURL
 	if cluster.Config.ExposureMode == ExposureModeNodePort {
 		endpoints, err = BuildNodePortEndpoints(cluster.Config.PublicGateway, command.Policy.EndpointProtocol, applied.Services)
+		if err == nil {
+			endpoints, err = applyEndpointProtocols(endpoints, command.Containers)
+		}
 		if err != nil {
 			return provisioner.CreateWorkloadResult{}, a.failWithRollback(cluster.Client, observedNamespace, "RESOURCE_APPLY_FAILED", err)
 		}

@@ -24,6 +24,13 @@ type ImagePolicyCatalog struct {
 	graphByImage             map[string]*isolation.WorkloadNetwork
 	graphManagedRepositories map[string]struct{}
 	vmRequired               map[string]struct{}
+	endpointProtocols        map[string]endpointProtocolPolicy
+}
+
+type endpointProtocolPolicy struct {
+	Image     string                     `json:"image"`
+	Container string                     `json:"container"`
+	Ports     []provisioner.PortProtocol `json:"ports"`
 }
 
 type ImagePolicy struct {
@@ -84,6 +91,7 @@ type imagePolicyFile struct {
 	WorkloadNetworks            []isolation.WorkloadNetwork `json:"workload_networks,omitempty"`
 	NetworkRequiredRepositories []string                    `json:"network_required_repositories,omitempty"`
 	VMRequiredRepositories      []string                    `json:"vm_required_repositories,omitempty"`
+	EndpointProtocols           []endpointProtocolPolicy    `json:"endpoint_protocols,omitempty"`
 }
 
 var ErrImagePolicyRejected = errors.New("image policy rejected")
@@ -181,6 +189,23 @@ func ParseImagePolicies(contents []byte) (*ImagePolicyCatalog, error) {
 		catalog.images[policy.Image] = policy
 	}
 	seenGraphIDs := make(map[string]struct{}, len(config.WorkloadNetworks))
+	catalog.endpointProtocols = make(map[string]endpointProtocolPolicy)
+	for _, entry := range config.EndpointProtocols {
+		if !validImmutableImageReference(entry.Image) || len(validation.IsDNS1123Label(entry.Container)) != 0 || len(entry.Ports) == 0 || len(entry.Ports) > 128 {
+			return nil, errors.New("invalid endpoint protocol image or container")
+		}
+		if _, duplicate := catalog.endpointProtocols[entry.Image]; duplicate {
+			return nil, errors.New("duplicate endpoint protocol image")
+		}
+		seen := make(map[int]bool)
+		for _, port := range entry.Ports {
+			if port.Port < 1 || port.Port > 65535 || seen[port.Port] || (port.Protocol != isolation.EndpointProtocolHTTP && port.Protocol != isolation.EndpointProtocolTCP) {
+				return nil, errors.New("invalid endpoint protocol port")
+			}
+			seen[port.Port] = true
+		}
+		catalog.endpointProtocols[entry.Image] = entry
+	}
 	for index := range config.WorkloadNetworks {
 		graph := &config.WorkloadNetworks[index]
 		if _, duplicate := seenGraphIDs[graph.ID]; duplicate {
@@ -296,6 +321,9 @@ func (catalog *ImagePolicyCatalog) Apply(request *CreateWorkloadRequest) error {
 		return fmt.Errorf("%w: image requires a dedicated VM target", ErrImagePolicyRejected)
 	}
 	if request.Workload.Image != "" {
+		if _, configured := catalog.endpointProtocols[request.Workload.Image]; configured {
+			return fmt.Errorf("%w: endpoint protocols require containers[]", ErrImagePolicyRejected)
+		}
 		if _, managed := catalog.managed[imageRepository(request.Workload.Image)]; managed {
 			return fmt.Errorf("%w: managed images require containers[]", ErrImagePolicyRejected)
 		}
@@ -371,6 +399,23 @@ func (catalog *ImagePolicyCatalog) Apply(request *CreateWorkloadRequest) error {
 			readiness := *policy.ReadinessHTTP
 			container.readinessHTTP = &readiness
 		}
+	}
+	for index := range request.Workload.Containers {
+		container := &request.Workload.Containers[index]
+		container.endpointProtocols = nil
+		entry, configured := catalog.endpointProtocols[container.Image]
+		if !configured {
+			continue
+		}
+		if entry.Container != container.Name {
+			return fmt.Errorf("%w: endpoint protocol container does not match", ErrImagePolicyRejected)
+		}
+		for _, port := range entry.Ports {
+			if !slices.Contains(container.Ports, port.Port) {
+				return fmt.Errorf("%w: endpoint protocol port is not declared", ErrImagePolicyRejected)
+			}
+		}
+		container.endpointProtocols = slices.Clone(entry.Ports)
 	}
 	return nil
 }
