@@ -2,6 +2,8 @@
 
 Runtime reads `PROVISIONER_IMAGE_POLICIES` at startup. A schema-version-2 policy file may add `workload_networks` beside `managed_repositories` and `images`; schema version 1 and its default `STANDARD@v2` instance-wide internal access remain valid. This is an operator file, not a Create API field. New Create JSON containing `internal_connections` or `workload_network` is rejected.
 
+The `vm_required_repositories` guard takes precedence over Kubernetes network selection. A VM-required repository cannot also have a Kubernetes image policy or graph. Afterimage currently uses the dedicated VM path; its inactive source-topology document is not permission to move it into K3s. This feature does not change the active operator catalog or enable the inactive challenge candidates.
+
 Each network entry requires a unique DNS-label `id`, an `isolation_profile`, and the **complete** set of container names, immutable image digests and declared ports. Every image must also have an enabled per-image policy in `images` with the same name, profile and ports; a digest may be in only one network. Duplicate or unknown fields and incomplete request image sets fail closed. Two modes are available:
 
 - `EXPLICIT_TCP_V1` requires a directed `allow` array. Each `{from,to,port}` edge permits TCP to a declared port on a different destination container. `allow: []` permits no private container traffic. This mode cannot contain `peer_groups`.
