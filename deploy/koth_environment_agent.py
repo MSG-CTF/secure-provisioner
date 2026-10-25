@@ -284,8 +284,11 @@ class Kubernetes:
                         raise ValueError()
                     archive.seek(0); validate_image_archive(archive, image)
                     archive.seek(0)
-                    subprocess.run(["/usr/local/bin/k3s", "ctr", "--namespace", "k8s.io", "images", "import", "--digests",
-                                    "--platform", "linux/amd64", "--no-unpack", "-"], stdin=archive, capture_output=True, check=True, timeout=120)
+                    # The transfer importer can create an unqualified outer-index alias that CRI cannot resolve.
+                    subprocess.run(["/usr/local/bin/k3s", "ctr", "--namespace", "k8s.io", "images", "import", "--local",
+                                    "--base-name", image.split("@", 1)[0], "--digests", "--skip-digest-for-named",
+                                    "--label", "io.cri-containerd.image=managed", "--platform", "linux/amd64", "--no-unpack", "-"],
+                                   stdin=archive, capture_output=True, check=True, timeout=120)
                 cached = self.cached_images()
                 if image not in cached:
                     raise ValueError()
