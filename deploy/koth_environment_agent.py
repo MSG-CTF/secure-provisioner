@@ -75,7 +75,9 @@ def validate_config(config):
         raise ValueError("Invalid game scope")
     seen, namespaces = set(), set()
     for game in config["games"]:
-        if set(game) != {"challenge_id", "namespace", "deployment", "source_revision", "containers", "token"}:
+        if (set(game) - {"challenge_id", "namespace", "deployment", "source_revision", "containers", "token", "allow_publications"}
+                or not {"challenge_id", "namespace", "deployment", "source_revision", "containers", "token"} <= set(game)
+                or not isinstance(game.get("allow_publications", False), bool)):
             raise ValueError("Invalid game configuration")
         key = canonical_uuid(game["challenge_id"])
         if key in seen or game["namespace"] in namespaces:
@@ -100,7 +102,12 @@ def validate_config(config):
 def validate_desired(config, game, desired):
     if desired.get("challenge_id") != game["challenge_id"] or desired.get("target_id") != config["target_id"]:
         raise Fault("VM_UNAVAILABLE")
-    if desired.get("source_revision") != game["source_revision"]:
+    publication = game.get("allow_publications", False) and desired.get("publication_id")
+    if publication:
+        canonical_uuid(publication)
+        if not isinstance(desired.get("source_revision"), str) or not re.fullmatch(r"[0-9a-f]{40}", desired["source_revision"]):
+            raise Fault("SOURCE_CHANGED")
+    if not publication and desired.get("source_revision") != game["source_revision"]:
         raise Fault("SOURCE_CHANGED")
     canonical_uuid(desired.get("application_id")); canonical_uuid(desired.get("version_id"))
     settings = desired.get("settings")
@@ -112,7 +119,7 @@ def validate_desired(config, game, desired):
     for item in settings["containers"]:
         name = item.get("name")
         fixed = game["containers"].get(name)
-        if name in names or not fixed or item.get("image") != fixed["image"]:
+        if name in names or not fixed or not allowed_image(fixed["image"], item.get("image"), bool(publication)):
             raise Fault("IMAGE_MISMATCH")
         names.add(name)
         entries = item.get("entries")
@@ -136,6 +143,11 @@ def validate_desired(config, game, desired):
                     or not hmac.compare_digest(hmac.new(game["token"].encode(), value.encode(), hashlib.sha256).hexdigest(), expected)):
                 raise Fault("ENVIRONMENT_MISMATCH")
     return settings
+
+
+def allowed_image(fixed, requested, allow_publications):
+    return (isinstance(requested, str) and bool(IMAGE.fullmatch(requested))
+            and (requested == fixed or allow_publications and requested.split("@", 1)[0] == fixed.split("@", 1)[0]))
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -219,12 +231,15 @@ class Kubernetes:
         row = self.run(["get", "deployment", self.game["deployment"], "-o", "json"])
         containers = row["spec"]["template"]["spec"]["containers"]
         if (row["spec"].get("replicas", 1) != 1 or len(containers) != len(self.game["containers"])
-                or {c["name"]: c["image"] for c in containers} != {k: v["image"] for k, v in self.game["containers"].items()}):
+                or {c["name"] for c in containers} != set(self.game["containers"])
+                or any(not allowed_image(self.game["containers"][c["name"]]["image"], c["image"], self.game.get("allow_publications", False)) for c in containers)):
             raise Fault("IMAGE_MISMATCH")
         return row
 
     def values_match(self, desired):
         deployment = self.deployment()
+        if {c["name"]: c["image"] for c in deployment["spec"]["template"]["spec"]["containers"]} != {c["name"]: c["image"] for c in desired["settings"]["containers"]}:
+            return False
         if deployment.get("status", {}).get("observedGeneration", 0) < deployment["metadata"]["generation"]:
             return False
         if deployment.get("status", {}).get("updatedReplicas", 0) != 1 or deployment.get("status", {}).get("readyReplicas", 0) != 1:
@@ -301,6 +316,7 @@ class Kubernetes:
         by_name = {c["name"]: c for c in desired["settings"]["containers"]}
         for container in changed["spec"]["containers"]:
             name = container["name"]
+            container["image"] = by_name[name]["image"]
             refs = container.get("envFrom", [])
             baseline = self.game["containers"][name]["managed_secrets"]
             for ref in refs:

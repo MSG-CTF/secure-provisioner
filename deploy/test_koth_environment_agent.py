@@ -311,6 +311,37 @@ class EnvironmentAgentTests(unittest.TestCase):
         self.assertEqual(calls[0][0][2], "/api/v1/namespaces/koth-demo/secrets/"+names["unused"])
         self.assertEqual(calls[0][1]["preconditions"], {"uid":"uid-unused"})
 
+    def test_publication_updates_require_opt_in_and_same_approved_ghcr_repository(self):
+        changed = copy.deepcopy(self.desired)
+        changed.update(source_revision="c" * 40, publication_id=identifier())
+        changed["settings"]["containers"][0]["image"] = self.game["containers"]["service"]["image"].replace("a" * 64, "b" * 64)
+        with self.assertRaises(agent.Fault): agent.validate_desired(self.config, self.game, changed)
+        self.game["allow_publications"] = True
+        agent.validate_config(self.config)
+        agent.validate_desired(self.config, self.game, changed)
+        changed["settings"]["containers"][0]["image"] = changed["settings"]["containers"][0]["image"].replace("koth-demo", "koth-other")
+        with self.assertRaises(agent.Fault): agent.validate_desired(self.config, self.game, changed)
+
+    def test_publication_template_keeps_original_isolation_resource_and_volume_profile(self):
+        self.game["allow_publications"] = True
+        self.desired.update(publication_id=identifier(), source_revision="c" * 40)
+        self.desired["settings"]["containers"][0]["image"] = self.desired["settings"]["containers"][0]["image"].replace("a" * 64, "b" * 64)
+        agent.validate_desired(self.config, self.game, self.desired)
+        updated = self.kube.template(self.kube.original, self.desired)
+        self.assertEqual(updated["spec"]["containers"][0]["image"], self.desired["settings"]["containers"][0]["image"])
+        original = copy.deepcopy(self.kube.original)
+        clean = copy.deepcopy(updated)
+        for item in (original, clean):
+            item["metadata"].pop("annotations", None)
+            item["spec"]["containers"][0].pop("envFrom", None)
+            item["spec"]["containers"][0].pop("image")
+        self.assertEqual(original, clean)
+
+    def test_changed_source_without_publication_is_rejected_even_when_opted_in(self):
+        self.game["allow_publications"] = True
+        self.desired["source_revision"] = "c" * 40
+        with self.assertRaises(agent.Fault): agent.validate_desired(self.config, self.game, self.desired)
+
     @unittest.skipUnless(hasattr(os, 'geteuid') and os.geteuid() == 0, "Linux root-only journal semantics")
     def test_journal_is_atomic_private_and_rejects_readable_file(self):
         with tempfile.TemporaryDirectory() as directory:
