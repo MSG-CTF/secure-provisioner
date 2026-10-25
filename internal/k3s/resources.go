@@ -33,19 +33,20 @@ const (
 )
 
 type ResourceSet struct {
-	Namespace          *corev1.Namespace
-	ServiceAccount     *corev1.ServiceAccount
-	ResourceQuota      *corev1.ResourceQuota
-	LimitRange         *corev1.LimitRange
-	NetworkPolicies    []*networkingv1.NetworkPolicy
-	EnvSecret          *corev1.Secret
-	Deployments        []*appsv1.Deployment
-	Services           []*corev1.Service
-	Ingress            *networkingv1.Ingress
-	ExpectedSpecHashes map[string]string
-	RuntimeWorkloadID  string
-	ServiceURL         string
-	Endpoints          []provisioner.WorkloadEndpoint
+	Namespace                *corev1.Namespace
+	ServiceAccount           *corev1.ServiceAccount
+	ResourceQuota            *corev1.ResourceQuota
+	LimitRange               *corev1.LimitRange
+	NetworkPolicies          []*networkingv1.NetworkPolicy
+	ExclusiveNetworkPolicies bool
+	EnvSecret                *corev1.Secret
+	Deployments              []*appsv1.Deployment
+	Services                 []*corev1.Service
+	Ingress                  *networkingv1.Ingress
+	ExpectedSpecHashes       map[string]string
+	RuntimeWorkloadID        string
+	ServiceURL               string
+	Endpoints                []provisioner.WorkloadEndpoint
 
 	// Deprecated single-resource aliases are retained until the Adapter is
 	// migrated to iterate over Deployments and Services.
@@ -101,15 +102,16 @@ func buildResourceSetForOperation(cluster Cluster, command provisioner.CreateWor
 	pathType := networkingv1.PathTypePrefix
 	replicas := int32(1)
 	resources := ResourceSet{
-		Namespace:          buildNamespace(command, namespace, operationID),
-		ServiceAccount:     buildRuntimeServiceAccount(namespace, labels),
-		ResourceQuota:      buildRuntimeResourceQuota(namespace, labels, command.Policy, len(containers), nodePortQuota(cluster.Config.ExposureMode, containers)),
-		LimitRange:         buildRuntimeLimitRange(namespace, labels, command.Policy, len(containers)),
-		NetworkPolicies:    networkPolicies,
-		Deployments:        make([]*appsv1.Deployment, 0, len(containers)),
-		Services:           make([]*corev1.Service, 0, len(containers)),
-		ExpectedSpecHashes: make(map[string]string, len(containers)),
-		Endpoints:          make([]provisioner.WorkloadEndpoint, 0),
+		Namespace:                buildNamespace(command, namespace, operationID),
+		ServiceAccount:           buildRuntimeServiceAccount(namespace, labels),
+		ResourceQuota:            buildRuntimeResourceQuota(namespace, labels, command.Policy, len(containers), nodePortQuota(cluster.Config.ExposureMode, containers)),
+		LimitRange:               buildRuntimeLimitRange(namespace, labels, command.Policy, len(containers)),
+		NetworkPolicies:          networkPolicies,
+		ExclusiveNetworkPolicies: command.Policy.WorkloadNetwork != nil,
+		Deployments:              make([]*appsv1.Deployment, 0, len(containers)),
+		Services:                 make([]*corev1.Service, 0, len(containers)),
+		ExpectedSpecHashes:       make(map[string]string, len(containers)),
+		Endpoints:                make([]provisioner.WorkloadEndpoint, 0),
 	}
 	if cluster.Config.ExposureMode != ExposureModeNodePort {
 		resources.Ingress = &networkingv1.Ingress{

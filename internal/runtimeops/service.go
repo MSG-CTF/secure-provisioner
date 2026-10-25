@@ -322,6 +322,7 @@ func createdBinding(
 		IsolationProfile:      profileIdentity(command.Policy.IsolationRef),
 		WorkloadProfile:       profileIdentity(command.Policy.WorkloadProfileRef),
 		ContainerRequirements: command.Policy.Containers,
+		WorkloadNetwork:       isolation.CloneWorkloadNetwork(command.Policy.WorkloadNetwork),
 		InternalConnections:   command.Policy.InternalConnections,
 		OutboundMode:          command.Policy.OutboundMode,
 		ResourceLimits:        command.Policy.ResourceLimits,
