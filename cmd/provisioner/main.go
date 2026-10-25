@@ -212,6 +212,9 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 	if len(imagePolicies.RequiredFlagImages()) > 0 && secretResolver == nil {
 		return nil, errors.New("enabled FLAG images require a Backend secret resolver")
 	}
+	// Assigned once below, before workers or HTTP handlers can run. The closure
+	// also protects queued K3s commands when the local catalog predates VM scopes.
+	var vmRoute *vm.Router
 	createAdapter, err := k3s.NewAdapter(registry, k3s.AdapterConfig{
 		ReadyTimeout:       config.ReadyTimeout,
 		PollInterval:       config.PollInterval,
@@ -219,6 +222,9 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 		Secrets:            secretResolver,
 		RequiredFlagImages: imagePolicies.RequiredFlagImages(),
 		RequiredFlagFiles:  imagePolicies.RequiredFlagFiles(),
+		RequiresVMImage: func(image string) bool {
+			return imagePolicies.RequiresVMImage(image) || vmRoute.RequiresVMImage(image)
+		},
 	})
 	if err != nil {
 		return nil, err
@@ -268,6 +274,7 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 			return nil, routeErr
 		}
 		create, status, deleteWorkload, resolver, vmPolicy = route, route, route, route, route.Apply
+		vmRoute = route
 	}
 	service, err := runtimeops.NewService(
 		create,
