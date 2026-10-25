@@ -1,0 +1,140 @@
+{
+  "contract_version": "CHALLENGE_NETWORK_READINESS_V1",
+  "challenge_id": "koth-jenga",
+  "stage": "candidate",
+  "enabled": false,
+  "status": "blocked_pending_operator_inputs",
+  "approval": null,
+  "artifact_role": "readiness_contract_not_runtime_catalog",
+  "source": {
+    "repository": "MSG-CTF/2026_MSG_CTF",
+    "revision": "84742c511bb126a5e94d9d21c85ddf9b0611b923",
+    "container_manifest": "koth-jenga/info.yaml"
+  },
+  "published_candidate": {
+    "status": "published_unapproved_candidate",
+    "discovery_scope": "latest_available_publish_bundle_in_downloaded_index",
+    "artifact_id": 12184953879,
+    "artifact_name": "koth-jenga-39250207559-1-e0b7051ee5be45c79162e860a19367d7-publish-bundle",
+    "artifact_created_at": "2026-10-19T12:23:22Z",
+    "artifact_url": "https://github.com/MSG-CTF/2026_MSG_CTF/actions/runs/39250207559/artifacts/12184953879",
+    "run_id": 39250207559,
+    "run_url": "https://github.com/MSG-CTF/2026_MSG_CTF/actions/runs/39250207559",
+    "workflow_head_sha": "7e852818f66755a8d858c973189098ceb00b300d",
+    "source_sha": "7e852818f66755a8d858c973189098ceb00b300d",
+    "source_ref": "refs/heads/main",
+    "artifact_revision": 552,
+    "registry_revision": 552,
+    "images": [
+      {
+        "container": "jenga",
+        "image": "ghcr.io/msg-ctf/challenges/koth-jenga/jenga@sha256:826808e01a3e74d5e5b66cbe1378263df9693428d3b16b8c9a326460f02497d6"
+      }
+    ],
+    "metadata_validation": {
+      "schema_version": "2.0",
+      "runtime_type": "KUBERNETES",
+      "architecture": "AMD64",
+      "isolation_profile": "WEB",
+      "registry_payload_identical": true,
+      "workflow_head_matches_source_sha": true,
+      "container_names_ports_and_exposure_match": true,
+      "resource_profile_matches": true,
+      "evidence_published_images_match": true,
+      "scan_result_reported": "PASS",
+      "execution_policy_fields_present": false,
+      "image_configuration_or_signature_verified": false,
+      "scope_note": "Downloaded metadata supplies image identities and ports, not execution approval. Evidence source_digest is not treated as the final published_image digest; its relation is not independently assessed here."
+    },
+    "source_comparison": {
+      "contract_baseline_sha": "84742c511bb126a5e94d9d21c85ddf9b0611b923",
+      "published_source_sha": "7e852818f66755a8d858c973189098ceb00b300d",
+      "scope": "koth-jenga/",
+      "status": "no_scoped_source_drift",
+      "changed_paths": [],
+      "scope_note": "Scoped git diff compares the challenge tree only. The candidate still declares its original source SHA; this does not claim a build at the newer baseline or verify shared build infrastructure, signatures, image configuration or reproducibility."
+    }
+  },
+  "network_required_repositories": [
+    "ghcr.io/msg-ctf/challenges/koth-jenga/jenga"
+  ],
+  "operator_network_candidate_status": "incomplete_must_not_activate",
+  "operator_network_candidate": {
+    "id": "koth-jenga-candidate-v1",
+    "mode": "EXPLICIT_TCP_V1",
+    "isolation_profile": "WEB",
+    "containers": [
+      {
+        "name": "jenga",
+        "image": "ghcr.io/msg-ctf/challenges/koth-jenga/jenga@sha256:826808e01a3e74d5e5b66cbe1378263df9693428d3b16b8c9a326460f02497d6",
+        "ports": [
+          8080
+        ]
+      }
+    ],
+    "allow": []
+  },
+  "containers": [
+    {"name": "jenga", "source_component": "prob/for_organizer_Flask_application", "ports": [8080], "exposed_ports": [8080], "published_image_ref": "ghcr.io/msg-ctf/challenges/koth-jenga/jenga@sha256:826808e01a3e74d5e5b66cbe1378263df9693428d3b16b8c9a326460f02497d6", "approved_image_digest": null}
+  ],
+  "capacity_observation": {
+    "checked_at_utc": "2026-10-23T06:25:35.419246+00:00",
+    "evidence_workspace_relative": ".scratch/network-solve-audit-20261023/test-node-capacity.json",
+    "status": "necessary_bounds_fit_both_targets_actual_schedulability_unverified",
+    "targets": [
+      {
+        "target_id": "gcp-msg-runtime-k3s",
+        "node": "msg-runtime-k3s",
+        "declared_profile_within_allocatable_cpu_memory_storage": true
+      },
+      {
+        "target_id": "e058d71c-24a6-4109-b025-750aca85077a",
+        "node": "msg-test-1",
+        "declared_profile_within_allocatable_cpu_memory_storage": true
+      }
+    ],
+    "separate_target_capacities_must_not_be_summed": true,
+    "scope_note": "Necessary allocatable bounds only; current requests, placement, runtime overhead, execution compatibility and live readiness are not proven."
+  },
+  "declared_resource_profile": {"cpu_millicores": 300, "memory_mib": 256, "ephemeral_storage_mib": 512},
+  "author_defined_contract": {
+    "required_directed_tcp_edges": [],
+    "ingress": [{"to": "jenga", "port": 8080, "purpose": "participant_Flask_service_healthz_and_authenticated_score_API"}],
+    "external_calls": [{"from": "jenga", "destination_id": "platform-origin", "method": "POST", "path": "/internal/koth/team_tokens/verify", "url_config": "PLATFORM_URL"}],
+    "database": {"type": "SQLite", "path_config": "JENGA_DB", "default_path": "/data/jenga.db"},
+    "scope_note": "This contract follows the official organizer Flask Dockerfile and info.yaml, not the separate repository-root layered implementation.",
+    "evidence_ids": ["info-containers", "official-Dockerfile", "app-auth", "app-health-and-score"]
+  },
+  "candidate_runtime_mapping": {
+    "mode": "EXPLICIT_TCP_V1",
+    "allow": [],
+    "egress_baseline": "NONE_except_reviewed_exact_host_TCP",
+    "destination_inputs": [
+      {"id": "platform-origin", "from": "jenga", "configuration_keys": ["PLATFORM_URL"], "host_addresses": [], "tcp_ports": [], "port_rule": "explicit_URL_port_or_scheme_default", "status": "operator_input_required"}
+    ],
+    "inferred_boundary": "Deny other outbound destinations after operator configuration. The source default platform hostname is not an actual approved destination.",
+    "platform_egress_configured": false,
+    "normal_production_operation_without_platform_egress": "blocked_by_missing_required_platform_calls",
+    "ready_for_activation": false
+  },
+  "operator_inputs": [
+    {"id": "approved-image-and-user", "owner": "release_and_platform_operator", "required": true, "value_status": "published_candidate_found_approval_pending", "description": "Published organizer image candidate is recorded; verify source provenance, compatible image user and writable DB directory. The official Dockerfile does not declare a USER."},
+    {"id": "platform-destination", "owner": "platform_API_operator", "required": true, "value_status": "missing", "description": "Actual PLATFORM_URL and exact host-address/TCP-port set; the unresolved source default is not sufficient."},
+    {"id": "backend-secret-bindings", "owner": "Backend_release_operator", "required": true, "value_status": "missing", "description": "Current release references, SESSION_SECRET, platform/score authentication key names and challenge UUID; no secret values recorded."},
+    {"id": "persistent-data", "owner": "platform_operator", "required": true, "value_status": "missing", "description": "Writable persistent JENGA_DB and restart/backup behavior."},
+    {"id": "target-capacity", "owner": "platform_capacity_operator", "required": true, "value_status": "necessary_bounds_fit_both_targets_actual_schedulability_unverified", "description": "The declared profile fits necessary CPU/memory/storage allocatable bounds of both observed targets. Confirm current free schedulable resources, placement, requests, runtime overhead and storage before activation.", "evidence_workspace_relative": ".scratch/network-solve-audit-20261023/test-node-capacity.json"}
+  ],
+  "activation_requirements": [
+    "Confirm current free schedulable resources and placement; fitting observed allocatable bounds alone does not establish deployment readiness.",
+    "Disable DEV_AUTH_BYPASS and verify accepted and rejected authentication against the actual platform.",
+    "Approve image UID/writes and persistent SQLite behavior under the chosen execution profile.",
+    "Verify health, normal gameplay, authenticated score collection and restart persistence.",
+    "Verify exact-host platform egress and denied other destinations before writing a separate active Runtime catalog entry."
+  ],
+  "evidence": [
+    {"id": "info-containers", "path": "koth-jenga/info.yaml", "lines": [10, 25]},
+    {"id": "official-Dockerfile", "path": "koth-jenga/prob/for_organizer/Dockerfile", "lines": [1, 7]},
+    {"id": "app-auth", "path": "koth-jenga/prob/for_organizer/app.py", "lines": [4, 31]},
+    {"id": "app-health-and-score", "path": "koth-jenga/prob/for_organizer/app.py", "lines": [19, 79]}
+  ]
+}

@@ -1,5 +1,7 @@
 # WEB 이미지별 런타임 정책
 
+정확한 이미지 digest 집합에 대한 운영자 소유 내부 통신 그래프는 [workload network policies](workload-network-policies.md)를 참고한다.
+
 ## 목적과 적용 범위
 
 문제 저장소의 `info.yaml`을 수정하지 않고, 운영자가 승인한 **정확한 이미지 digest**마다 컨테이너의 실행 UID, 쓰기 가능 디렉터리, 외부 공개 포트를 지정한다. 정책 파일은 [`config/web-image-policies.json`](../../config/web-image-policies.json)이다. 비밀값은 이 파일에 넣지 않는다.
