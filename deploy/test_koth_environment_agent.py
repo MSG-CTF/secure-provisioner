@@ -1,4 +1,5 @@
 import copy
+import base64
 import hashlib
 import hmac
 import json
@@ -257,6 +258,28 @@ class EnvironmentAgentTests(unittest.TestCase):
         kube.run = lambda *args, **kwargs: {"data": {"PORT": "wrong"}, "metadata": {"labels": {}}, "immutable": True}
         with self.assertRaisesRegex(agent.Fault, "SECRET_CONFLICT"):
             kube.ensure_secrets(self.desired)
+
+    def test_removed_managed_variables_cannot_be_adopted_as_a_matching_subset(self):
+        kube = agent.Kubernetes(self.game)
+        deployment = copy.deepcopy(self.kube.deployment())
+        deployment['metadata'] = {'generation':1}
+        deployment['status'] = {'observedGeneration':1,'updatedReplicas':1,'readyReplicas':1}
+        deployment['spec']['selector'] = {'matchLabels':{'app':'game'}}
+        kube.deployment = lambda: deployment
+        values = {k:e['value'] for k,e in self.desired['settings']['containers'][0]['entries'].items() if e['value'] is not None}
+        values['REMOVED_SETTING'] = 'stale'
+        def run(args, **kwargs):
+            if args[0:2] == ['get','pods']:
+                return {'items':[{'metadata':{'name':'pod'},'status':{'conditions':[{'type':'Ready','status':'True'}]}}]}
+            if args[0:2] == ['get','secret']:
+                return {'data':{k:base64.b64encode(v.encode()).decode() for k,v in values.items()}}
+            if args[0] == 'exec':
+                return ('\0'.join(k+'='+v for k,v in values.items())+'\0PATH=/usr/bin\0').encode()
+            raise AssertionError('Unexpected Kubernetes operation')
+        kube.run = run
+        self.assertFalse(kube.values_match(self.desired))
+        del values['REMOVED_SETTING']
+        self.assertTrue(kube.values_match(self.desired))
 
     def test_unrelated_env_sources_and_template_changes_are_rejected(self):
         original = copy.deepcopy(self.kube.original)

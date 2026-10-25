@@ -235,6 +235,33 @@ class Kubernetes:
         if len(pods) != 1 or not any(c["type"] == "Ready" and c["status"] == "True" for c in pods[0].get("status", {}).get("conditions", [])):
             return False
         for container in desired["settings"]["containers"]:
+            configured = {key: entry["value"] for key, entry in container["entries"].items() if entry["value"] is not None}
+            current = next(c for c in deployment["spec"]["template"]["spec"]["containers"] if c["name"] == container["name"])
+            injected = {}
+            for source in current.get("envFrom", []):
+                name = source.get("secretRef", {}).get("name")
+                if not name or source.get("prefix"):
+                    raise Fault("ENVIRONMENT_MISMATCH")
+                fixed = self.game["containers"][container["name"]]["managed_secrets"]
+                managed = bool(re.fullmatch(r"koth-env-[0-9a-f]{32}-[0-9a-f]{8}", name))
+                if name not in fixed and not managed:
+                    raise Fault("ENVIRONMENT_MISMATCH")
+                secret = self.run(["get", "secret", name, "--ignore-not-found", "-o", "json"])
+                if secret is None:
+                    return False
+                if managed and secret.get("metadata", {}).get("labels", {}).get(OWNER) != self.game["challenge_id"]:
+                    raise Fault("SECRET_CONFLICT")
+                try:
+                    injected.update({key: base64.b64decode(value, validate=True).decode("utf-8") for key, value in secret.get("data", {}).items()})
+                except (ValueError, UnicodeError):
+                    raise Fault("ENVIRONMENT_MISMATCH") from None
+            for entry in current.get("env", []):
+                if entry["name"] in configured and "value" in entry:
+                    injected[entry["name"]] = entry["value"]
+            # A subset comparison would falsely adopt an old version while removed
+            # variables remain injected. Image-provided defaults are checked separately.
+            if injected != configured:
+                return False
             raw = self.run(["exec", pods[0]["metadata"]["name"], "-c", container["name"], "--", "env", "-0"], raw=True)
             actual = dict(part.decode("utf-8").split("=", 1) for part in raw.split(b"\0") if b"=" in part)
             for key, entry in container["entries"].items():
