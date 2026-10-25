@@ -15,6 +15,8 @@ from pathlib import Path
 import re
 import stat
 import subprocess
+import tarfile
+import tempfile
 import sys
 import time
 import urllib.error
@@ -29,7 +31,8 @@ DNS = re.compile(r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?\Z")
 NAME = re.compile(r"[A-Z_][A-Z0-9_]{0,63}\Z")
 IMAGE = re.compile(r"ghcr\.io/[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}\Z")
 ERROR_CODES = {"ROLLOUT_FAILED", "ROLLBACK_CONFLICT", "IMAGE_MISMATCH", "ENVIRONMENT_MISMATCH",
-               "VM_UNAVAILABLE", "GAME_ACTIVE", "SOURCE_CHANGED", "SECRET_CONFLICT"}
+               "VM_UNAVAILABLE", "GAME_ACTIVE", "SOURCE_CHANGED", "SECRET_CONFLICT", "IMAGE_PREPARATION_FAILED"}
+MAX_IMAGE_ARCHIVE = 2 * 1024 ** 3 + 1024 ** 2
 
 
 class Fault(Exception):
@@ -63,8 +66,14 @@ def secure_read(path):
 
 
 def validate_config(config):
-    if set(config) != {"schema_version", "target_id", "base_url", "games"} or config["schema_version"] != 1:
+    if (set(config) - {"schema_version", "target_id", "base_url", "games", "image_export_url"}
+            or not {"schema_version", "target_id", "base_url", "games"} <= set(config) or config["schema_version"] != 1):
         raise ValueError("Invalid agent configuration")
+    if config.get("image_export_url"):
+        export = urllib.parse.urlsplit(config["image_export_url"])
+        if (export.scheme != "https" or not export.hostname or export.username or export.password or export.query or export.fragment
+                or export.path != "/internal/v1/koth_image_exports"):
+            raise ValueError("Pinned HTTPS image exporter required")
     url = urllib.parse.urlsplit(config["base_url"])
     if (url.scheme != "https" or not url.hostname or url.username or url.password or url.query or url.fragment
             or url.path.rstrip("/") != "/internal/v1/koth_environments"):
@@ -235,6 +244,56 @@ class Kubernetes:
                 or any(not allowed_image(self.game["containers"][c["name"]]["image"], c["image"], self.game.get("allow_publications", False)) for c in containers)):
             raise Fault("IMAGE_MISMATCH")
         return row
+
+    def cached_images(self):
+        try:
+            result = subprocess.run(["/usr/local/bin/k3s", "ctr", "--namespace", "k8s.io", "images", "list", "--quiet"],
+                                    capture_output=True, check=True, timeout=15)
+            return set(result.stdout.decode().splitlines())
+        except (OSError, subprocess.SubprocessError, UnicodeError):
+            raise Fault("IMAGE_PREPARATION_FAILED") from None
+
+    def ensure_images(self, desired, api, export_url):
+        cached = self.cached_images()
+        for container in desired["settings"]["containers"]:
+            image = container["image"]
+            if image in cached:
+                continue
+            if not export_url:
+                raise Fault("IMAGE_PREPARATION_FAILED")
+            ticket = api.call("/image_export", {"application_id": desired["application_id"], "version_id": desired["version_id"], "image_ref": image})
+            if (ticket.get("url") != export_url or ticket.get("image_ref") != image or not isinstance(ticket.get("ticket"), str)
+                    or not 16 <= len(ticket["ticket"]) <= 4096):
+                raise Fault("IMAGE_PREPARATION_FAILED")
+            request = urllib.request.Request(export_url, data=json.dumps({"image_ref": image}).encode(),
+                headers={"Content-Type": "application/json", "Authorization": "Bearer " + ticket["ticket"]})
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+            try:
+                with tempfile.TemporaryFile(dir="/var/lib/msgctf-koth-environment") as archive:
+                    checksum, size = hashlib.sha256(), 0
+                    with opener.open(request, timeout=150) as response:
+                        expected = response.headers.get("X-Content-SHA256", "")
+                        if response.status != 200 or not re.fullmatch(r"[0-9a-f]{64}", expected):
+                            raise ValueError()
+                        while chunk := response.read(1024 * 1024):
+                            size += len(chunk)
+                            if size > MAX_IMAGE_ARCHIVE:
+                                raise ValueError()
+                            checksum.update(chunk); archive.write(chunk)
+                    if checksum.hexdigest() != expected:
+                        raise ValueError()
+                    archive.seek(0); validate_image_archive(archive, image)
+                    archive.seek(0)
+                    # The transfer importer can create an unqualified outer-index alias that CRI cannot resolve.
+                    subprocess.run(["/usr/local/bin/k3s", "ctr", "--namespace", "k8s.io", "images", "import", "--local",
+                                    "--base-name", image.split("@", 1)[0], "--digests", "--skip-digest-for-named",
+                                    "--label", "io.cri-containerd.image=managed", "--platform", "linux/amd64", "--no-unpack", "-"],
+                                   stdin=archive, capture_output=True, check=True, timeout=120)
+                cached = self.cached_images()
+                if image not in cached:
+                    raise ValueError()
+            except Exception:
+                raise Fault("IMAGE_PREPARATION_FAILED") from None
 
     def values_match(self, desired):
         deployment = self.deployment()
@@ -428,6 +487,7 @@ class Agent:
                 if not desired.get("can_apply"):
                     raise Fault("GAME_ACTIVE")
                 self.api.status(desired, "APPLYING")
+                self.kube.ensure_images(desired, self.api, self.config.get("image_export_url"))
                 current = self.kube.deployment()["spec"]["template"]
                 if state["phase"] == "new":
                     changed = self.kube.template(current, desired)
@@ -472,6 +532,36 @@ class Agent:
             self.persist(state, "failed", error_code="ROLLOUT_FAILED" if state["error_code"] == "VM_UNAVAILABLE" else state["error_code"])
         except Fault:
             self.persist(state, "failed", error_code="ROLLBACK_CONFLICT")
+
+
+def validate_image_archive(stream, image_ref):
+    expected = image_ref.split("@", 1)[1]
+    names, total, index = set(), 0, None
+    with tarfile.open(fileobj=stream, mode="r:") as archive:
+        for item in archive:
+            name = item.name
+            if (not item.isfile() or name in names or len(names) >= 256
+                    or name not in ("oci-layout", "index.json") and not re.fullmatch(r"blobs/sha256/[a-f0-9]{64}", name)):
+                raise ValueError("Invalid OCI archive member")
+            names.add(name); total += item.size
+            if total > MAX_IMAGE_ARCHIVE:
+                raise ValueError("Image archive too large")
+            source = archive.extractfile(item)
+            if name in ("index.json", "oci-layout"):
+                if item.size > 1024 * 1024:
+                    raise ValueError("Invalid OCI metadata")
+                value = json.loads(source.read())
+                if name == "index.json": index = value
+                elif value != {"imageLayoutVersion": "1.0.0"}: raise ValueError("Invalid OCI layout")
+            else:
+                checksum = hashlib.sha256()
+                while chunk := source.read(1024 * 1024): checksum.update(chunk)
+                if checksum.hexdigest() != name.split("/")[-1]:
+                    raise ValueError("Image content digest mismatch")
+    if (not {"oci-layout", "index.json"} <= names or not isinstance(index, dict) or index.get("schemaVersion") != 2 or len(index.get("manifests", [])) != 1
+            or index["manifests"][0].get("digest") != expected or "blobs/sha256/" + expected.split(":")[1] not in names
+            or index["manifests"][0].get("annotations", {}).get("io.containerd.image.name") != image_ref):
+        raise ValueError("Archive does not contain the approved image")
 
 
 def main():

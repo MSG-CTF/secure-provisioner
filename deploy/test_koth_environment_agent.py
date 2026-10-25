@@ -86,6 +86,7 @@ class FakeKubernetes:
 
     def deployment(self): return {"spec": {"template": copy.deepcopy(self.current)}}
     def collect_unused_secrets(self): pass
+    def ensure_images(self, desired, api, export_url): pass
     secret_name = agent.Kubernetes.secret_name
     template = agent.Kubernetes.template
 
@@ -336,6 +337,14 @@ class EnvironmentAgentTests(unittest.TestCase):
             item["spec"]["containers"][0].pop("envFrom", None)
             item["spec"]["containers"][0].pop("image")
         self.assertEqual(original, clean)
+
+    def test_image_preparation_failure_does_not_mutate_a_running_template(self):
+        before = copy.deepcopy(self.kube.current)
+        with patch.object(self.kube, "ensure_images", side_effect=agent.Fault("IMAGE_PREPARATION_FAILED")):
+            self.assertEqual(self.worker.tick(), "rejected")
+        self.assertEqual(before, self.kube.current)
+        self.assertEqual(self.kube.patches, [])
+        self.assertEqual(self.api.events[-1][1:], ("FAILED", "IMAGE_PREPARATION_FAILED"))
 
     def test_changed_source_without_publication_is_rejected_even_when_opted_in(self):
         self.game["allow_publications"] = True

@@ -1,0 +1,27 @@
+[Unit]
+Description=MSG CTF approved KOTH OCI image exporter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=msg-koth-export
+Group=msg-koth-export
+UMask=0077
+ExecStart=/usr/bin/python3 /opt/msgctf-koth-image-exporter/koth_image_exporter.py
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+StateDirectory=msgctf-koth-image-exporter
+StateDirectoryMode=0700
+MemoryMax=512M
+CPUQuota=100%
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
