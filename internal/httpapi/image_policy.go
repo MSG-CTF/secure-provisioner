@@ -23,6 +23,7 @@ type ImagePolicyCatalog struct {
 	images                   map[string]ImagePolicy
 	graphByImage             map[string]*isolation.WorkloadNetwork
 	graphManagedRepositories map[string]struct{}
+	vmRequired               map[string]struct{}
 }
 
 type ImagePolicy struct {
@@ -82,6 +83,7 @@ type imagePolicyFile struct {
 	Images                      []ImagePolicy               `json:"images"`
 	WorkloadNetworks            []isolation.WorkloadNetwork `json:"workload_networks,omitempty"`
 	NetworkRequiredRepositories []string                    `json:"network_required_repositories,omitempty"`
+	VMRequiredRepositories      []string                    `json:"vm_required_repositories,omitempty"`
 }
 
 var ErrImagePolicyRejected = errors.New("image policy rejected")
@@ -113,9 +115,9 @@ func ParseImagePolicies(contents []byte) (*ImagePolicyCatalog, error) {
 	if (config.SchemaVersion != 1 && config.SchemaVersion != 2) || len(config.ManagedRepositories) == 0 || len(config.Images) == 0 || (config.SchemaVersion == 1 && (config.WorkloadNetworks != nil || config.NetworkRequiredRepositories != nil)) {
 		return nil, errors.New("image policy file requires schema_version 1 or 2, managed_repositories, and images; networks require version 2")
 	}
-	catalog := &ImagePolicyCatalog{managed: make(map[string]struct{}), images: make(map[string]ImagePolicy), graphByImage: make(map[string]*isolation.WorkloadNetwork), graphManagedRepositories: make(map[string]struct{})}
+	catalog := &ImagePolicyCatalog{managed: make(map[string]struct{}), images: make(map[string]ImagePolicy), vmRequired: make(map[string]struct{}), graphByImage: make(map[string]*isolation.WorkloadNetwork), graphManagedRepositories: make(map[string]struct{})}
 	for _, repository := range config.ManagedRepositories {
-		if repository == "" || repository != strings.ToLower(repository) || strings.ContainsAny(repository, "@: \t\r\n") {
+		if repository == "" || repository != imageRepository(repository) || strings.ContainsAny(repository, "@: \t\r\n") {
 			return nil, fmt.Errorf("invalid managed image repository %q", repository)
 		}
 		if _, exists := catalog.managed[repository]; exists {
@@ -132,11 +134,23 @@ func ParseImagePolicies(contents []byte) (*ImagePolicyCatalog, error) {
 		}
 		catalog.graphManagedRepositories[repository] = struct{}{}
 	}
+	for _, repository := range config.VMRequiredRepositories {
+		if _, managed := catalog.managed[repository]; !managed {
+			return nil, fmt.Errorf("VM-required repository must be managed: %q", repository)
+		}
+		if _, duplicate := catalog.vmRequired[repository]; duplicate {
+			return nil, fmt.Errorf("duplicate VM-required repository: %q", repository)
+		}
+		catalog.vmRequired[repository] = struct{}{}
+	}
 	for _, policy := range config.Images {
 		if !validImmutableImageReference(policy.Image) {
 			return nil, fmt.Errorf("image policy requires an immutable image: %q", policy.Image)
 		}
 		repository, _, _ := strings.Cut(policy.Image, "@sha256:")
+		if _, vmRequired := catalog.vmRequired[repository]; vmRequired {
+			return nil, fmt.Errorf("VM-required repository cannot have Kubernetes image policies: %q", repository)
+		}
 		if _, managed := catalog.managed[repository]; !managed {
 			return nil, fmt.Errorf("image policy repository is not managed: %q", repository)
 		}
@@ -278,6 +292,9 @@ func (catalog *ImagePolicyCatalog) Apply(request *CreateWorkloadRequest) error {
 		return nil
 	}
 	request.workloadNetwork = nil
+	if catalog.RequiresVMImage(request.Workload.Image) {
+		return fmt.Errorf("%w: image requires a dedicated VM target", ErrImagePolicyRejected)
+	}
 	if request.Workload.Image != "" {
 		if _, managed := catalog.managed[imageRepository(request.Workload.Image)]; managed {
 			return fmt.Errorf("%w: managed images require containers[]", ErrImagePolicyRejected)
@@ -285,6 +302,9 @@ func (catalog *ImagePolicyCatalog) Apply(request *CreateWorkloadRequest) error {
 	}
 	selected := make(map[int]ImagePolicy)
 	for index, container := range request.Workload.Containers {
+		if catalog.RequiresVMImage(container.Image) {
+			return fmt.Errorf("%w: image requires a dedicated VM target", ErrImagePolicyRejected)
+		}
 		policy, known := catalog.images[container.Image]
 		if !known {
 			if _, managed := catalog.managed[imageRepository(container.Image)]; managed {
@@ -360,6 +380,15 @@ func validHTTPReadinessPath(value string) bool {
 }
 
 func imageRepository(image string) string {
-	repository, _, _ := strings.Cut(image, "@sha256:")
-	return repository
+	return provisioner.ImageRepository(image)
+}
+
+// RequiresVMImage also covers unapproved future digests in reserved repositories.
+// Keep this scope when a VM target is temporarily withdrawn or disabled.
+func (catalog *ImagePolicyCatalog) RequiresVMImage(image string) bool {
+	if catalog == nil {
+		return false
+	}
+	_, required := catalog.vmRequired[imageRepository(image)]
+	return required
 }

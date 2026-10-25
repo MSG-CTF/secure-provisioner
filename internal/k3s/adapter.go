@@ -31,6 +31,8 @@ type AdapterConfig struct {
 	Secrets            SecretResolver
 	RequiredFlagImages []string
 	RequiredFlagFiles  map[string]string
+	// RequiresVMImage is an immutable operator policy shared with HTTP admission.
+	RequiresVMImage func(string) bool
 }
 
 type Adapter struct {
@@ -110,6 +112,9 @@ func (a *Adapter) createWorkload(ctx context.Context, command provisioner.Create
 	}
 	// HTTP admission is bypassed when a queued command is replayed after an upgrade.
 	for _, container := range normalizedCommandContainers(command) {
+		if a.config.RequiresVMImage != nil && a.config.RequiresVMImage(container.Image) {
+			return provisioner.CreateWorkloadResult{}, a.failBeforeNamespace(command, newRuntimeError("VM_POLICY_REJECTED", false, nil))
+		}
 		if a.requiredFlagImages[container.Image] && (!container.RequiresFlag || container.SecretRef == "") {
 			return provisioner.CreateWorkloadResult{}, a.failBeforeNamespace(command, newRuntimeError("SECRET_RESOLUTION_FAILED", false, nil))
 		}
