@@ -140,6 +140,14 @@ requires_flag 이미지에는 승인된 FLAG 참조가 필요합니다
 
 ## 새 이미지 발행 시
 
+접속 안내와 격리 프로필은 별개입니다
+Infinite Pack의 31337 포트는 TCP 메뉴이지만 기존 WEB 격리 정책을 유지해야 합니다
+이런 경우 운영자 정책 파일의 endpoint_protocols에 이미지 digest·컨테이너·포트·접속 방식을 지정합니다
+일치하는 NodePort의 응답 주소와 protocol만 바뀌며 노출 포트, NetworkPolicy, UID, 컨테이너 실행 설정은 바뀌지 않습니다
+HTTP Ingress에 TCP 접속 안내를 지정하면 생성 전에 거절합니다
+호출자가 요청 JSON에 접속 방식을 추가해 덮어쓸 수는 없습니다
+새 이미지로 교체할 때에는 endpoint_protocols의 digest도 검토해서 갱신해야 합니다
+
 1. 발행 산출물의 정확한 `image@sha256:<digest>`와 컨테이너 이름·내부 포트를 확인한다.
 2. 읽기 전용 root filesystem과 UID 10001로 문제 기능을 시험한다. 실패한 경로를 자동 허용하지 말고 필요한 디렉터리만 크기와 함께 검토한다. 마운트할 디렉터리에 이미지가 원래 제공하던 파일이 있는지도 확인한다.
 3. 정책 파일에 새 digest를 추가하거나 기존 digest를 교체한다. `blocked`를 `create_enabled`로 바꾸려면 새 이미지로 Runtime 생성, 모든 Pod Ready, 실제 HTTP/DB 기능, 공개·비공개 포트, reset·삭제를 확인한다.
