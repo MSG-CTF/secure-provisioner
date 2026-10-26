@@ -36,6 +36,12 @@ raw Kubernetes/보안 설정과 제거된 과거 profile 참조 필드는 API �
 
 `PROVISIONER_CLUSTER_REGISTRY`는 필수입니다.
 
+Broker가 발급한 모든 VM의 K3s 인증정보로 target을 자동 등록하려면
+[Broker 자동 등록 설정](docs/operations/broker-k3s-credentials.md#automatic-registration-and-refresh)을
+사용합니다. 시작 시와 기본 1시간마다 API를 조회해 새 VM만 등록하며, 기존 타겟의
+인증서·설정·활성 상태는 유지합니다. 이때 파일 Registry는 `{"clusters":[]}`로 시작할
+수 있습니다.
+
 | 환경 변수 | 기본값 | 의미 |
 |---|---:|---|
 | `PROVISIONER_CLUSTER_REGISTRY` | 없음 | target Registry JSON 파일 경로 |
