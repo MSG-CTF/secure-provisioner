@@ -372,17 +372,11 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 			}
 			return nil, errors.New("image preparation requires PostgreSQL and an approved image policy catalog")
 		}
-		contents, readErr := os.ReadFile(config.ImagePreparation.NodesPath)
-		if readErr != nil {
-			_ = closeStore()
-			return nil, errors.New("cannot read trusted image agent configuration")
-		}
-		transport, parseErr := imageprep.ParseAgentTargets(contents)
+		transport, parseErr := imageprep.NewFileTransport(config.ImagePreparation.NodesPath, k3s.KubernetesImageRunner(registry))
 		if parseErr != nil {
 			_ = closeStore()
 			return nil, parseErr
 		}
-		transport.Kubernetes = k3s.KubernetesImageRunner(registry)
 		preparation = imageprep.NewService(preparationStore, k3s.ImageInventory{Registry: registry}, imagePolicies, transport, config.ImagePreparation.Worker)
 		runWorkers = func(ctx context.Context) error {
 			ctx, cancel := context.WithCancel(ctx)

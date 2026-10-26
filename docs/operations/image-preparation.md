@@ -70,6 +70,13 @@ boot ID, OS, and architecture. Runtime compares the response with its own invent
 and configured expected Node UID. No request controls a command, namespace, image,
 kubeconfig, or pod destination.
 
+For trusted Node UID refresh after boot/recreation and an opt-in VM provisioning
+completion hook, install the reviewed CLI/timer in
+[trusted image-agent enrollment](image-prefetch-enrollment.md). Runtime validates
+and reloads the agent file before every invocation, so publishing a new approved
+UID does not require a Runtime restart. Cluster registry/client changes still use
+the existing trusted rollout; this reload covers agent registration only.
+
 This manifest has been locally parsed and the selection/identity protocol tested;
 it has not been installed or exercised in a real DaemonSet. Validate the installed
 K3s binary/data mount combination on the pilot before enabling automation.

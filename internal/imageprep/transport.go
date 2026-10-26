@@ -18,6 +18,7 @@ type AgentTarget struct {
 	TargetID   string `json:"target_id"`
 	NodeName   string `json:"node_name"`
 	NodeUID    string `json:"node_uid"`
+	MachineID  string `json:"machine_id,omitempty"`
 	Mode       string `json:"mode"`
 	Command    string `json:"command,omitempty"`
 	SSHHost    string `json:"ssh_host,omitempty"`
@@ -39,7 +40,7 @@ func ParseAgentTargets(data []byte) (*Transport, error) {
 	host := regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
 	for _, n := range t.Nodes {
 		key := n.TargetID + "/" + n.NodeName
-		if !validID(n.TargetID) || !validID(n.NodeUID) || n.NodeName == "" || seen[key] {
+		if !validID(n.TargetID) || !validID(n.NodeUID) || (n.MachineID != "" && !validID(n.MachineID)) || n.NodeName == "" || seen[key] {
 			return nil, errors.New("invalid trusted image agent identity")
 		}
 		seen[key] = true
@@ -66,7 +67,7 @@ func (t *Transport) Run(ctx context.Context, n Node, image string, pull bool) (E
 	var selected *AgentTarget
 	for i := range t.Nodes {
 		candidate := &t.Nodes[i]
-		if candidate.TargetID == n.TargetID && candidate.NodeName == n.Name && candidate.NodeUID == n.UID {
+		if candidate.TargetID == n.TargetID && candidate.NodeName == n.Name && candidate.NodeUID == n.UID && (candidate.MachineID == "" || candidate.MachineID == n.MachineID) {
 			selected = candidate
 			break
 		}
