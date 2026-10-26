@@ -349,7 +349,7 @@ func (catalog *ImagePolicyCatalog) Apply(request *CreateWorkloadRequest) error {
 		if policy.Status != "create_enabled" {
 			return fmt.Errorf("%w: image is not ready for deployment", ErrImagePolicyRejected)
 		}
-		if policy.Container != container.Name || policy.IsolationProfile != request.IsolationProfile || !slices.Equal(policy.Ports, container.Ports) {
+		if policy.Container != container.Name || policy.IsolationProfile != request.IsolationProfile || !samePolicyPorts(policy.Ports, container.Ports) {
 			return fmt.Errorf("%w: image, container, profile, or ports do not match", ErrImagePolicyRejected)
 		}
 		selected[index] = policy
