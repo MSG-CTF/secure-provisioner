@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
 	"github.com/MSG-CTF/secure-provisioner/internal/operations"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 	"github.com/MSG-CTF/secure-provisioner/internal/runtimebinding"
@@ -269,7 +270,25 @@ func recoveryBinding(r Record) runtimebinding.Binding {
 		}
 	}
 	p := r.Command.Policy
-	return runtimebinding.Binding{InstanceID: r.Command.InstanceID, TeamID: r.Command.TeamID, TargetID: r.Command.TargetID, Namespace: namespace, NamespaceUID: r.Result.NamespaceUID, RuntimeWorkloadID: r.Result.RuntimeWorkloadID, Endpoints: publicResult(r).Endpoints, IsolationProfile: p.IsolationRef.Name + "@" + p.IsolationRef.Version, WorkloadProfile: p.WorkloadProfileRef.Name + "@" + p.WorkloadProfileRef.Version, ContainerRequirements: p.Containers, InternalConnections: p.InternalConnections, OutboundMode: p.OutboundMode, ResourceLimits: p.ResourceLimits, State: runtimebinding.StateCreated, CreatedAt: r.CreatedAt, UpdatedAt: r.CreatedAt}
+	return runtimebinding.Binding{
+		InstanceID:            r.Command.InstanceID,
+		TeamID:                r.Command.TeamID,
+		TargetID:              r.Command.TargetID,
+		Namespace:             namespace,
+		NamespaceUID:          r.Result.NamespaceUID,
+		RuntimeWorkloadID:     r.Result.RuntimeWorkloadID,
+		Endpoints:             publicResult(r).Endpoints,
+		IsolationProfile:      p.IsolationRef.Name + "@" + p.IsolationRef.Version,
+		WorkloadProfile:       p.WorkloadProfileRef.Name + "@" + p.WorkloadProfileRef.Version,
+		ContainerRequirements: p.Containers,
+		WorkloadNetwork:       isolation.CloneWorkloadNetwork(p.WorkloadNetwork),
+		InternalConnections:   p.InternalConnections,
+		OutboundMode:          p.OutboundMode,
+		ResourceLimits:        p.ResourceLimits,
+		State:                 runtimebinding.StateCreated,
+		CreatedAt:             r.CreatedAt,
+		UpdatedAt:             r.CreatedAt,
+	}
 }
 func (a *Adapter) RecoveryBinding(ctx context.Context, id string) (runtimebinding.Binding, error) {
 	r, err := a.journal.Get(ctx, id)

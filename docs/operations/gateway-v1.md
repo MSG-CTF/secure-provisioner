@@ -99,6 +99,10 @@ Gateway → 공인 IP:NodePort의 연결, CNI/NAT, HTTP/TCP/SNI를 따로 검증
 
 ## 삭제·재시작·정리 증명
 
+Binding이 유실돼 Gateway journal에서 복구할 때 승인된 `WorkloadNetwork` 스냅샷도
+함께 복원한다. 컨테이너 정체성·peer 그룹·egress의 중첩 값은 복사하여 복구된 Binding을
+변경해도 원래 journal의 승인 스냅샷이 바뀌지 않도록 한다.
+
 `runtime_gateway_routes`는 `APPLY_PENDING`, `APPLIED`, `CONFLICT_HOLD`, `DELETE_PENDING`,
 `ROUTE_DELETED`, `DELETED` phase와 원래 workload/Service generation 및 upstream을
 보관한다. 삭제 ID는 tombstone으로 계속 보존하며 새 배포에 재사용하지 않는다.
