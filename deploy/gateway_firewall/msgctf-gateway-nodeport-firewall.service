@@ -1,0 +1,31 @@
+[Unit]
+Description=MSG CTF Gateway-only TCP NodePort guard
+DefaultDependencies=no
+After=local-fs.target
+Before=network-pre.target k3s.service secure-provisioner.service shutdown.target
+Wants=network-pre.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+Group=root
+ExecStart=/usr/bin/python3 -I /usr/local/sbin/msgctf-gateway-nodeport-firewall.py apply
+ExecStartPost=/usr/bin/python3 -I /usr/local/sbin/msgctf-gateway-nodeport-firewall.py verify
+TimeoutStartSec=120
+UMask=0077
+RuntimeDirectory=msgctf-gateway-nodeport-firewall
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_NET_ADMIN
+ProtectSystem=strict
+# Keep the standard shared /run/xtables.lock available, including at first boot.
+ReadWritePaths=/run
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target
