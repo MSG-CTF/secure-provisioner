@@ -8,6 +8,36 @@
 [설계 검토 #74](https://github.com/MSG-CTF/secure-provisioner/pull/74),
 [Scheduler 연계 #76](https://github.com/MSG-CTF/instance-scheduler/issues/76).
 
+## 첫 OFF 업그레이드와 migration 순서
+
+이 문서의 설정 예시는 fleet 전체가 Gateway ON이라는 뜻이 아니다. target opt-in,
+consumer 배포, 방화벽 활성화는 각각 검증한 뒤 별도 운영 변경으로 진행한다.
+
+첫 업그레이드의 API bridge는 **후보인 새 바이너리**를 `--deployment-api-only`로
+실행한다. 이 bridge와 handoff 잠금 모드는 `OpenExisting`을 사용하므로 기존
+operation/Binding schema의 호환성만 확인하고 migration을 실행하지 않는다.
+bridge의 환경은 배포 전 디스크에 저장된 Runtime 환경에서 복사한다.
+
+1. 모든 관련 target이 Gateway OFF이고 미완료 Gateway route가 없는지 확인한다.
+   DB에 `004_gateway_routes.sql`이 아직 없다면 첫 OFF 배포 동안
+   `GatewayTokenFile`에 대응하는 `PROVISIONER_GATEWAY_RUNTIME_TOKEN_FILE` 설정을
+   **기존 디스크 환경과 CI `DEPLOY_ENV` 양쪽에서 생략**한다. 새 bundle에서만 지워도
+   기존 환경을 복사하는 bridge에는 적용되지 않는다. token 파일 원문을 출력하거나
+   지울 필요는 없다. 미완료 route가 있다면 설정을 지우는 대신 먼저 cleanup한다.
+2. Gateway OFF 상태로 새 바이너리를 배포한다. API bridge는 migration 없이 기존
+   API/queue를 유지하고, 정상 primary 시작이 `004_gateway_routes.sql`과
+   `005_gateway_conflict_hold.sql`을 반영한다.
+3. 새 primary의 readiness와 두 migration의 반영을 확인한 뒤 token-file 참조를
+   디스크 환경과 `DEPLOY_ENV`에 복원한다. credential 값은 출력하지 않는다.
+4. 이후 handoff에서는 이미 schema가 준비된 새 바이너리가 bridge/primary를 담당한다.
+   consumer readiness, target 연결, Gateway canary를 확인한 뒤 opt-in을 결정한다.
+
+애플리케이션의 worker shutdown 예산을 180초로 운영한다면 systemd의
+`TimeoutStopSec=240`을 유지한다. 기존 90초 제한은 drain이 끝나기 전에 프로세스를
+강제 종료할 수 있다. Gateway cleanup 예산 이상의 worker timeout도 함께 확인한다.
+Gateway 전용 NodePort 방화벽은 [별도 운영 절차](gateway-firewall.md)를 따르며,
+첫 OFF 업그레이드에서는 staged/disabled로만 둔다.
+
 ## 설정
 
 기존 registry의 해당 K3s target에만 아래 설정을 추가한다. 기존 provider, architecture,

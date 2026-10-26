@@ -3,3 +3,5 @@ deploy/vm/*.sh text eol=lf
 # Preserve shell line endings when the load runner is checked out on Windows.
 scripts/run-worker-capacity-150.sh text eol=lf
 deploy/vm/profiles/*.json -text
+# Keep the reviewed operational helper and payload bytes stable across checkouts.
+deploy/gateway_firewall/* text eol=lf
