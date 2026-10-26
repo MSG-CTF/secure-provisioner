@@ -37,7 +37,7 @@ func TestBrokerConfigIsOptInAndRequiresCompleteFleetSettings(t *testing.T) {
 		"PROVISIONER_BROKER_STATE_DIRECTORY": filepath.Join(dir, "state"),
 	}
 	config, err = loadBrokerConfig(environment(values))
-	if err != nil || config.BaseURL != "https://broker.mjsec.kr/api" || config.Interval != time.Minute || config.RequestTimeout != 10*time.Second {
+	if err != nil || config.BaseURL != "https://broker.mjsec.kr/api" || config.Interval != time.Hour || config.RequestTimeout != 10*time.Second {
 		t.Fatal("fleet settings", config, err)
 	}
 	for _, key := range []string{"PROVISIONER_BROKER_TOKEN_FILE", "PROVISIONER_BROKER_TARGET_POLICY", "PROVISIONER_BROKER_STATE_DIRECTORY"} {

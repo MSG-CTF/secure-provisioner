@@ -167,7 +167,7 @@ func TestBrokerNewGatewayTargetDerivesUpstream(t *testing.T) {
 	}
 }
 
-func TestBrokerCredentialRotationAndUnreachableNode(t *testing.T) {
+func TestBrokerKnownCredentialsStayUnchangedAfterRotationOrNetworkFailure(t *testing.T) {
 	f := newBrokerFixture(t)
 	credential := f.credential(brokerResource1, brokerNode1, "192.0.2.10")
 	f.page("", []map[string]any{credential}, nil)
@@ -184,8 +184,8 @@ func TestBrokerCredentialRotationAndUnreachableNode(t *testing.T) {
 		t.Fatal(err)
 	}
 	after, err := f.registry.LookupForCreate(brokerNode1)
-	if err != nil || before.Client == after.Client {
-		t.Fatal("credential transport was not refreshed", err)
+	if err != nil || before.Client != after.Client {
+		t.Fatal("existing credential transport was replaced", err)
 	}
 	info, err := os.Stat(filepath.Join(f.config.StateDirectory, "targets.json"))
 	if err != nil || info.Mode().Perm() != 0600 {
@@ -195,11 +195,11 @@ func TestBrokerCredentialRotationAndUnreachableNode(t *testing.T) {
 	delete(f.factory.nodes, "https://192.0.2.10:6443")
 	f.factory.mu.Unlock()
 	result, err := s.Sync(context.Background())
-	if err != nil || result.Rejected != 1 {
+	if err != nil || result.Skipped != 1 || result.Rejected != 0 {
 		t.Fatal(result, err)
 	}
-	if _, err := f.registry.LookupForCreate(brokerNode1); err == nil {
-		t.Fatal("unreachable target still creates")
+	if _, err := f.registry.LookupForCreate(brokerNode1); err != nil {
+		t.Fatal("existing target eligibility changed", err)
 	}
 	if _, err := f.registry.LookupForMaintenance(brokerNode1); err != nil {
 		t.Fatal("unreachable target lost maintenance transport")
@@ -283,7 +283,7 @@ func TestBrokerPeriodicRegistrationWithConcurrentRegistryReaders(t *testing.T) {
 	go func() {
 		defer close(done)
 		s.Run(ctx, func(result BrokerSyncResult, err error) {
-			if err == nil && result.Ready == 1 {
+			if err == nil && result.Added == 1 {
 				select {
 				case registered <- struct{}{}:
 				default:
@@ -339,7 +339,7 @@ func TestBrokerRegistersAllPagesByVerifiedNodeUID(t *testing.T) {
 	f.page("", []map[string]any{one}, "next page/1")
 	f.page("next page/1", []map[string]any{two}, nil)
 	result, err := f.controller().Sync(context.Background())
-	if err != nil || result.Ready != 2 || result.Rejected != 0 {
+	if err != nil || result.Added != 2 || result.Rejected != 0 {
 		t.Fatalf("sync: %+v, %v", result, err)
 	}
 	for _, id := range []string{brokerNode1, brokerNode2} {
@@ -357,7 +357,7 @@ func TestBrokerRegistersAllPagesByVerifiedNodeUID(t *testing.T) {
 	}
 }
 
-func TestBrokerRetirementAndRestartPreserveMaintenanceRoutes(t *testing.T) {
+func TestBrokerDisappearanceAndRestartPreserveExistingRoutes(t *testing.T) {
 	f := newBrokerFixture(t)
 	one := f.credential(brokerResource1, brokerNode1, "192.0.2.10")
 	f.page("", []map[string]any{one}, nil)
@@ -369,8 +369,8 @@ func TestBrokerRetirementAndRestartPreserveMaintenanceRoutes(t *testing.T) {
 	if _, err := s.Sync(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.registry.LookupForCreate(brokerNode1); err == nil {
-		t.Fatal("retired node accepts create")
+	if _, err := f.registry.LookupForCreate(brokerNode1); err != nil {
+		t.Fatal("missing node eligibility changed", err)
 	}
 	if _, err := f.registry.LookupForMaintenance(brokerNode1); err != nil {
 		t.Fatal("cleanup route lost:", err)
@@ -380,8 +380,8 @@ func TestBrokerRetirementAndRestartPreserveMaintenanceRoutes(t *testing.T) {
 	if _, err := f.registry.LookupForMaintenance(brokerNode1); err != nil {
 		t.Fatal("restart lost cleanup route:", err)
 	}
-	if _, err := f.registry.LookupForCreate(brokerNode1); err == nil {
-		t.Fatal("cached node enabled without fresh verification")
+	if _, err := f.registry.LookupForCreate(brokerNode1); err != nil {
+		t.Fatal("cached node eligibility changed on restart", err)
 	}
 	f.page("", []map[string]any{one}, nil)
 	if _, err := s.Sync(context.Background()); err != nil {
@@ -392,7 +392,7 @@ func TestBrokerRetirementAndRestartPreserveMaintenanceRoutes(t *testing.T) {
 	}
 }
 
-func TestBrokerDiscoveredTargetSupportsCreateStatusAndRetiredDelete(t *testing.T) {
+func TestBrokerDiscoveredTargetSupportsCreateStatusAndDeleteAfterDisappearance(t *testing.T) {
 	f := newBrokerFixture(t)
 	credential := f.credential(brokerResource1, brokerNode1, "192.0.2.10")
 	command := validCreateCommand(brokerNode1)
@@ -480,7 +480,7 @@ func TestBrokerRejectsBadIdentityWithoutBlockingHealthyTargets(t *testing.T) {
 	one["target_id"] = brokerNode2
 	f.page("", []map[string]any{one, two}, nil)
 	result, err := f.controller().Sync(context.Background())
-	if err != nil || result.Ready != 1 || result.Rejected != 1 {
+	if err != nil || result.Added != 1 || result.Rejected != 1 {
 		t.Fatalf("sync %+v: %v", result, err)
 	}
 	if _, err := f.registry.LookupForCreate(brokerNode2); err != nil {
@@ -488,30 +488,6 @@ func TestBrokerRejectsBadIdentityWithoutBlockingHealthyTargets(t *testing.T) {
 	}
 	if _, err := f.registry.LookupForMaintenance(brokerNode1); err == nil {
 		t.Fatal("unverified node enrolled")
-	}
-}
-
-func TestBrokerReplacementKeepsOldUIDForCleanup(t *testing.T) {
-	f := newBrokerFixture(t)
-	one := f.credential(brokerResource1, brokerNode1, "192.0.2.10")
-	f.page("", []map[string]any{one}, nil)
-	s := f.controller()
-	if _, err := s.Sync(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	replacement := f.credential(brokerResource1, brokerNode2, "192.0.2.20")
-	f.page("", []map[string]any{replacement}, nil)
-	if _, err := s.Sync(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.registry.LookupForCreate(brokerNode1); err == nil {
-		t.Fatal("old node still accepts create")
-	}
-	if _, err := f.registry.LookupForMaintenance(brokerNode1); err != nil {
-		t.Fatal("old node cleanup lost")
-	}
-	if _, err := f.registry.LookupForCreate(brokerNode2); err != nil {
-		t.Fatal("replacement missing:", err)
 	}
 }
 
@@ -543,7 +519,18 @@ func TestBrokerFleetGatewayDefaultPreservesStaticAndCachedOptOut(t *testing.T) {
 			f.registry, _ = NewRegistry([]ClusterConfig{cfg}, &sequenceFactory{clients: []kubernetes.Interface{fake.NewClientset()}})
 			f.page("", []map[string]any{f.credential(brokerResource1, brokerNode1, "192.0.2.10")}, nil)
 			if cached {
+				f.registry, _ = NewRegistry(nil, nil)
 				if _, err := f.controller().Sync(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				state, err := loadBrokerState(f.config.StateDirectory)
+				if err != nil {
+					t.Fatal(err)
+				}
+				entry := state[brokerNode1]
+				entry.Config.Gateway = &GatewayConfig{Enabled: false}
+				state[brokerNode1] = entry
+				if err := saveBrokerState(f.config.StateDirectory, state); err != nil {
 					t.Fatal(err)
 				}
 				f.registry, _ = NewRegistry(nil, nil)
@@ -574,7 +561,7 @@ func TestBrokerMalformedResourceIDsDoNotBlockHealthyEnrollment(t *testing.T) {
 			}
 			f.pages[""] = map[string]any{"items": []any{invalid, invalid, credential}, "next_cursor": nil}
 			result, err := f.controller().Sync(context.Background())
-			if err != nil || result.Ready != 1 || result.Rejected != 2 {
+			if err != nil || result.Added != 1 || result.Rejected != 2 {
 				t.Fatalf("malformed resource IDs blocked a healthy target: %+v %v", result, err)
 			}
 			if _, err := f.registry.LookupForCreate(brokerNode1); err != nil {

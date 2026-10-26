@@ -3,7 +3,7 @@
 > **For agentic workers:** Use superpowers:executing-plans for inline
 > implementation. Follow test-driven-development and verify before completion.
 
-**Goal:** Discover and refresh every Broker K3s VM as a Runtime target.
+**Goal:** Check Broker K3s credentials hourly and register only new VM targets.
 
 **Architecture:** Add an opt-in, persistent Broker registry controller to the
 Go Runtime. Keep file targets and share the existing registry and Gateway
@@ -17,15 +17,15 @@ lookup across the controller and operation workers.
 
 - Node UID is lifecycle target ID; Broker resource ID is credential identity.
 - Fleet capabilities require an explicit policy; no hardcoded VM addresses.
-- Preserve maintenance routes and manual target policy across refreshes.
+- Preserve all existing credentials, clients, policy and eligibility across checks.
 - Failed pagination publishes nothing; private credentials never enter logs.
 
 ## Review focus
 
 - A second page fails after a successful first page: no partial publication.
-- A node disappears or is replaced while bindings still need cleanup.
+- A known node disappears or is replaced: existing registrations remain unchanged.
 - A manually disabled target reappears in Broker: it stays disabled.
-- A restarted Runtime must retain maintenance clients from private state.
+- A restarted Runtime must retain clients and eligibility from private state.
 - Concurrent create/status/delete and Gateway lookups see complete snapshots.
 
 ### Task 1: Broker discovery and persistence
@@ -36,7 +36,7 @@ Files: `internal/k3s/broker*.go`, `internal/k3s/registry.go`,
 - [x] Write behavior tests for the cases in the spec and Review focus.
 - [x] Run `go test ./internal/k3s -run Broker -count=1`; observe RED.
 - [x] Implement verified paginated discovery, atomic private cache and
-      registry snapshots under a mutex, with maintenance-only retirement.
+      registry snapshots under a mutex, adding only unregistered VMs.
 - [x] Run those tests and the existing K3s suite; observe GREEN.
 
 ### Task 2: Runtime lifecycle and configuration
@@ -56,7 +56,7 @@ Files: `deploy/broker-target-policy.example.json`, `README.md`,
 `docs/operations/broker-k3s-credentials.md`.
 
 - [x] Document the one-time fleet configuration, identity, cache permissions,
-      refresh/retirement behavior, Gateway prerequisites and rollout.
+      hourly add-only behavior, Gateway prerequisites and rollout.
 - [x] Run `go test ./...`, relevant `go test -race`, `go vet ./...`, and
       deployment tests. Record baseline/environment failures separately.
 - [x] Review the complete diff and address correctness findings with tests.
@@ -64,6 +64,14 @@ Files: `deploy/broker-target-policy.example.json`, `README.md`,
       permits; production deployment remains a separate activation.
 
 ## Execution evidence
+
+- User refinement supersedes the original one-minute reconciliation behavior:
+  check every hour and add new VMs only. Added tests first reproduced six
+  differences: default interval, known-credential mutation, disappearance,
+  restart eligibility, file-target mutation and known-resource replacement.
+- After refinement: full Linux suite, vet and race tests passed. A second
+  read-only review found no actionable defect; file/cache collision and Node UID
+  deduplication coverage were added and the Broker suite passed again.
 
 - Base: `82a97617d7ac2b738faff4d77c11a23b5516e1c0` (origin/dev).
 - Initial Broker and command tests failed for the absent discovery feature;

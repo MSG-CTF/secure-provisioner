@@ -35,7 +35,9 @@ type brokerPolicy struct {
 	SecurityCapabilities *registrySecurityCapabilities `json:"security_capabilities"`
 }
 
-type BrokerSyncResult struct{ Ready, Retired, Rejected int }
+type BrokerSyncResult struct{ Added, Skipped, Rejected int }
+
+var errBrokerTargetExists = brokerError("BROKER_TARGET_ALREADY_REGISTERED")
 
 type BrokerSync struct {
 	mu       sync.Mutex
@@ -44,7 +46,6 @@ type BrokerSync struct {
 	policy   brokerPolicy
 	http     *http.Client
 	state    map[string]brokerStateEntry
-	static   map[string]Cluster
 }
 
 func NewBrokerSync(registry *Registry, config BrokerSyncConfig) (*BrokerSync, error) {
@@ -55,7 +56,7 @@ func NewBrokerSync(registry *Registry, config BrokerSyncConfig) (*BrokerSync, er
 		return nil, err
 	}
 	if config.Interval == 0 {
-		config.Interval = time.Minute
+		config.Interval = time.Hour
 	}
 	if config.RequestTimeout == 0 {
 		config.RequestTimeout = 10 * time.Second
@@ -94,17 +95,17 @@ func NewBrokerSync(registry *Registry, config BrokerSyncConfig) (*BrokerSync, er
 	}
 	client.Timeout = config.RequestTimeout
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	s := &BrokerSync{registry: registry, config: config, policy: policy, http: client, state: state, static: registry.snapshot()}
+	s := &BrokerSync{registry: registry, config: config, policy: policy, http: client, state: state}
 	targets := registry.snapshot()
-	for id, cluster := range targets {
-		if cluster.Config.BrokerResourceTargetID != "" {
-			cluster.Config.Enabled = false
-			targets[id] = cluster
-		}
-	}
 	for id, entry := range state {
 		if id != entry.Config.TargetID || id != entry.Credential.TargetID || entry.Config.BrokerResourceTargetID != entry.Credential.ResourceID {
 			return nil, brokerError("BROKER_STATE_IDENTITY_MISMATCH")
+		}
+		if existing, ok := targets[id]; ok {
+			if existing.Config.BrokerResourceTargetID != "" && existing.Config.BrokerResourceTargetID != entry.Credential.ResourceID {
+				return nil, brokerError("BROKER_TARGET_ID_CONFLICT")
+			}
+			continue
 		}
 		raw, err := verifiedBrokerConfig(entry.Credential, false)
 		if err != nil {
@@ -115,13 +116,9 @@ func NewBrokerSync(registry *Registry, config BrokerSyncConfig) (*BrokerSync, er
 			return nil, brokerError("BROKER_STATE_CLIENT_UNAVAILABLE")
 		}
 		cfg := entry.Config
-		if existing, ok := s.static[id]; ok {
-			if existing.Config.BrokerResourceTargetID != "" && existing.Config.BrokerResourceTargetID != cfg.BrokerResourceTargetID {
-				return nil, brokerError("BROKER_TARGET_ID_CONFLICT")
-			}
-			cfg = existing.Config
+		if config.ReadOnly {
+			cfg.Enabled = false
 		}
-		cfg.Enabled = false
 		if _, err := validateClusterConfig(cfg, map[string]struct{}{}); err != nil {
 			return nil, brokerError("BROKER_STATE_POLICY_INVALID")
 		}
@@ -228,20 +225,14 @@ func (s *BrokerSync) prepare(ctx context.Context, credential brokerCredential, s
 	if legacy, ok := snapshot[credential.ResourceID]; ok && legacy.Config.TargetID != id {
 		return fail()
 	}
+	if existing, ok := snapshot[id]; ok {
+		if existing.Config.BrokerResourceTargetID != "" && existing.Config.BrokerResourceTargetID != credential.ResourceID {
+			return fail()
+		}
+		return brokerStateEntry{}, Cluster{}, errBrokerTargetExists
+	}
 	cfg := ClusterConfig{TargetID: id, BrokerResourceTargetID: credential.ResourceID, Enabled: *s.policy.Enabled, Provider: s.policy.Provider, Region: s.policy.Region, ExposureMode: ExposureModeNodePort, SecurityCapabilities: s.policy.SecurityCapabilities.clusterCapabilities()}
-	newTarget := true
-	if existing, ok := s.static[id]; ok {
-		cfg = copyCluster(existing).Config
-		newTarget = false
-	} else if existing, ok := s.state[id]; ok {
-		cfg = existing.Config
-		cfg.Enabled = existing.DesiredEnabled
-		newTarget = false
-	}
-	if cfg.BrokerResourceTargetID != "" && cfg.BrokerResourceTargetID != credential.ResourceID {
-		return fail()
-	}
-	if newTarget || cfg.Provider == "" {
+	{
 		switch strings.SplitN(node.Spec.ProviderID, ":", 2)[0] {
 		case "gce", "gcp":
 			cfg.Provider = ProviderGCP
@@ -251,7 +242,7 @@ func (s *BrokerSync) prepare(ctx context.Context, credential brokerCredential, s
 			cfg.Provider = ProviderNCP
 		}
 	}
-	if region := node.Labels[corev1.LabelTopologyRegion]; region != "" && (newTarget || cfg.Region == "") {
+	if region := node.Labels[corev1.LabelTopologyRegion]; region != "" {
 		cfg.Region = region
 	}
 	cfg.Architecture = strings.ToLower(node.Status.NodeInfo.Architecture)
@@ -268,7 +259,7 @@ func (s *BrokerSync) prepare(ctx context.Context, credential brokerCredential, s
 			host = "[" + host + "]"
 		}
 		cfg.PublicGateway = (&url.URL{Scheme: "http", Host: host}).String()
-		if (newTarget && s.policy.GatewayEnabled) || (cfg.Gateway != nil && cfg.Gateway.Enabled) {
+		if s.policy.GatewayEnabled {
 			cfg.Gateway = &GatewayConfig{Enabled: true, UpstreamIP: server.Hostname()}
 		}
 	}
@@ -280,8 +271,8 @@ func (s *BrokerSync) prepare(ctx context.Context, credential brokerCredential, s
 	return entry, Cluster{Config: normalized, Client: clients.Kubernetes, Metrics: clients.Metrics}, nil
 }
 
-// Sync publishes only after every listing page and the private state commit
-// succeed. Per-node failures retire that node's create route, not its cleanup.
+// Sync enrolls only resources not already registered. Existing credentials,
+// policy, clients and eligibility are preserved, including missing resources.
 func (s *BrokerSync) Sync(ctx context.Context) (BrokerSyncResult, error) {
 	if s.config.ReadOnly {
 		return BrokerSyncResult{}, brokerError("BROKER_DISCOVERY_READ_ONLY")
@@ -295,6 +286,16 @@ func (s *BrokerSync) Sync(ctx context.Context) (BrokerSyncResult, error) {
 		return BrokerSyncResult{}, err
 	}
 	result := BrokerSyncResult{}
+	snapshot := s.registry.snapshot()
+	known := make(map[string]bool, len(snapshot))
+	for _, cluster := range snapshot {
+		if cluster.Config.BrokerResourceTargetID != "" {
+			known[cluster.Config.BrokerResourceTargetID] = true
+		}
+	}
+	for _, entry := range s.state {
+		known[entry.Credential.ResourceID] = true
+	}
 	credentials := make([]brokerCredential, 0, len(items))
 	seenResources := map[string]bool{}
 	for _, raw := range items {
@@ -307,19 +308,23 @@ func (s *BrokerSync) Sync(ctx context.Context) (BrokerSyncResult, error) {
 			return BrokerSyncResult{}, brokerError("BROKER_DUPLICATE_RESOURCE")
 		}
 		seenResources[credential.ResourceID] = true
+		if known[credential.ResourceID] {
+			result.Skipped++
+			continue
+		}
+		if existing, ok := snapshot[credential.TargetID]; ok {
+			if existing.Config.BrokerResourceTargetID != "" && existing.Config.BrokerResourceTargetID != credential.ResourceID {
+				result.Rejected++
+			} else {
+				result.Skipped++
+			}
+			continue
+		}
 		credentials = append(credentials, credential)
 	}
-	snapshot := s.registry.snapshot()
 	next := make(map[string]brokerStateEntry, len(s.state)+len(credentials))
 	for id, entry := range s.state {
-		entry.Config.Enabled = false
 		next[id] = entry
-	}
-	for id, cluster := range snapshot {
-		if cluster.Config.BrokerResourceTargetID != "" {
-			cluster.Config.Enabled = false
-			snapshot[id] = cluster
-		}
 	}
 	type prepared struct {
 		entry   brokerStateEntry
@@ -348,6 +353,10 @@ func (s *BrokerSync) Sync(ctx context.Context) (BrokerSyncResult, error) {
 	seenNodes := map[string]bool{}
 	readyClusters := map[string]Cluster{}
 	for prepared := range results {
+		if prepared.err == errBrokerTargetExists {
+			result.Skipped++
+			continue
+		}
 		if prepared.err != nil {
 			result.Rejected++
 			continue
@@ -359,25 +368,16 @@ func (s *BrokerSync) Sync(ctx context.Context) (BrokerSyncResult, error) {
 		seenNodes[id] = true
 		next[id] = prepared.entry
 		readyClusters[id] = prepared.cluster
-		result.Ready++
+		result.Added++
 	}
 	if ctx.Err() != nil {
 		return BrokerSyncResult{}, brokerError("BROKER_SYNC_CANCELLED")
 	}
-	for id, entry := range next {
-		if !seenNodes[id] {
-			result.Retired++
-		}
-		if cluster, ok := readyClusters[id]; ok {
-			snapshot[id] = cluster
-			continue
-		}
-		if old, ok := snapshot[id]; ok {
-			old.Config = entry.Config
-			snapshot[id] = old
-			continue
-		}
-		return BrokerSyncResult{}, brokerError("BROKER_MAINTENANCE_ROUTE_MISSING")
+	if result.Added == 0 {
+		return result, nil
+	}
+	for id, cluster := range readyClusters {
+		snapshot[id] = cluster
 	}
 	if err := saveBrokerState(s.config.StateDirectory, next); err != nil {
 		return BrokerSyncResult{}, err

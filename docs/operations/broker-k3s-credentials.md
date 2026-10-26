@@ -2,8 +2,10 @@
 
 ## Automatic registration and refresh
 
-Runtime can discover **all** VMs returned by the authenticated Broker list
-API. Use this mode instead of running the single-VM importer for each new VM.
+Runtime fetches the authenticated Broker credential list at startup and
+**once per hour**, adding only VMs that have not been registered. Existing
+targets, certificates, clients, routing and enabled/disabled settings are kept.
+Use this mode instead of running the single-VM importer for each new VM.
 Configure it once on the Linux Runtime host:
 
 ```sh
@@ -11,7 +13,7 @@ PROVISIONER_BROKER_BASE_URL=https://broker.mjsec.kr/api
 PROVISIONER_BROKER_TOKEN_FILE=/etc/secure-provisioner/secrets/broker-runtime-token
 PROVISIONER_BROKER_TARGET_POLICY=/etc/secure-provisioner/broker-target-policy.json
 PROVISIONER_BROKER_STATE_DIRECTORY=/var/lib/secure-provisioner/broker
-PROVISIONER_BROKER_SYNC_INTERVAL=1m
+PROVISIONER_BROKER_SYNC_INTERVAL=1h
 PROVISIONER_BROKER_REQUEST_TIMEOUT=10s
 PROVISIONER_BROKER_SYNC_TIMEOUT=2m
 ```
@@ -41,9 +43,11 @@ Existing target policy and explicit disablement in the file registry take
 precedence. Policy changes take effect on restart; existing discovered targets
 retain their saved policy until an operator-approved migration.
 
-Runtime synchronizes once during normal startup and then periodically. Each
-cycle fetches every page using `next_cursor`/`after`, verifies credentials and
-queries up to four nodes concurrently. The returned Node UID becomes
+Runtime checks once during normal startup and then hourly. Each cycle fetches
+every page using `next_cursor`/`after`. Known Broker resource IDs and existing
+Node UID registrations are skipped; their credentials are not revalidated or
+replaced. For new resources, Runtime verifies credentials and queries up to
+four nodes concurrently. The returned Node UID becomes
 `target_id`; Broker's `resource_target_id` remains the credential identity.
 If the API returns `target_id`, Runtime checks it against the actual node. Older
 responses without that additive field are supported by observing the node UID
@@ -55,23 +59,26 @@ The upstream public IP is derived per VM, and Runtime still requires its
 Gateway token and PostgreSQL journal. Existing Ingress targets retain their
 configured ingress and public gateway.
 
-The shared registry is updated atomically for create/status/delete and Gateway
+New registrations are published atomically for create/status/delete and Gateway
 lookups, without restarting the service. A failed listing page publishes
-nothing. A malformed, expired or unreachable individual VM is rejected while
-healthy VMs are registered. A missing, rejected or replaced node loses create
-eligibility; its old UID and clients remain available for maintenance. The
-tool does not clear reservations or CLEANUP_PENDING records.
+nothing. A malformed, expired or unreachable new VM is rejected while healthy
+new VMs are registered. Disappearance from the API, address changes, credential
+rotation or replacement of a known resource do not alter its existing target.
+Those changes require an explicit maintenance/migration operation. Discovery
+does not remove or disable targets, clear reservations or alter CLEANUP_PENDING
+records. When no new VM is added, it does not rewrite the private state file.
 
 Verified credentials and target policy are saved in the private state file
 before publication. This file contains private keys: keep it on the Runtime
-host and out of source control, artifacts and general backups. On restart,
-cached clients are restored with create disabled until live discovery succeeds.
-A transient Broker outage therefore preserves cleanup routes. The temporary
+host and out of source control, artifacts and general backups. Normal restarts
+restore cached clients with their saved eligibility; file-registry targets take
+precedence. A transient Broker outage preserves existing targets. The temporary
 API-only deployment bridge restores that cache but does not poll or enroll
 nodes or create/write the state directory, including before first enrollment.
-Logs report counts and sanitized error codes, never credentials or
-external error bodies. Retired entries are intentionally retained until their
-operations/bindings/routes have been reconciled.
+Logs report `added`, `skipped`, `rejected` and sanitized error codes, never
+credentials or external error bodies. The API-only bridge restores cached
+targets for maintenance only. Existing certificates are deliberately not
+renewed by this hourly addition job; use the maintenance importer when needed.
 
 For migration, first upgrade Runtime through the normal release handoff,
 then add the fleet settings to its deployment environment and restart once.

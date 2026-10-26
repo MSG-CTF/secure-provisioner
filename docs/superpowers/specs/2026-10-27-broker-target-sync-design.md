@@ -2,7 +2,8 @@
 
 The requested behavior is to register all VMs returned by Broker's K3s
 credential API, without editing a target ID, IP address or credential path
-for each VM. Runtime will own discovery and refresh while it is running.
+for each VM. The user's final refinement is an initial check followed by
+one-hour checks that add new VMs only. Existing targets remain unchanged.
 
 ## Approach
 
@@ -25,16 +26,18 @@ targets and backwards-compatible startup when discovery is unconfigured.
 - A single operator-approved fleet policy supplies enabled/isolation
   capability settings. Credential possession does not attest isolation.
   Existing target policy and explicit operator disablement are preserved.
-- Sync once before serving and periodically thereafter, without restarting
+- Check once before serving and hourly thereafter, without restarting
   workers. Publish complete snapshots with concurrent-reader protection.
-- Failed/incomplete listing preserves the last complete snapshot. An
-  invalid/unreachable individual VM cannot prevent healthy VMs enrolling;
-  its old registration is retained for maintenance but disabled for create.
-- Missing or replaced nodes are retained with create disabled, so operations
-  and bindings can still use their original cleanup identity.
+- Failed/incomplete listing publishes no additions. An invalid/unreachable
+  new VM cannot prevent healthy new VMs enrolling. Known resource IDs and
+  existing Node UID targets are skipped before constructing new clients.
+- Missing, changed or replaced known resources retain their original clients,
+  credentials, policy and eligibility. No automatic disable/removal/rotation.
 - Save verified credentials and policy in a dedicated private, atomic state
-  file for recovery after restart. Restore cached targets for maintenance
-  only until Broker and live node checks succeed again. Never print tokens,
+  file for recovery after restart. Restore cached targets with saved eligibility
+  on normal startup; API-only bridges restore maintenance clients without writes.
+  File registrations take precedence. No additions means no state rewrite.
+  Never print tokens,
   kubeconfigs, private keys or external response bodies.
 - Refuse conflicting legacy resource-ID registrations instead of creating
   two active routes to the same node.
@@ -42,7 +45,7 @@ targets and backwards-compatible startup when discovery is unconfigured.
 ## Configuration and scope
 
 Discovery is opt-in with Broker base URL, Runtime token file, fleet policy
-file and private state directory. Sync interval defaults to 1 minute;
+file and private state directory. Check interval defaults to 1 hour;
 request timeout to 10 seconds. No per-VM mapping is configured. This change
 does not bootstrap node isolation, mutate Scheduler reservations, or repair
 existing CLEANUP_PENDING records. Production activation follows release
@@ -50,8 +53,8 @@ handoff; local implementation does not restart the current service.
 
 ## Verification
 
-Exercise pagination, actual target identity, address derivation, credential
-rotation, partial failures, disappearance/reappearance, node replacement,
-cache recovery, policy preservation, malformed credentials and concurrent
+Exercise pagination, actual target identity, address derivation, skipped
+credential rotation, partial failures, disappearance/reappearance, ignored
+known-resource replacement, cache recovery, policy preservation, malformed credentials and concurrent
 registry reads. Run the Go suite and relevant race tests on Linux, plus
 the existing deployment importer suite against the new binary.

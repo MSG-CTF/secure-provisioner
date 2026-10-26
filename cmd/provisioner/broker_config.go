@@ -17,7 +17,7 @@ func loadBrokerConfig(getenv func(string) string) (k3s.BrokerSyncConfig, error) 
 		TokenFile:      strings.TrimSpace(getenv("PROVISIONER_BROKER_TOKEN_FILE")),
 		PolicyPath:     strings.TrimSpace(getenv("PROVISIONER_BROKER_TARGET_POLICY")),
 		StateDirectory: strings.TrimSpace(getenv("PROVISIONER_BROKER_STATE_DIRECTORY")),
-		Interval:       time.Minute, RequestTimeout: 10 * time.Second, SyncTimeout: 2 * time.Minute,
+		Interval:       time.Hour, RequestTimeout: 10 * time.Second, SyncTimeout: 2 * time.Minute,
 	}
 	if config.BaseURL == "" && config.TokenFile == "" && config.PolicyPath == "" && config.StateDirectory == "" {
 		return k3s.BrokerSyncConfig{}, nil
@@ -41,10 +41,10 @@ func loadBrokerConfig(getenv func(string) string) (k3s.BrokerSyncConfig, error) 
 
 func reportBrokerSync(result k3s.BrokerSyncResult, err error) {
 	if err != nil {
-		slog.Warn("Broker target refresh failed; previous snapshot preserved", "code", err.Error())
+		slog.Warn("Broker target discovery failed; existing targets preserved", "code", err.Error())
 		return
 	}
-	slog.Info("Broker targets refreshed", "ready", result.Ready, "retired", result.Retired, "rejected", result.Rejected)
+	slog.Info("Broker targets checked", "added", result.Added, "skipped", result.Skipped, "rejected", result.Rejected)
 }
 
 // One cancellation boundary covers workers and discovery. Discovery finishes
