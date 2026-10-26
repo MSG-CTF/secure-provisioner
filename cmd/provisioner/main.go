@@ -55,6 +55,13 @@ type application struct {
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	if len(os.Args) > 1 && os.Args[1] == "--validate-registry" {
+		if err := validateRegistryCommand(os.Args[2:], os.Stdout); err != nil {
+			logger.Error("registry validation failed")
+			os.Exit(1)
+		}
+		return
+	}
 	mode, err := deploymentMode(os.Args[1:])
 	if err != nil {
 		logger.Error("invalid startup mode")

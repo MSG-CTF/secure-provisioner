@@ -44,7 +44,8 @@ jobs:
       - name: Verify modules and deployment recovery
         run: |
           go mod verify
-          python3 -m unittest discover -s deploy -p 'test_*.py' -v
+          go build -o "$RUNNER_TEMP/registry-validator" ./cmd/provisioner
+          RUNTIME_REGISTRY_VALIDATOR="$RUNNER_TEMP/registry-validator" python3 -m unittest discover -s deploy -p 'test_*.py' -v
           bash scripts/test-deploy-provisioner-release.sh
       - name: Test with PostgreSQL and vet
         run: |
