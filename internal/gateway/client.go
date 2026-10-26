@@ -120,14 +120,19 @@ func (c *Client) Delete(ctx context.Context, id string) error {
 	return c.call(ctx, http.MethodDelete, id, nil, nil)
 }
 func (c *Client) call(ctx context.Context, method, id string, body any, result any) error {
+	if !validID.MatchString(id) {
+		return &APIError{Code: "GATEWAY_INVALID_INSTANCE_ID", Permanent: true}
+	}
+	// Runtime workers already bound the number of waiters. Share the request
+	// deadline with this queue so a busy peer does not send every other worker
+	// into exponential operation retries during a simultaneous reset.
+	ctx, cancel := context.WithTimeout(ctx, c.http.Timeout)
+	defer cancel()
 	select {
 	case c.gate <- struct{}{}:
 		defer func() { <-c.gate }()
-	default:
+	case <-ctx.Done():
 		return &APIError{Code: "GATEWAY_LOCAL_BUSY"}
-	}
-	if !validID.MatchString(id) {
-		return &APIError{Code: "GATEWAY_INVALID_INSTANCE_ID", Permanent: true}
 	}
 	var payload []byte
 	if body != nil {
