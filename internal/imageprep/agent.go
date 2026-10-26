@@ -93,7 +93,7 @@ func (a *Agent) Prepare(ctx context.Context, r AgentRequest) (Evidence, error) {
 	}
 	resolved, err := a.verify(ctx, r)
 	if err != nil && r.Pull && ErrorCode(err) != "PLATFORM_MISMATCH" {
-		if err := a.Commands.Run(ctx, io.Discard, "crictl", "--runtime-endpoint", "unix://"+socket, "--image-endpoint", "unix://"+socket, "pull", r.Image); err != nil {
+		if err := a.Commands.Run(ctx, io.Discard, "crictl", "--config", "/dev/null", "--runtime-endpoint", "unix://"+socket, "--image-endpoint", "unix://"+socket, "pull", r.Image); err != nil {
 			return Evidence{}, err
 		}
 		resolved, err = a.verify(ctx, r)
@@ -155,7 +155,7 @@ func (a *Agent) blob(ctx context.Context, d descriptor, keep bool) ([]byte, erro
 }
 func (a *Agent) verify(ctx context.Context, r AgentRequest) (string, error) {
 	inspected := &boundedBuffer{Limit: 1 << 20}
-	if err := a.Commands.Run(ctx, inspected, "crictl", "--runtime-endpoint", "unix://"+socket, "--image-endpoint", "unix://"+socket, "inspecti", r.Image); err != nil {
+	if err := a.Commands.Run(ctx, inspected, "crictl", "--config", "/dev/null", "--runtime-endpoint", "unix://"+socket, "--image-endpoint", "unix://"+socket, "inspecti", r.Image); err != nil {
 		return "", Failure{Code: "CONTENT_INCOMPLETE"}
 	}
 	var status struct {
