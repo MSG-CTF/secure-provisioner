@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"github.com/MSG-CTF/secure-provisioner/internal/k3s"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 	appsv1 "k8s.io/api/apps/v1"
@@ -12,6 +13,28 @@ import (
 	metricsfake "k8s.io/metrics/pkg/client/clientset/versioned/fake"
 	"testing"
 )
+
+func TestKubernetesAdmissionRejectsUnknownAndDisabledTargets(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	cfg := k3s.ClusterConfig{TargetID: "disabled", Provider: k3s.ProviderLocal, Region: "local",
+		Architecture: "amd64", KubeconfigPath: "unused", PublicGateway: "http://8.8.8.8",
+		ExposureMode: k3s.ExposureModeNodePort, Enabled: false}
+	registry, err := k3s.NewRegistry([]k3s.ClusterConfig{cfg}, gatewayFactory{client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &KubernetesBackend{Registry: registry}
+	for target, want := range map[string]string{"missing": "TARGET_NOT_FOUND", "disabled": "TARGET_DISABLED"} {
+		err := backend.ValidateCreateCommand(provisioner.CreateWorkloadCommand{RuntimeType: provisioner.RuntimeTypeKubernetes, TargetID: target})
+		var code interface{ Code() string }
+		if !errors.As(err, &code) || code.Code() != want {
+			t.Fatalf("%s: %v, want %s", target, err, want)
+		}
+	}
+	if len(client.Actions()) != 0 {
+		t.Fatal("target admission contacted Kubernetes")
+	}
+}
 
 type gatewayFactory struct{ client *fake.Clientset }
 

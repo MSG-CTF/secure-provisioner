@@ -177,6 +177,28 @@ func TestGatewayAdmissionCountsAllPublicPorts(t *testing.T) {
 	}
 }
 
+type rejectingAdmissionBackend struct {
+	fakeBackend
+	failure error
+}
+
+func (b *rejectingAdmissionBackend) ValidateCreateCommand(provisioner.CreateWorkloadCommand) error {
+	return b.failure
+}
+
+func TestGatewayAdmissionPreservesBackendTargetRejection(t *testing.T) {
+	rejected := errors.New("target not registered")
+	backend := &rejectingAdmissionBackend{failure: rejected}
+	remote := &fakeRoutes{}
+	adapter := NewAdapter(backend, remote, &memoryJournal{})
+	if err := adapter.ValidateCreateCommand(provisioner.CreateWorkloadCommand{}); err != rejected {
+		t.Fatal("target validation was bypassed", err)
+	}
+	if backend.creates != 0 || remote.puts != 0 {
+		t.Fatal("admission mutated workload or Gateway")
+	}
+}
+
 func TestGatewayPreservesBackendRuntimeFailureAndCleanupProof(t *testing.T) {
 	_, runtimeFailure := k3s.NewAdapter(nil, k3s.AdapterConfig{})
 	wrapped := provisioner.WithCreateCleanupCompleted(runtimeFailure)

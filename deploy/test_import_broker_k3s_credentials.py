@@ -110,6 +110,37 @@ class CredentialImportTests(unittest.TestCase):
         self.assertFalse(entries[1]["enabled"])
         self.assertEqual(len(list(self.credentials.glob("*.yaml"))), 1)
 
+    def test_client_certificate_chain_uses_leaf_fingerprint(self):
+        chain = self.certificate + self.certificate
+        self.config["users"][0]["user"]["client-certificate-data"] = base64.b64encode(chain.encode()).decode()
+        self.raw_config = json.dumps(self.config)
+        self.credential["kubeconfig_base64"] = base64.b64encode(self.raw_config.encode()).decode()
+        real_decode = ssl.PEM_cert_to_DER_cert
+
+        def decode_one_leaf(value):
+            self.assertEqual(value.count("-----BEGIN CERTIFICATE-----"), 1)
+            return real_decode(value)
+
+        with patch.object(importer.ssl, "PEM_cert_to_DER_cert", side_effect=decode_one_leaf):
+            result = self.perform()
+        self.assertEqual(result["target_id"], NODE)
+
+    def test_explicit_legacy_migration_preserves_disabled_maintenance_route(self):
+        legacy = {**self.original["clusters"][0], "target_id": RESOURCE, "enabled": True}
+        self.original["clusters"].append(legacy)
+        self.registry.write_text(json.dumps(self.original))
+        with self.assertRaises(importer.ImportFailure):
+            self.perform()
+        result = self.perform(migrate_legacy=True)
+        entries = json.loads(self.candidate.read_text())["clusters"]
+        old = next(entry for entry in entries if entry["target_id"] == RESOURCE)
+        current = next(entry for entry in entries if entry["target_id"] == NODE)
+        self.assertEqual(old, {**legacy, "enabled": False})
+        self.assertEqual(current["broker_resource_target_id"], RESOURCE)
+        self.assertEqual(current["target_id"], NODE)
+        self.assertEqual(result["target_id"], NODE)
+        self.assertEqual(json.loads(self.registry.read_text()), self.original)
+
     def test_missing_wrong_and_stale_node_identity_do_not_modify_registry(self):
         for value in (None, "", OTHER):
             with self.subTest(target_id=value):
