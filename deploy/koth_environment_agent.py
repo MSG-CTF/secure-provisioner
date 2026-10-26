@@ -84,7 +84,7 @@ def validate_config(config):
         raise ValueError("Invalid game scope")
     seen, namespaces = set(), set()
     for game in config["games"]:
-        if (set(game) - {"challenge_id", "namespace", "deployment", "source_revision", "containers", "token", "allow_publications"}
+        if (set(game) - {"challenge_id", "namespace", "deployment", "source_revision", "containers", "token", "allow_publications", "workloads"}
                 or not {"challenge_id", "namespace", "deployment", "source_revision", "containers", "token"} <= set(game)
                 or not isinstance(game.get("allow_publications", False), bool)):
             raise ValueError("Invalid game configuration")
@@ -105,6 +105,27 @@ def validate_config(config):
                     or not isinstance(item["protected"], dict)
                     or not all(NAME.fullmatch(k) and re.fullmatch(r"[0-9a-f]{64}", v) for k, v in item["protected"].items())):
                 raise ValueError("Invalid container configuration")
+        if "workloads" in game:
+            workloads = game["workloads"]
+            if not isinstance(workloads, dict) or set(workloads) != set(game["containers"]):
+                raise ValueError("Every container requires one fixed workload")
+            scopes = set()
+            for item in workloads.values():
+                if (not isinstance(item, dict) or set(item) != {"namespace", "deployment", "max_replicas"}
+                        or not all(isinstance(item[k], str) and DNS.fullmatch(item[k]) for k in ("namespace", "deployment"))
+                        or type(item["max_replicas"]) is not int or not 1 <= item["max_replicas"] <= 16):
+                    raise ValueError("Invalid workload binding")
+                scope = (item["namespace"], item["deployment"])
+                if scope in scopes:
+                    raise ValueError("Duplicate workload binding")
+                scopes.add(scope)
+    scopes = []
+    for game in config["games"]:
+        scopes.extend((item["namespace"], item["deployment"]) for item in game.get("workloads", {}).values())
+        if "workloads" not in game:
+            scopes.append((game["namespace"], game["deployment"]))
+    if len(scopes) != len(set(scopes)):
+        raise ValueError("Overlapping game workloads")
     return config
 
 
@@ -239,7 +260,7 @@ class Kubernetes:
     def deployment(self):
         row = self.run(["get", "deployment", self.game["deployment"], "-o", "json"])
         containers = row["spec"]["template"]["spec"]["containers"]
-        if (row["spec"].get("replicas", 1) != 1 or len(containers) != len(self.game["containers"])
+        if (not 1 <= row["spec"].get("replicas", 1) <= self.game.get("max_replicas", 1) or len(containers) != len(self.game["containers"])
                 or {c["name"] for c in containers} != set(self.game["containers"])
                 or any(not allowed_image(self.game["containers"][c["name"]]["image"], c["image"], self.game.get("allow_publications", False)) for c in containers)):
             raise Fault("IMAGE_MISMATCH")
@@ -301,12 +322,19 @@ class Kubernetes:
             return False
         if deployment.get("status", {}).get("observedGeneration", 0) < deployment["metadata"]["generation"]:
             return False
-        if deployment.get("status", {}).get("updatedReplicas", 0) != 1 or deployment.get("status", {}).get("readyReplicas", 0) != 1:
+        count = deployment["spec"].get("replicas", 1)
+        if deployment.get("status", {}).get("updatedReplicas", 0) != count or deployment.get("status", {}).get("readyReplicas", 0) != count:
             return False
         selector = ",".join(k + "=" + v for k, v in sorted(deployment["spec"]["selector"]["matchLabels"].items()))
+        replicasets = self.run(["get", "replicasets", "-l", selector, "-o", "json"])["items"]
+        owned = {row["metadata"]["uid"] for row in replicasets if any(
+            ref.get("controller") is True and ref.get("kind") == "Deployment" and ref.get("uid") == deployment["metadata"]["uid"]
+            for ref in row["metadata"].get("ownerReferences", []))}
         pods = self.run(["get", "pods", "-l", selector, "-o", "json"])["items"]
-        pods = [p for p in pods if not p["metadata"].get("deletionTimestamp")]
-        if len(pods) != 1 or not any(c["type"] == "Ready" and c["status"] == "True" for c in pods[0].get("status", {}).get("conditions", [])):
+        pods = [p for p in pods if not p["metadata"].get("deletionTimestamp") and any(
+            ref.get("controller") is True and ref.get("kind") == "ReplicaSet" and ref.get("uid") in owned
+            for ref in p["metadata"].get("ownerReferences", []))]
+        if len(pods) != count or not all(any(c["type"] == "Ready" and c["status"] == "True" for c in p.get("status", {}).get("conditions", [])) for p in pods):
             return False
         for container in desired["settings"]["containers"]:
             configured = {key: entry["value"] for key, entry in container["entries"].items() if entry["value"] is not None}
@@ -338,15 +366,15 @@ class Kubernetes:
             # variables remain injected. Image-provided defaults are checked separately.
             if injected != configured:
                 return False
-            raw = self.run(["exec", pods[0]["metadata"]["name"], "-c", container["name"], "--", "env", "-0"], raw=True)
-            actual = dict(part.decode("utf-8").split("=", 1) for part in raw.split(b"\0") if b"=" in part)
-            for key, entry in container["entries"].items():
-                value = entry["value"]
-                if value is None:
-                    # No platform injection; preserve defaults baked into the author image.
-                    continue
-                elif key not in actual or not hmac.compare_digest(value.encode(), actual[key].encode()):
-                    return False
+            for pod in pods:
+                raw = self.run(["exec", pod["metadata"]["name"], "-c", container["name"], "--", "env", "-0"], raw=True)
+                actual = dict(part.decode("utf-8").split("=", 1) for part in raw.split(b"\0") if b"=" in part)
+                for key, entry in container["entries"].items():
+                    value = entry["value"]
+                    if value is None:
+                        continue
+                    elif key not in actual or not hmac.compare_digest(value.encode(), actual[key].encode()):
+                        return False
         return True
 
     def secret_name(self, desired, name):
@@ -401,7 +429,9 @@ class Kubernetes:
                 raise Fault("ROLLBACK_CONFLICT") from None
 
     def ready(self):
-        self.run(["rollout", "status", "deployment/" + self.game["deployment"], "--timeout=90s"], timeout=95, raw=True)
+        grace = self.deployment()["spec"]["template"]["spec"].get("terminationGracePeriodSeconds", 30)
+        seconds = max(90, min(360, grace + 60))
+        self.run(["rollout", "status", "deployment/" + self.game["deployment"], "--timeout=" + str(seconds) + "s"], timeout=seconds + 5, raw=True)
 
     def collect_unused_secrets(self):
         # Keep every Secret referenced by a live Pod or retained ReplicaSet for safe rollback.
@@ -430,11 +460,75 @@ class Kubernetes:
                      {"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": {"uid": row["metadata"]["uid"]}})
 
 
+def template_relation(current, before, after):
+    if current == before:
+        return "before"
+    if current == after:
+        return "after"
+    key = "msgctf_workloads"
+    if all(isinstance(item, dict) and set(item) == {key} for item in (current, before, after)):
+        rows, old, new = current[key], before[key], after[key]
+        if set(rows) == set(old) == set(new) and all(rows[name] in (old[name], new[name]) for name in rows):
+            return "partial"
+    return "conflict"
+
+
+class WorkloadGroup:
+    """One journal and acknowledgement for explicitly pinned, separate workloads."""
+    def __init__(self, game):
+        self.children = {}
+        for name, binding in game["workloads"].items():
+            child = {**game, **binding, "containers": {name: game["containers"][name]}}
+            child.pop("workloads", None)
+            self.children[name] = Kubernetes(child)
+
+    def subset(self, desired, name):
+        return {**desired, "settings": {"containers": [c for c in desired["settings"]["containers"] if c["name"] == name]}}
+
+    def deployment(self):
+        return {"spec": {"template": {"msgctf_workloads": {name: child.deployment()["spec"]["template"] for name, child in self.children.items()}}}}
+
+    def template(self, original, desired):
+        return {"msgctf_workloads": {name: child.template(original["msgctf_workloads"][name], self.subset(desired, name)) for name, child in self.children.items()}}
+
+    def patch(self, before, after):
+        current = self.deployment()["spec"]["template"]
+        if template_relation(current, before, after) == "conflict":
+            raise Fault("ROLLBACK_CONFLICT")
+        for name, child in self.children.items():
+            old, new = before["msgctf_workloads"][name], after["msgctf_workloads"][name]
+            value = child.deployment()["spec"]["template"]
+            if value == new:
+                continue
+            if value != old:
+                raise Fault("ROLLBACK_CONFLICT")
+            child.patch(old, new)
+
+    def ensure_images(self, desired, api, export_url):
+        for name, child in self.children.items():
+            child.ensure_images(self.subset(desired, name), api, export_url)
+
+    def ensure_secrets(self, desired):
+        for name, child in self.children.items():
+            child.ensure_secrets(self.subset(desired, name))
+
+    def values_match(self, desired):
+        return all(child.values_match(self.subset(desired, name)) for name, child in self.children.items())
+
+    def ready(self):
+        for child in self.children.values():
+            child.ready()
+
+    def collect_unused_secrets(self):
+        for child in self.children.values():
+            child.collect_unused_secrets()
+
+
 class Agent:
     def __init__(self, config, game, journal, api=None, kube=None):
         self.config, self.game, self.journal = config, game, journal
         self.api = api or Backend(config, game)
-        self.kube = kube or Kubernetes(game)
+        self.kube = kube or (WorkloadGroup(game) if "workloads" in game else Kubernetes(game))
         self.last_maintenance = 0
 
     def persist(self, state, phase, **extra):
@@ -492,7 +586,7 @@ class Agent:
                 if state["phase"] == "new":
                     changed = self.kube.template(current, desired)
                     self.persist(state, "prepared", before=current, after=changed)
-                elif current not in (state["before"], state["after"]):
+                elif template_relation(current, state["before"], state["after"]) == "conflict":
                     raise Fault("ROLLBACK_CONFLICT")
                 self.kube.ensure_secrets(desired)
                 check = self.api.get()
@@ -502,7 +596,7 @@ class Agent:
                 if not check.get("can_apply"):
                     raise Fault("GAME_ACTIVE")
                 current = self.kube.deployment()["spec"]["template"]
-                if current == state["before"]:
+                if template_relation(current, state["before"], state["after"]) in ("before", "partial"):
                     self.kube.patch(state["before"], state["after"])
                 elif current != state["after"]:
                     raise Fault("ROLLBACK_CONFLICT")
@@ -524,7 +618,7 @@ class Agent:
     def rollback(self, state):
         try:
             current = self.kube.deployment()["spec"]["template"]
-            if current == state["after"]:
+            if template_relation(current, state["before"], state["after"]) in ("after", "partial"):
                 self.kube.patch(state["after"], state["before"])
             elif current != state["before"]:
                 raise Fault("ROLLBACK_CONFLICT")
