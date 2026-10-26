@@ -215,7 +215,9 @@ def verify_node(node, expected):
 def verify_agent(pods, expected):
     candidates = []
     try:
-        if pods.get("kind") != "PodList" or not isinstance(pods["items"], list):
+        if pods.get("kind") not in ("PodList", "List") or not isinstance(pods["items"], list):
+            raise EnrollmentError("AGENT_UNAVAILABLE")
+        if pods.get("kind") == "List" and any(p.get("kind") != "Pod" for p in pods["items"]):
             raise EnrollmentError("AGENT_UNAVAILABLE")
         for pod in pods["items"]:
             meta, spec, status = pod["metadata"], pod["spec"], pod["status"]

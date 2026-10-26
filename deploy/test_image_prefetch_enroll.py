@@ -39,6 +39,7 @@ class Cluster:
     def __init__(self):
         self.node = node()
         self.pods = [pod()]
+        self.list_kind = "PodList"
         self.queries = []
 
     def query(self, kubeconfig, args):
@@ -47,11 +48,25 @@ class Cluster:
             return copy.deepcopy(self.node)
         if args == ["get", "pods", "--namespace", "runtime-image-preparation", "--field-selector",
                     "spec.nodeName=runtime-a", "--selector", "app.kubernetes.io/name=runtime-image-agent", "-o", "json"]:
-            return {"kind": "PodList", "items": copy.deepcopy(self.pods)}
+            return {"kind": self.list_kind, "items": copy.deepcopy(self.pods)}
         raise AssertionError("unexpected Kubernetes command")
 
 
 class EnrollmentTests(unittest.TestCase):
+    def test_real_kubectl_generic_list_registers_the_ready_pod(self):
+        self.cluster.list_kind = "List"
+        result = self.run_enrollment(apply=True)
+        self.assertEqual(result["status"], "APPLIED")
+        self.assertEqual(json.loads(self.output.read_text())["nodes"][0]["node_uid"], "uid-new")
+
+    def test_generic_list_with_non_pod_item_preserves_trust(self):
+        self.cluster.list_kind = "List"
+        self.cluster.pods[0]["kind"] = "Node"
+        before = self.output.read_bytes()
+        with self.assertRaises(enroll.EnrollmentError):
+            self.run_enrollment(apply=True)
+        self.assertEqual(self.output.read_bytes(), before)
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
