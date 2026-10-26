@@ -1,0 +1,108 @@
+name: Publish image preparation agent
+
+on:
+  push:
+    branches: [codex/image-prefetch-automation-20261026]
+    paths:
+      - .github/workflows/publish-image-agent.yml
+      - scripts/build-image-agent-artifact.sh
+      - cmd/image-agent/**
+      - internal/imageprep/**
+      - go.mod
+      - go.sum
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-agent-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'MSG-CTF/secure-provisioner' && github.ref == 'refs/heads/codex/image-prefetch-automation-20261026'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    env:
+      OUTPUT_DIR: dist/image-agent
+      DOCKER_CONFIG: ${{ runner.temp }}/image-agent-docker-config
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test the agent and verify static analysis
+        run: |
+          go test -p 1 ./cmd/image-agent ./internal/imageprep -count=1 -timeout 5m
+          go vet ./cmd/image-agent ./internal/imageprep
+      - name: Build the static agent and verified OCI archive
+        run: bash scripts/build-image-agent-artifact.sh "$OUTPUT_DIR"
+      - name: Check startup and fail-closed behavior
+        run: |
+          set -euo pipefail
+          binary="$OUTPUT_DIR/image-agent-linux-amd64"
+          response="$(printf '{}\n' | "$binary")"
+          [[ "$response" == '{"error_code":"AGENT_UNAVAILABLE"}' ]]
+          "$binary" --idle &
+          agent_pid=$!
+          sleep 1
+          kill -TERM "$agent_pid"
+          wait "$agent_pid"
+      - name: Publish the source-tagged image to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          install -d -m 0700 "$DOCKER_CONFIG"
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_ACTOR" --password-stdin
+          image="ghcr.io/msg-ctf/secure-provisioner-image-agent"
+          source_epoch="$(git show -s --format=%ct HEAD)"
+          docker buildx build --platform linux/amd64 --provenance=false \
+            --build-arg "SOURCE_SHA=$GITHUB_SHA" --build-arg "SOURCE_DATE_EPOCH=$source_epoch" \
+            --file "$OUTPUT_DIR/Dockerfile" --tag "$image:sha-$GITHUB_SHA" \
+            --metadata-file "$OUTPUT_DIR/published-build-metadata.json" --push "$OUTPUT_DIR"
+          python3 - "$OUTPUT_DIR" "$image" "$GITHUB_SHA" "$GITHUB_RUN_ID" <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import re
+          import sys
+          root, image, sha, run = sys.argv[1:]
+          root = pathlib.Path(root)
+          metadata = json.loads((root / "published-build-metadata.json").read_text())
+          digest = metadata["containerimage.digest"]
+          if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+              raise SystemExit("invalid published digest")
+          record = {"source_sha": sha, "image_tag": f"{image}:sha-{sha}", "image_digest": f"{image}@{digest}", "workflow_run": f"https://github.com/MSG-CTF/secure-provisioner/actions/runs/{run}"}
+          (root / "published-image.json").write_text(json.dumps(record, indent=2) + "\n")
+          (root / "image-reference.txt").write_text(record["image_digest"] + "\n")
+          paths = sorted(path for path in root.iterdir() if path.is_file() and path.name != "SHA256SUMS")
+          (root / "SHA256SUMS").write_text("".join(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n" for path in paths))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write(f"Published `{record['image_digest']}`\n\nSource: `{sha}`\n\nThe OCI archive and static linux/amd64 binary are attached to this workflow run.\n")
+          print(json.dumps(record, indent=2))
+          PY
+          (cd "$OUTPUT_DIR" && sha256sum -c SHA256SUMS)
+      - name: Remove registry credentials
+        if: always()
+        run: |
+          docker logout ghcr.io >/dev/null 2>&1 || true
+          rm -f -- "$DOCKER_CONFIG/config.json"
+          rmdir -- "$DOCKER_CONFIG" 2>/dev/null || true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: image-agent-linux-amd64-${{ github.sha }}
+          path: dist/image-agent/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
