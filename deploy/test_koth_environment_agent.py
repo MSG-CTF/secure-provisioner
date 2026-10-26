@@ -362,5 +362,70 @@ class EnvironmentAgentTests(unittest.TestCase):
             with self.assertRaises(ValueError): journal.read()
 
 
+class WorkloadGroupTests(unittest.TestCase):
+    def setUp(self):
+        self.config, self.game, self.desired = fixture()
+        self.game['containers']['score'] = copy.deepcopy(self.game['containers']['service'])
+        other = copy.deepcopy(self.desired['settings']['containers'][0]);other['name'] = 'score'
+        self.desired['settings']['containers'].append(other)
+        self.game['workloads'] = {
+            'service': {'namespace':'public','deployment':'api','max_replicas':2},
+            'score': {'namespace':'private','deployment':'score','max_replicas':1},
+        }
+        self.children = {}
+        def factory(game):
+            name = next(iter(game['containers']))
+            clone = {**game, 'containers':{'service':game['containers'][name]}}
+            initial = {'containers':[c for c in copy.deepcopy(self.desired['settings']['containers']) if c['name'] == name]}
+            initial['containers'][0]['entries']['PORT']['value'] = '8081'
+            kube = FakeKubernetes(clone, initial);kube.game = game
+            kube.original['spec']['containers'][0]['name'] = name
+            kube.current = copy.deepcopy(kube.original)
+            self.children[name] = kube
+            return kube
+        with patch.object(agent, 'Kubernetes', side_effect=factory):
+            self.group = agent.WorkloadGroup(self.game)
+        self.journal = MemoryJournal();self.api = FakeBackend(self.desired)
+        self.worker = agent.Agent(self.config,self.game,self.journal,self.api,self.group)
+
+    def test_group_checks_all_workloads_before_acknowledging(self):
+        agent.validate_config(self.config)
+        self.assertEqual(self.worker.tick(), 'complete')
+        self.assertEqual([len(c.patches) for c in self.children.values()], [1,1])
+        self.assertTrue(self.group.values_match(self.desired))
+        self.assertEqual(self.api.events[-1][1], 'APPLIED')
+
+    def test_process_crash_between_workloads_resumes_without_repatching_first(self):
+        self.children['service'].crash_after_patch = True
+        with self.assertRaises(SystemExit):self.worker.tick()
+        self.assertEqual(self.journal.state['phase'], 'prepared')
+        self.assertEqual(self.worker.tick(), 'complete')
+        self.assertEqual([len(c.patches) for c in self.children.values()], [1,1])
+
+    def test_partial_failure_rolls_back_every_owned_patch(self):
+        self.children['score'].fail_ready = True
+        self.assertEqual(self.worker.tick(), 'rejected')
+        for child in self.children.values():self.assertEqual(child.current,child.original)
+        self.assertEqual(self.api.events[-1][1:], ('FAILED','ROLLOUT_FAILED'))
+
+    def test_external_change_is_preserved_after_partial_crash(self):
+        self.children['service'].crash_after_patch = True
+        with self.assertRaises(SystemExit):self.worker.tick()
+        self.children['score'].current['metadata']['labels']['operator'] = 'preserve'
+        self.assertEqual(self.worker.tick(),'rejected')
+        self.assertEqual(self.children['score'].current['metadata']['labels']['operator'],'preserve')
+        self.assertEqual(self.api.events[-1][1:],('FAILED','ROLLBACK_CONFLICT'))
+
+    def test_bad_or_overlapping_bindings_are_rejected(self):
+        for change in ({'max_replicas':True},{'max_replicas':0},{'max_replicas':17},{'namespace':'../private'}):
+            config=copy.deepcopy(self.config);config['games'][0]['workloads']['service'].update(change)
+            with self.assertRaises(ValueError):agent.validate_config(config)
+        config=copy.deepcopy(self.config)
+        config['games'][0]['workloads']['score']=config['games'][0]['workloads']['service']
+        with self.assertRaises(ValueError):agent.validate_config(config)
+        del config['games'][0]['workloads']['score']
+        with self.assertRaises(ValueError):agent.validate_config(config)
+
+
 if __name__ == "__main__":
     unittest.main()
