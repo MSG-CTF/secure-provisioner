@@ -8,6 +8,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"net"
+	"net/http"
 	"strings"
 	"syscall"
 )
@@ -46,10 +47,11 @@ func (i ImageInventory) Nodes(ctx context.Context, target, arch string) ([]image
 func imageInventoryError(err error) error {
 	code := "AGENT_UNAVAILABLE"
 	var network net.Error
+	var status apierrors.APIStatus
 	switch {
 	case apierrors.IsTooManyRequests(err):
 		code = "RATE_LIMITED"
-	case apierrors.IsServiceUnavailable(err) || apierrors.IsInternalError(err):
+	case apierrors.IsServiceUnavailable(err) || apierrors.IsInternalError(err) || (errors.As(err, &status) && status.Status().Code == http.StatusBadGateway):
 		code = "REGISTRY_UNAVAILABLE"
 	case apierrors.IsTimeout(err) || apierrors.IsServerTimeout(err) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.EHOSTUNREACH) || (errors.As(err, &network) && network.Timeout()):
 		code = "NETWORK_TIMEOUT"

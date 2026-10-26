@@ -1,12 +1,45 @@
 package k3s
 
 import (
+	"fmt"
 	"github.com/MSG-CTF/secure-provisioner/internal/imageprep"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"strings"
 	"testing"
 )
+
+func TestImageInventoryUnknownReasonProxyStatusRetriesByHTTPCode(t *testing.T) {
+	for _, tc := range []struct {
+		status int32
+		want   string
+	}{{500, "REGISTRY_UNAVAILABLE"}, {502, "REGISTRY_UNAVAILABLE"}, {503, "REGISTRY_UNAVAILABLE"}, {504, "NETWORK_TIMEOUT"}, {401, "AGENT_UNAVAILABLE"}, {403, "AGENT_UNAVAILABLE"}, {422, "AGENT_UNAVAILABLE"}} {
+		t.Run(fmt.Sprint(tc.status), func(t *testing.T) {
+			upstream := &apierrors.StatusError{ErrStatus: metav1.Status{Status: metav1.StatusFailure, Code: tc.status, Reason: metav1.StatusReasonUnknown, Message: "SECRET upstream status"}}
+			classified := imageInventoryError(fmt.Errorf("wrapped status: %w", upstream))
+			if imageprep.ErrorCode(classified) != tc.want || strings.Contains(classified.Error(), "SECRET") {
+				t.Fatalf("unknown-reason HTTP %d classified as %v; want %s", tc.status, classified, tc.want)
+			}
+		})
+	}
+}
+
+func TestImageInventoryGenericProxyErrorsRemainBoundedRetryable(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		want   string
+	}{{502, "REGISTRY_UNAVAILABLE"}, {504, "NETWORK_TIMEOUT"}, {401, "AGENT_UNAVAILABLE"}, {403, "AGENT_UNAVAILABLE"}, {404, "AGENT_UNAVAILABLE"}, {422, "AGENT_UNAVAILABLE"}} {
+		t.Run(fmt.Sprint(tc.status), func(t *testing.T) {
+			upstream := apierrors.NewGenericServerResponse(tc.status, "list", schema.GroupResource{Resource: "nodes"}, "", "SECRET proxy response", 0, false)
+			classified := imageInventoryError(fmt.Errorf("wrapped request: %w", upstream))
+			if imageprep.ErrorCode(classified) != tc.want || strings.Contains(classified.Error(), "SECRET") {
+				t.Fatalf("generic HTTP %d classified as %v; want %s", tc.status, classified, tc.want)
+			}
+		})
+	}
+}
 
 func TestImageInventoryErrorsClassifyTransientWithoutExposingRawDetails(t *testing.T) {
 	for _, tc := range []struct {

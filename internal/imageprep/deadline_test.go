@@ -145,34 +145,41 @@ func TestPreparationStepAndInventoryDeadlinesPrecedeLeaseExpiry(t *testing.T) {
 	}
 }
 
-type failedInventory struct{ Inventory }
+type failedInventory struct {
+	Inventory
+	code string
+}
 
 func (i failedInventory) Nodes(context.Context, string, string) ([]Node, error) {
-	return nil, Failure{Code: "NETWORK_TIMEOUT"}
+	return nil, Failure{Code: i.code}
 }
 func TestPreparationInventoryTimeoutIsBoundedTransientNotIdentityMismatch(t *testing.T) {
-	s, _, inv, _, runner := fixture(t)
-	ctx := context.Background()
-	op, err := s.Create(ctx, "backend", testRequest())
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.Inventory = failedInventory{Inventory: inv}
-	now := time.Now().UTC()
-	s.Now = func() time.Time { return now }
-	for range 20 {
-		if _, err := s.Step(ctx); err != nil {
-			t.Fatal(err)
-		}
-		now = now.Add(time.Minute)
-	}
-	got, _ := s.Get(ctx, "backend", op.ID)
-	if got.Status != "FAILED" || runner.calls != 0 {
-		t.Fatalf("timeout handling=%+v", got)
-	}
-	for _, n := range got.Nodes {
-		if n.Images[0].Attempts != 3 || n.Images[0].ErrorCode != "NETWORK_TIMEOUT" {
-			t.Fatalf("timeout became identity mismatch or unbounded retry: %+v", n.Images[0])
-		}
+	for _, code := range []string{"NETWORK_TIMEOUT", "REGISTRY_UNAVAILABLE"} {
+		t.Run(code, func(t *testing.T) {
+			s, _, inv, _, runner := fixture(t)
+			ctx := context.Background()
+			op, err := s.Create(ctx, "backend", testRequest())
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.Inventory = failedInventory{Inventory: inv, code: code}
+			now := time.Now().UTC()
+			s.Now = func() time.Time { return now }
+			for range 20 {
+				if _, err := s.Step(ctx); err != nil {
+					t.Fatal(err)
+				}
+				now = now.Add(time.Minute)
+			}
+			got, _ := s.Get(ctx, "backend", op.ID)
+			if got.Status != "FAILED" || runner.calls != 0 {
+				t.Fatalf("timeout handling=%+v", got)
+			}
+			for _, n := range got.Nodes {
+				if n.Images[0].Attempts != 3 || n.Images[0].ErrorCode != code {
+					t.Fatalf("timeout became identity mismatch or unbounded retry: %+v", n.Images[0])
+				}
+			}
+		})
 	}
 }
