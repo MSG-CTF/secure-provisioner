@@ -79,6 +79,26 @@ needs Node GET and Pod LIST in the dedicated namespace. TLS verification is
 explicitly enabled. Existing Runtime Pod EXEC permission is used later by Runtime,
 not by this registration job.
 
+Before each GET, the helper reads that source through protected no-follow path
+descriptors with the configured Runtime owner binding. It passes the frozen bytes
+to the fixed local `kubectl --kubeconfig /dev/stdin config view --raw -o json`
+conversion command, without `--flatten`. This command parses the source without
+executing credential plugins or loading referenced credential files. The helper
+then accepts only HTTPS servers with embedded CA data, embedded client
+certificate/key data or a static token, and explicit cluster/user/context names.
+It rejects exec and auth-provider plugins, tokenFile and certificate/key/CA file
+references, proxies, insecure TLS, impersonation, basic auth, extensions, and
+other unsupported fields before issuing a GET.
+
+The selected static configuration is written into a private temporary directory
+as a job-owned `0600` JSON snapshot. GET reads only that snapshot, never the mutable
+source path. The snapshot is removed after success or failure. A source edit
+after conversion cannot add a root-executed plugin or redirect GET to another
+credential file. Source and normalized credential data are never printed;
+conversion stderr is discarded and output remains bounded. The conversion path
+is supported on the Linux production host; Windows checks cover the portable
+validation and file-lock behavior.
+
 Run a validation dry run before publication (it creates only the local lock file):
 
 ```sh
@@ -111,7 +131,7 @@ credential path the job reads. Set `Group` to the existing Runtime group so newl
 created output is readable by Runtime; atomic replacement preserves existing
 owner/group and mode, including a root-owned group-readable `0440` nodes file.
 Set `--runtime-user` to the existing Runtime service principal (for example
-`provisioner`). Only registry-selected kubeconfigs and their direct parent may
+`provisioner`). Only registry-selected kubeconfigs and their protected ancestors may
 additionally be owned by that explicitly named UID. Policy, registry, output,
 receipt and lock ownership checks remain restricted to root/the job UID. This
 owner binding does not change permissions or grant another user credential access.
@@ -182,6 +202,7 @@ go test ./internal/imageprep ./cmd/provisioner
 Tests cover trusted UID reload, invalid reload refusal, same-target provisioning
 hook invocation, stale/unknown receipt refusal, registry and platform/identity
 checks, agent selection, dry runs, failure preservation, bounded read-only kubectl
-arguments, and safe error output. Linux ownership/mode checks are exercised on
+arguments, static credential whitelisting, frozen snapshot races/cleanup, a real
+local kubectl plugin-refusal probe, and safe error output. Linux ownership/mode checks are exercised on
 POSIX and skipped on Windows. No live DaemonSet, VM creation, or production
 registration is implied by these tests.

@@ -6,6 +6,8 @@ executes pods, or accepts an enrollment request from an HTTP caller.
 """
 
 import argparse
+import base64
+import binascii
 from contextlib import contextmanager
 import copy
 import errno
@@ -18,6 +20,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+from urllib.parse import urlsplit
 
 
 LIMIT = 1 << 20
@@ -78,13 +81,36 @@ def revision(info, raw):
             info.st_mtime_ns, info.st_ctime_ns, hashlib.sha256(raw).digest())
 
 
+def open_trusted_source(path, credential_owner_uid):
+    if os.name != "posix":
+        return os.open(path, os.O_RDONLY)
+    parts = Path(os.path.abspath(path)).parts[1:]
+    if not parts:
+        raise EnrollmentError("UNTRUSTED_FILE")
+    directory = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for index, component in enumerate(parts):
+            info = os.fstat(directory)
+            trusted_owner = info.st_uid in (0, os.geteuid(), credential_owner_uid)
+            root_sticky = info.st_uid == 0 and info.st_mode & stat.S_ISVTX
+            if not trusted_owner or (info.st_mode & 0o022 and not root_sticky):
+                raise EnrollmentError("UNTRUSTED_DIRECTORY")
+            if index == len(parts) - 1:
+                return os.open(component, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+            following = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+            os.close(directory)
+            directory = following
+    finally:
+        os.close(directory)
+
+
 def read_bytes(path, *, with_revision=False, credential_owner_uid=None):
     path = Path(path)
     trusted_parent(path, credential_owner_uid=credential_owner_uid)
     if path.is_symlink():
         raise EnrollmentError("UNTRUSTED_FILE")
     try:
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        descriptor = open_trusted_source(path, credential_owner_uid)
         with os.fdopen(descriptor, "rb") as file:
             before = os.fstat(file.fileno())
             trusted_stat(before, credential_owner_uid=credential_owner_uid)
@@ -167,26 +193,111 @@ def registered_targets(registry, policy, *, runtime_uid=None):
     return selected
 
 
+def static_kubeconfig(config):
+    """Accept embedded credentials only; normalized output has no executable/file hooks."""
+    invalid = EnrollmentError("UNSUPPORTED_KUBECONFIG")
+    required = {"kind", "apiVersion", "clusters", "users", "contexts", "current-context"}
+    if (not isinstance(config, dict) or not required <= config.keys() or config.keys() - required - {"preferences"} or
+            config["kind"] != "Config" or config["apiVersion"] != "v1" or config.get("preferences", {}) != {}):
+        raise invalid
+
+    def embedded(value):
+        if not isinstance(value, str) or not value or len(value) > LIMIT:
+            raise invalid
+        try:
+            if not base64.b64decode(value, validate=True):
+                raise invalid
+        except (ValueError, binascii.Error):
+            raise invalid from None
+
+    collections = {}
+    for plural, singular in (("clusters", "cluster"), ("users", "user"), ("contexts", "context")):
+        items = config[plural]
+        if not isinstance(items, list) or not 1 <= len(items) <= 16:
+            raise invalid
+        selected = {}
+        for item in items:
+            if (not isinstance(item, dict) or set(item) != {"name", singular} or not identifier(item["name"]) or
+                    item["name"] in selected or not isinstance(item[singular], dict)):
+                raise invalid
+            selected[item["name"]] = item[singular]
+        collections[plural] = selected
+    for cluster in collections["clusters"].values():
+        if set(cluster) != {"server", "certificate-authority-data"} or not isinstance(cluster["server"], str):
+            raise invalid
+        try:
+            server = urlsplit(cluster["server"])
+            if (server.scheme != "https" or not server.hostname or any(c.isspace() or c == "\0" for c in cluster["server"]) or
+                    server.username is not None or server.password is not None or
+                    server.path not in ("", "/") or server.query or server.fragment or server.port == 0):
+                raise invalid
+        except ValueError:
+            raise invalid from None
+        embedded(cluster["certificate-authority-data"])
+    for user in collections["users"].values():
+        if (not user or user.keys() - {"client-certificate-data", "client-key-data", "token"} or
+                ("client-certificate-data" in user) != ("client-key-data" in user)):
+            raise invalid
+        for key in ("client-certificate-data", "client-key-data"):
+            if key in user:
+                embedded(user[key])
+        if "token" in user:
+            token = user["token"]
+            if not isinstance(token, str) or not token or len(token) > 65536 or not token.isascii() or any(c.isspace() or c == "\0" for c in token):
+                raise invalid
+    for context in collections["contexts"].values():
+        if (not {"cluster", "user"} <= context.keys() or context.keys() - {"cluster", "user", "namespace"} or
+                not isinstance(context["cluster"], str) or not isinstance(context["user"], str) or
+                context["cluster"] not in collections["clusters"] or context["user"] not in collections["users"]):
+            raise invalid
+        if "namespace" in context and (not isinstance(context["namespace"], str) or len(context["namespace"]) > 63 or
+                (context["namespace"] and ("." in context["namespace"] or not DNS.fullmatch(context["namespace"])) )):
+            raise invalid
+    name = config["current-context"]
+    if not isinstance(name, str) or name not in collections["contexts"]:
+        raise invalid
+    context = collections["contexts"][name]
+    return {"kind": "Config", "apiVersion": "v1", "preferences": {}, "current-context": name,
+        "clusters": [{"name": context["cluster"], "cluster": collections["clusters"][context["cluster"]]}],
+        "users": [{"name": context["user"], "user": collections["users"][context["user"]]}],
+        "contexts": [{"name": name, "context": context}]}
+
+
 class KubernetesClient:
-    def __init__(self, binary="/usr/local/bin/kubectl"):
+    def __init__(self, binary="/usr/local/bin/kubectl", *, runtime_uid=None):
         if not Path(binary).is_absolute():
             raise EnrollmentError("INVALID_KUBECTL_PATH")
         self.binary = binary
+        self.runtime_uid = runtime_uid
 
-    def query(self, kubeconfig, args):
-        command = [self.binary, "--kubeconfig", str(kubeconfig), "--request-timeout=15s", "--insecure-skip-tls-verify=false", *args]
+    def json_command(self, command, *, source=None):
         try:
             # Never retain or print kubectl stderr, which may contain credentials.
             # Disk-backed stdout prevents an unbounded response in process memory.
             with tempfile.TemporaryFile() as output:
-                completed = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.DEVNULL,
-                                           timeout=20, check=False)
+                input_options = {"stdin": subprocess.DEVNULL} if source is None else {"input": source}
+                completed = subprocess.run(command, stdout=output, stderr=subprocess.DEVNULL,
+                                           timeout=20, check=False, **input_options)
                 if completed.returncode:
                     raise EnrollmentError("KUBERNETES_UNAVAILABLE")
                 output.seek(0)
                 return decode(output.read(LIMIT + 1))
         except (OSError, subprocess.TimeoutExpired):
             raise EnrollmentError("KUBERNETES_UNAVAILABLE") from None
+
+    def query(self, kubeconfig, args):
+        source = read_bytes(kubeconfig, credential_owner_uid=self.runtime_uid)
+        # config view only parses/converts the bytes supplied on stdin. Never
+        # flatten: file references must remain visible so validation can deny them.
+        converted = self.json_command([self.binary, "--kubeconfig", "/dev/stdin", "config", "view", "--raw", "-o", "json"], source=source)
+        config = static_kubeconfig(converted)
+        with tempfile.TemporaryDirectory(prefix="image-prefetch-kubeconfig-") as directory:
+            snapshot = Path(directory) / "static.json"
+            descriptor = os.open(snapshot, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(descriptor, "wb") as file:
+                file.write(encoded_json(config))
+            command = [self.binary, "--kubeconfig", str(snapshot), "--request-timeout=15s", "--insecure-skip-tls-verify=false", *args]
+            return self.json_command(command)
 
 
 def ready(conditions):
@@ -327,7 +438,7 @@ def reconcile(policy_path, registry_path, output_path, *, client=None, apply=Fal
         policy = validate_policy(decode(policy_raw))
         updated = apply_receipt(policy, read_json(receipt_path)) if receipt_path else policy
         targets = registered_targets(read_json(registry_path), updated, runtime_uid=runtime_uid)
-        client = client or KubernetesClient()
+        client = client or KubernetesClient(runtime_uid=runtime_uid)
         nodes = []
         for expected in updated["nodes"]:
             kubeconfig = targets[expected["target_id"]]
@@ -406,7 +517,7 @@ def main(argv=None):
                     runtime_uid = pwd.getpwnam(args.runtime_user).pw_uid
                 except KeyError:
                     raise EnrollmentError("INVALID_RUNTIME_USER") from None
-            result = reconcile(args.policy, args.registry, args.output, client=KubernetesClient(args.kubectl),
+            result = reconcile(args.policy, args.registry, args.output, client=KubernetesClient(args.kubectl, runtime_uid=runtime_uid),
                                apply=args.apply, receipt_path=args.receipt, runtime_uid=runtime_uid)
         print(json.dumps(result, sort_keys=True))
         return 0

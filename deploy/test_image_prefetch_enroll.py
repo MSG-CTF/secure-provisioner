@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -14,6 +15,13 @@ import image_prefetch_enroll as enroll
 
 IMAGE = "ghcr.io/msg-ctf/runtime-image-agent@sha256:" + "a" * 64
 TARGET = "de42849c-e0dc-43d4-8e63-9bb2bd056db4"
+
+
+def static_kubeconfig():
+    return {"kind": "Config", "apiVersion": "v1", "preferences": {},
+        "clusters": [{"name": "default", "cluster": {"server": "https://192.0.2.10:6443", "certificate-authority-data": "Y2E="}}],
+        "users": [{"name": "default", "user": {"client-certificate-data": "Y2VydA==", "client-key-data": "a2V5"}}],
+        "contexts": [{"name": "default", "context": {"cluster": "default", "user": "default"}}], "current-context": "default"}
 
 
 def node(uid="uid-new", machine="machine-a", provider="gce://project/zone/runtime-a"):
@@ -381,19 +389,145 @@ class EnrollmentTests(unittest.TestCase):
 
     def test_kubectl_boundary_uses_read_only_fixed_arguments_and_validates_tls(self):
         captured = []
+        config = static_kubeconfig()
+        self.write(self.kubeconfig, config)
         def run(command, **kwargs):
             captured.append((command, kwargs))
-            kwargs["stdout"].write(json.dumps(node()).encode())
+            if "config" in command:
+                self.assertEqual(json.loads(kwargs["input"]), config)
+                response = config
+            else:
+                snapshot = Path(command[2])
+                self.assertNotEqual(snapshot, self.kubeconfig)
+                self.assertEqual(json.loads(snapshot.read_bytes()), config)
+                if os.name == "posix":
+                    self.assertEqual(snapshot.stat().st_mode & 0o777, 0o600)
+                    self.assertEqual(snapshot.stat().st_uid, os.geteuid())
+                response = node()
+            kwargs["stdout"].write(json.dumps(response).encode())
             return type("Result", (), {"returncode": 0})()
         with patch.object(enroll.subprocess, "run", side_effect=run):
             client = enroll.KubernetesClient(str(self.directory / "kubectl"))
             observed = client.query(self.kubeconfig, ["get", "node", "runtime-a", "-o", "json"])
         self.assertEqual(observed["metadata"]["uid"], "uid-new")
-        command, options = captured[0]
-        self.assertEqual(command, [str(self.directory / "kubectl"), "--kubeconfig", str(self.kubeconfig),
-            "--request-timeout=15s", "--insecure-skip-tls-verify=false", "get", "node", "runtime-a", "-o", "json"])
+        self.assertEqual(captured[0][0], [str(self.directory / "kubectl"), "--kubeconfig", "/dev/stdin", "config", "view", "--raw", "-o", "json"])
+        command, options = captured[1]
+        self.assertEqual(command[3:], ["--request-timeout=15s", "--insecure-skip-tls-verify=false", "get", "node", "runtime-a", "-o", "json"])
+        self.assertFalse(Path(command[2]).exists())
         self.assertEqual(options["stderr"], enroll.subprocess.DEVNULL)
         self.assertEqual(options["timeout"], 20)
+
+    def test_kubeconfig_plugins_references_and_nonstatic_auth_are_rejected_before_get(self):
+        mutations = [lambda c: c["users"][0]["user"].update(exec={"command": "/bin/sh", "args": ["-c", "malicious"]}),
+            lambda c: c["users"][0]["user"].update({"auth-provider": {"name": "gcp"}}),
+            lambda c: c["users"][0]["user"].update(tokenFile="/etc/shadow"),
+            lambda c: c["users"][0]["user"].update({"client-key": "/root/private.key"}),
+            lambda c: c["users"][0]["user"].update({"client-certificate": "/root/private.crt"}),
+            lambda c: c["users"][0]["user"].update(username="root", password="password"),
+            lambda c: c["users"][0]["user"].update({"as": "system:admin"}),
+            lambda c: c["clusters"][0]["cluster"].update({"certificate-authority": "/root/private-ca"}),
+            lambda c: c["clusters"][0]["cluster"].update({"proxy-url": "http://localhost:8080"}),
+            lambda c: c["clusters"][0]["cluster"].update({"insecure-skip-tls-verify": True}),
+            lambda c: c["clusters"][0]["cluster"].update(server="http://192.0.2.10:6443")]
+        for mutate in mutations:
+            config = static_kubeconfig()
+            mutate(config)
+            commands = []
+            def run(command, **kwargs):
+                commands.append(command)
+                self.assertIn("config", command)
+                kwargs["stdout"].write(json.dumps(config).encode())
+                return type("Result", (), {"returncode": 0})()
+            with patch.object(enroll.subprocess, "run", side_effect=run):
+                with self.assertRaisesRegex(enroll.EnrollmentError, "UNSUPPORTED_KUBECONFIG"):
+                    enroll.KubernetesClient(str(self.directory / "kubectl")).query(self.kubeconfig, ["get", "node", "runtime-a", "-o", "json"])
+            self.assertEqual(len(commands), 1)
+
+    def test_mutating_original_kubeconfig_cannot_change_the_frozen_get(self):
+        original = static_kubeconfig()
+        malicious = copy.deepcopy(original)
+        malicious["users"][0]["user"]["exec"] = {"command": "/bin/sh"}
+        self.write(self.kubeconfig, original)
+        snapshots = []
+        def run(command, **kwargs):
+            if "config" in command:
+                self.assertEqual(json.loads(kwargs["input"]), original)
+                self.write(self.kubeconfig, malicious)
+                response = original
+            else:
+                snapshots.append(Path(command[2]))
+                self.assertEqual(json.loads(snapshots[-1].read_bytes()), original)
+                response = node()
+            kwargs["stdout"].write(json.dumps(response).encode())
+            return type("Result", (), {"returncode": 0})()
+        with patch.object(enroll.subprocess, "run", side_effect=run):
+            observed = enroll.KubernetesClient(str(self.directory / "kubectl")).query(self.kubeconfig, ["get", "node", "runtime-a", "-o", "json"])
+        self.assertEqual(observed["metadata"]["uid"], "uid-new")
+        self.assertEqual(len(snapshots), 1)
+        self.assertFalse(snapshots[0].exists())
+
+    def test_static_token_snapshot_is_cleaned_up_when_get_fails(self):
+        config = static_kubeconfig()
+        config["users"][0]["user"] = {"token": "embedded-test-token"}
+        snapshots = []
+        def run(command, **kwargs):
+            if "config" in command:
+                kwargs["stdout"].write(json.dumps(config).encode())
+                return type("Result", (), {"returncode": 0})()
+            snapshots.append(Path(command[2]))
+            self.assertEqual(json.loads(snapshots[-1].read_bytes())["users"][0]["user"], {"token": "embedded-test-token"})
+            return type("Result", (), {"returncode": 1})()
+        with patch.object(enroll.subprocess, "run", side_effect=run):
+            with self.assertRaisesRegex(enroll.EnrollmentError, "KUBERNETES_UNAVAILABLE"):
+                enroll.KubernetesClient(str(self.directory / "kubectl")).query(self.kubeconfig, ["get", "node", "runtime-a", "-o", "json"])
+        self.assertEqual(len(snapshots), 1)
+        self.assertFalse(snapshots[0].exists())
+
+    @unittest.skipUnless(os.name == "posix" and shutil.which("kubectl"), "local Linux kubectl conversion")
+    def test_real_config_view_does_not_execute_a_credential_plugin(self):
+        marker = self.directory / "plugin-executed"
+        config = static_kubeconfig()
+        config["users"][0]["user"]["exec"] = {"apiVersion": "client.authentication.k8s.io/v1beta1",
+            "command": "/usr/bin/touch", "args": [str(marker)], "interactiveMode": "Never"}
+        self.write(self.kubeconfig, config)
+        client = enroll.KubernetesClient(shutil.which("kubectl"))
+        original = client.json_command
+        def conversion_only(command, **kwargs):
+            self.assertEqual(command[3:5], ["config", "view"])
+            return original(command, **kwargs)
+        with patch.object(client, "json_command", side_effect=conversion_only):
+            with self.assertRaisesRegex(enroll.EnrollmentError, "UNSUPPORTED_KUBECONFIG"):
+                client.query(self.kubeconfig, ["get", "node", "runtime-a", "-o", "json"])
+        self.assertFalse(marker.exists())
+
+    @unittest.skipUnless(os.name == "posix" and shutil.which("kubectl"), "local Linux kubectl conversion")
+    def test_real_config_view_static_conversion_uses_only_frozen_get_config(self):
+        config = static_kubeconfig()
+        self.write(self.kubeconfig, config)
+        client = enroll.KubernetesClient(shutil.which("kubectl"))
+        original = client.json_command
+        def local_conversion_fake_network(command, **kwargs):
+            if command[3:5] == ["config", "view"]:
+                return original(command, **kwargs)
+            self.assertNotEqual(Path(command[2]), self.kubeconfig)
+            self.assertEqual(json.loads(Path(command[2]).read_bytes()), config)
+            return node()
+        with patch.object(client, "json_command", side_effect=local_conversion_fake_network):
+            self.assertEqual(client.query(self.kubeconfig, ["get", "node", "runtime-a", "-o", "json"])["metadata"]["uid"], "uid-new")
+
+    @unittest.skipIf(os.name != "posix", "POSIX ancestor no-follow checks")
+    def test_credential_ancestor_symlink_cannot_redirect_root_read(self):
+        actual = self.directory / "actual"
+        leaf = actual / "leaf"
+        leaf.mkdir(parents=True, mode=0o700)
+        credential = leaf / "config"
+        self.write(credential, static_kubeconfig())
+        link = self.directory / "linked"
+        link.symlink_to(actual, target_is_directory=True)
+        with patch.object(enroll.subprocess, "run") as command:
+            with self.assertRaises(enroll.EnrollmentError):
+                enroll.KubernetesClient(str(self.directory / "kubectl")).query(link / "leaf" / "config", ["get", "node", "runtime-a", "-o", "json"])
+        command.assert_not_called()
 
     @unittest.skipIf(os.name != "posix", "POSIX ownership/mode enforcement")
     def test_world_writable_policy_or_symlink_cannot_authorize_enrollment(self):
