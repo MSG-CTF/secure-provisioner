@@ -12,7 +12,7 @@ Backend may separately choose staged release activation policy.
    Use `arm64` for ARM64 nodes. Run `go test -p 1 ./...` against a disposable
    PostgreSQL database through `PROVISIONER_TEST_DATABASE_URL`; several existing
    integration packages truncate shared tables and must not run concurrently.
-2. Deploy Runtime first with preparation disabled. Startup applies migration 004
+2. Deploy Runtime first with preparation disabled. Startup applies migration 006
    to its existing PostgreSQL database. API bridge mode does not migrate or run
    preparation workers. Existing service/CI credentials gain no preparation access.
 3. Install trusted agents using one of the routes below. Every eligible node in a

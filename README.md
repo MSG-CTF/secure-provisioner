@@ -244,10 +244,17 @@ resident-node/metadata host boundary는 각각 `#11`, `#32`의 검증이 끝날 
 production 완료로 간주하지 않습니다.
 
 실행 설정 전환: [백엔드 비밀값 주입](docs/operations/backend-secret-injection.md)
-# Optional image preparation
+
+## Optional image preparation
 
 Runtime can prepare approved immutable images in actual K3s node caches through
 dedicated, disabled-by-default APIs and workers. See the
 [installation and verification runbook](docs/operations/image-preparation.md),
 [API contract](docs/api/image-preparation-b-contract.md), and
 [trusted node configuration](config/image-prefetch-nodes.example.json).
+
+선택 기능: [Gateway v1 단일 공개 endpoint 설정과 복구](docs/operations/gateway-v1.md).
+K3s NodePort target별 opt-in이며 기본 off입니다. 보조 컨테이너는 유지하고 공개
+endpoint는 하나만 허용합니다. PostgreSQL과 별도 송신 token 파일이 필요하며,
+Gateway DELETE204 확인 전에는 Service/NodePort를 반환하지 않습니다. TCP의 TLS/SNI
+metadata 전달은 Scheduler/Backend/Frontend 연계 변경도 필요합니다.

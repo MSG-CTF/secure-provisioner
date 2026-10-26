@@ -26,6 +26,7 @@ type registryClusterConfig struct {
 	IngressClass         string                        `json:"ingress_class,omitempty"`
 	ExposureMode         ExposureMode                  `json:"exposure_mode,omitempty"`
 	Enabled              *bool                         `json:"enabled"`
+	Gateway              *GatewayConfig                `json:"gateway,omitempty"`
 	SecurityCapabilities *registrySecurityCapabilities `json:"security_capabilities"`
 }
 
@@ -177,6 +178,7 @@ func (c registryClusterConfig) clusterConfig() (ClusterConfig, bool) {
 		IngressClass:         c.IngressClass,
 		ExposureMode:         c.ExposureMode,
 		Enabled:              *c.Enabled,
+		Gateway:              c.Gateway,
 		SecurityCapabilities: capabilities,
 	}, true
 }

@@ -93,10 +93,14 @@ type CreateWorkloadResult struct {
 }
 
 type WorkloadEndpoint struct {
-	ContainerName string
-	Port          int
-	Protocol      isolation.EndpointProtocol
-	ServiceURL    string
+	ContainerName  string
+	Port           int
+	Protocol       isolation.EndpointProtocol
+	ServiceURL     string
+	Hostname       string `json:",omitempty"`
+	ConnectionPort int    `json:",omitempty"`
+	TLS            bool   `json:",omitempty"`
+	ServerName     string `json:",omitempty"`
 }
 
 type CreateWorkloadUseCase interface {

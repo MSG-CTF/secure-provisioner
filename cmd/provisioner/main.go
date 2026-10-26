@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/MSG-CTF/secure-provisioner/internal/gateway"
 	"github.com/MSG-CTF/secure-provisioner/internal/httpapi"
 	"github.com/MSG-CTF/secure-provisioner/internal/imageprep"
 	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
@@ -42,6 +43,10 @@ type appConfig struct {
 	RollbackTimeout       time.Duration
 	DeleteTimeout         time.Duration
 	WorkerShutdownTimeout time.Duration
+	GatewayBaseURL        string
+	GatewayTokenFile      string
+	GatewayTimeout        time.Duration
+	GatewayMaxInflight    int
 }
 
 type application struct {
@@ -108,6 +113,9 @@ func loadConfig(getenv func(string) string) (appConfig, error) {
 		PollInterval:       time.Second,
 		RollbackTimeout:    30 * time.Second,
 		DeleteTimeout:      time.Minute,
+		GatewayBaseURL:     valueOrDefault(getenv("PROVISIONER_GATEWAY_BASE_URL"), "https://gate.msgctf.kr"),
+		GatewayTokenFile:   strings.TrimSpace(getenv("PROVISIONER_GATEWAY_RUNTIME_TOKEN_FILE")),
+		GatewayTimeout:     90 * time.Second, GatewayMaxInflight: 1,
 	}
 	if config.RegistryPath == "" {
 		return appConfig{}, errors.New("PROVISIONER_CLUSTER_REGISTRY is required")
@@ -132,6 +140,12 @@ func loadConfig(getenv func(string) string) (appConfig, error) {
 		return appConfig{}, err
 	}
 	config.WorkerConcurrency = config.RuntimeStore.Workers
+	if config.GatewayTimeout, err = positiveDurationSetting(getenv, "PROVISIONER_GATEWAY_REQUEST_TIMEOUT", config.GatewayTimeout); err != nil || config.GatewayTimeout < 75*time.Second {
+		return appConfig{}, errors.New("PROVISIONER_GATEWAY_REQUEST_TIMEOUT must be at least 75s")
+	}
+	if config.GatewayMaxInflight, err = positiveIntSetting(getenv, "PROVISIONER_GATEWAY_MAX_INFLIGHT", config.GatewayMaxInflight); err != nil {
+		return appConfig{}, err
+	}
 	if config.MaxAttempts, err = positiveIntSetting(getenv, "PROVISIONER_MAX_ATTEMPTS", config.MaxAttempts); err != nil {
 		return appConfig{}, err
 	}
@@ -147,7 +161,11 @@ func loadConfig(getenv func(string) string) (appConfig, error) {
 	if config.DeleteTimeout, err = positiveDurationSetting(getenv, "PROVISIONER_DELETE_TIMEOUT", config.DeleteTimeout); err != nil {
 		return appConfig{}, err
 	}
-	config.WorkerShutdownTimeout = config.RollbackTimeout + 10*time.Second
+	cleanupBudget := config.RollbackTimeout
+	if config.GatewayTokenFile != "" {
+		cleanupBudget = max(cleanupBudget, config.GatewayTimeout+config.DeleteTimeout+10*time.Second)
+	}
+	config.WorkerShutdownTimeout = cleanupBudget + 10*time.Second
 	if config.WorkerShutdownTimeout, err = positiveDurationSetting(
 		getenv,
 		"PROVISIONER_WORKER_SHUTDOWN_TIMEOUT",
@@ -155,8 +173,8 @@ func loadConfig(getenv func(string) string) (appConfig, error) {
 	); err != nil {
 		return appConfig{}, err
 	}
-	if config.WorkerShutdownTimeout < config.RollbackTimeout {
-		return appConfig{}, errors.New("PROVISIONER_WORKER_SHUTDOWN_TIMEOUT must be at least PROVISIONER_ROLLBACK_TIMEOUT")
+	if config.WorkerShutdownTimeout < cleanupBudget {
+		return appConfig{}, errors.New("PROVISIONER_WORKER_SHUTDOWN_TIMEOUT must cover rollback and Gateway cleanup budget")
 	}
 	return config, nil
 }
@@ -254,6 +272,8 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 	var deleteCoordinator runtimeops.DeleteCoordinator
 	var closeStore func() error
 	var preparationStore imageprep.Store
+	var gatewayJournal gateway.Journal
+	liveGatewayRoutes := false
 	readiness := httpapi.ReadinessConfig{StoreMode: config.RuntimeStore.Mode, APIOnly: config.APIOnly}
 	if config.RuntimeStore.Mode == "postgres" {
 		openStore := runtimepg.Open
@@ -270,6 +290,12 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 		closeStore = database.Close
 		readiness.CheckDatabase = database.CheckReadiness
 		preparationStore = database.ImagePreparations()
+		gatewayJournal = database.GatewayJournal()
+		liveGatewayRoutes, err = database.GatewayJournal().HasLiveRoutes(context.Background())
+		if err != nil {
+			_ = database.Close()
+			return nil, err
+		}
 	}
 	var create runtimeops.CreateAdapter = createAdapter
 	var status runtimeops.StatusSource = statusReader
@@ -286,6 +312,28 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 		}
 		create, status, deleteWorkload, resolver, vmPolicy = route, route, route, route, route.Apply
 		vmRoute = route
+	}
+	if len(registry.GatewayTargets()) > 0 || config.GatewayTokenFile != "" || liveGatewayRoutes {
+		if gatewayJournal == nil {
+			if closeStore != nil {
+				_ = closeStore()
+			}
+			return nil, errors.New("Gateway requires PostgreSQL durable store")
+		}
+		for _, ip := range registry.GatewayTargets() {
+			if _, err := gateway.PublicIP(ip); err != nil {
+				_ = closeStore()
+				return nil, errors.New("Gateway target requires a public upstream IP")
+			}
+		}
+		client, clientErr := gateway.NewClient(config.GatewayBaseURL, config.GatewayTokenFile, config.GatewayTimeout, nil, config.GatewayMaxInflight)
+		if clientErr != nil {
+			_ = closeStore()
+			return nil, clientErr
+		}
+		adapter := gateway.NewAdapter(&gateway.KubernetesBackend{Registry: registry, Create: create, Delete: deleteWorkload}, client, gatewayJournal)
+		create, deleteWorkload = adapter, adapter
+		config.RollbackTimeout = max(config.RollbackTimeout, config.GatewayTimeout+config.DeleteTimeout+10*time.Second)
 	}
 	service, err := runtimeops.NewService(
 		create,
