@@ -30,6 +30,7 @@ jobs:
     env:
       OUTPUT_DIR: dist/image-agent
       DOCKER_CONFIG: /tmp/image-agent-docker-config-${{ github.run_id }}-${{ github.run_attempt }}
+      BUILDX_BUILDER: image-agent-builder
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -42,8 +43,42 @@ jobs:
         run: |
           go test -p 1 ./cmd/image-agent ./internal/imageprep -count=1 -timeout 5m
           go vet ./cmd/image-agent ./internal/imageprep
+      - name: Build the Runtime candidate from the same source
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          go build -mod=readonly -trimpath -buildvcs=true -ldflags='-s -w' \
+            -o "$RUNNER_TEMP/secure-provisioner-candidate" ./cmd/provisioner
+          go version -m "$RUNNER_TEMP/secure-provisioner-candidate" > "$RUNNER_TEMP/secure-provisioner-candidate.build-info.txt"
+      - name: Create an OCI-capable builder
+        run: |
+          docker buildx create --name "$BUILDX_BUILDER" --driver docker-container \
+            --driver-opt image=moby/buildkit@sha256:98cc6a3fc46220d00f8224ae483f3274fc874e9be8d7dd1e2e2c5481209228b5 --use
+          docker buildx inspect --bootstrap "$BUILDX_BUILDER"
       - name: Build the static agent and verified OCI archive
         run: bash scripts/build-image-agent-artifact.sh "$OUTPUT_DIR"
+      - name: Include the Runtime candidate and source checksums
+        run: |
+          set -euo pipefail
+          cp "$RUNNER_TEMP/secure-provisioner-candidate" "$OUTPUT_DIR/"
+          cp "$RUNNER_TEMP/secure-provisioner-candidate.build-info.txt" "$OUTPUT_DIR/"
+          python3 - "$OUTPUT_DIR" "$GITHUB_SHA" <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import sys
+          root, sha = sys.argv[1:]
+          root = pathlib.Path(root)
+          candidate = root / "secure-provisioner-candidate"
+          record = {"source_repository": "https://github.com/MSG-CTF/secure-provisioner", "source_sha": sha, "platform": "linux/amd64", "binary": candidate.name, "binary_sha256": hashlib.sha256(candidate.read_bytes()).hexdigest()}
+          (root / "runtime-candidate.json").write_text(json.dumps(record, indent=2) + "\n")
+          paths = sorted(path for path in root.iterdir() if path.is_file() and path.name != "SHA256SUMS")
+          (root / "SHA256SUMS").write_text("".join(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n" for path in paths))
+          print(json.dumps(record, indent=2))
+          PY
+          (cd "$OUTPUT_DIR" && sha256sum -c SHA256SUMS)
       - name: Check startup and fail-closed behavior
         run: |
           set -euo pipefail
@@ -96,6 +131,7 @@ jobs:
         if: always()
         run: |
           docker logout ghcr.io >/dev/null 2>&1 || true
+          docker buildx rm "$BUILDX_BUILDER" >/dev/null 2>&1 || true
           rm -f -- "$DOCKER_CONFIG/config.json"
           rmdir -- "$DOCKER_CONFIG" 2>/dev/null || true
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
