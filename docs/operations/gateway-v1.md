@@ -160,6 +160,12 @@ Gateway 응답의 `tls` 누락/null, 잘못된 포트, 허용 도메인 밖의 h
 전환 전에는 외부 `nc`, 동시 생성, 재시작, 삭제 후 접속 차단과 기존 TLS 경로를
 함께 검증한다. 난수 hostname과 포트는 사용자/팀 소유권 인증을 대신하지 않는다.
 
+접속 모드와 팀 소유권의 추가 요청 연동은
+[별도 계약 초안](../api/gateway-tcp-owner-draft.md)에 정리했다.
+`PROVISIONER_GATEWAY_TCP_TRANSPORT` 기본값은 `legacy`이며, 이 상태에서는 기존
+요청 본문을 유지한다. `tls`/`plain`은 관리자가 초안을 승인·구현하고 전용 Gateway에서
+검증한 뒤에만 사용한다. 운영 Gateway v1에는 이 추가 필드를 보내지 않는다.
+
 ## 삭제·재시작·정리 증명
 
 Binding이 유실돼 Gateway journal에서 복구할 때 승인된 `WorkloadNetwork` 스냅샷도

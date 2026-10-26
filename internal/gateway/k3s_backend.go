@@ -20,9 +20,10 @@ type DeleteBackend interface {
 	DeleteWorkload(context.Context, provisioner.DeleteWorkloadCommand, runtimebinding.Binding) error
 }
 type KubernetesBackend struct {
-	Registry *k3s.Registry
-	Create   CreateBackend
-	Delete   DeleteBackend
+	Registry     *k3s.Registry
+	Create       CreateBackend
+	Delete       DeleteBackend
+	TCPTransport PublicTransport
 }
 
 // Reject unknown or disabled targets before the request enters the durable
@@ -110,7 +111,15 @@ func (b *KubernetesBackend) Destination(ctx context.Context, c provisioner.Creat
 	} else if endpoint.Protocol != "HTTP" {
 		return Destination{}, "", errors.New("unsupported Gateway protocol")
 	}
-	return Destination{TargetIP: ip, TargetPort: port, Protocol: protocol}, uid, nil
+	destination := Destination{TargetIP: ip, TargetPort: port, Protocol: protocol}
+	if protocol == "tcp" && b.TCPTransport != TransportLegacy {
+		destination.PublicTransport = b.TCPTransport
+		destination.OwnerTeamID = string(c.TeamID)
+		if !destination.validDraft() {
+			return Destination{}, "", errors.New("invalid Gateway TCP contract owner or transport")
+		}
+	}
+	return destination, uid, nil
 }
 func (b *KubernetesBackend) Verify(ctx context.Context, r Record) error {
 	return b.verify(ctx, r, true)

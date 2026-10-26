@@ -119,7 +119,7 @@ func (a *Adapter) CreateWorkloadForOperation(ctx context.Context, c provisioner.
 			route, putErr := a.remote.Put(ctx, c.InstanceID, record.Destination)
 			if putErr != nil {
 				var apiErr *APIError
-				if errors.As(putErr, &apiErr) && (apiErr.Code == "GATEWAY_TARGET_IN_USE" || apiErr.Code == "TARGET_IN_USE" || apiErr.Code == "GATEWAY_INSTANCE_CONFLICT" || apiErr.Code == "INSTANCE_CONFLICT") {
+				if errors.As(putErr, &apiErr) && (apiErr.Code == "GATEWAY_TARGET_IN_USE" || apiErr.Code == "TARGET_IN_USE" || apiErr.Code == "GATEWAY_INSTANCE_CONFLICT" || apiErr.Code == "INSTANCE_CONFLICT" || apiErr.Code == "GATEWAY_OWNER_CONFLICT" || apiErr.Code == "OWNER_CONFLICT" || apiErr.Code == "GATEWAY_CONTRACT_UNCONFIRMED") {
 					record.Phase = PhaseConflictHold
 					if err := s.Save(record); err != nil {
 						return hold("GATEWAY_JOURNAL_UNAVAILABLE", err)

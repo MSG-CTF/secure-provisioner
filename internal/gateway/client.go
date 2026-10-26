@@ -19,18 +19,23 @@ import (
 )
 
 type Destination struct {
-	TargetIP   string `json:"target_ip"`
-	TargetPort int    `json:"target_port"`
-	Protocol   string `json:"protocol"`
+	TargetIP        string          `json:"target_ip"`
+	TargetPort      int             `json:"target_port"`
+	Protocol        string          `json:"protocol"`
+	PublicTransport PublicTransport `json:"public_transport,omitempty"`
+	OwnerTeamID     string          `json:"owner_team_id,omitempty"`
 }
 type Route struct {
-	InstanceID string    `json:"instance_id"`
-	Hostname   string    `json:"hostname"`
-	Port       int       `json:"port"`
-	TLS        bool      `json:"tls"`
-	Protocol   string    `json:"protocol"`
-	URL        *string   `json:"url"`
-	CreatedAt  time.Time `json:"created_at"`
+	InstanceID          string          `json:"instance_id"`
+	Hostname            string          `json:"hostname"`
+	Port                int             `json:"port"`
+	TLS                 bool            `json:"tls"`
+	Protocol            string          `json:"protocol"`
+	URL                 *string         `json:"url"`
+	CreatedAt           time.Time       `json:"created_at"`
+	PublicTransport     PublicTransport `json:"public_transport,omitempty"`
+	OwnerTeamID         string          `json:"owner_team_id,omitempty"`
+	OwnerAccessEnforced bool            `json:"owner_access_enforced,omitempty"`
 }
 type APIError struct {
 	Code      string
@@ -102,24 +107,35 @@ func (c *Client) Put(ctx context.Context, id string, d Destination) (Route, erro
 		TLS *bool `json:"tls"`
 	}
 	ip, err := PublicIP(d.TargetIP)
-	if err != nil || d.TargetPort < 1 || d.TargetPort > 65535 || (d.Protocol != "http" && d.Protocol != "tcp") {
+	if err != nil || d.TargetPort < 1 || d.TargetPort > 65535 || (d.Protocol != "http" && d.Protocol != "tcp") || !d.validDraft() {
 		return result, &APIError{Code: "GATEWAY_INVALID_DESTINATION", Permanent: true}
 	}
 	d.TargetIP = ip
+	responseFailure := &APIError{Code: "GATEWAY_INVALID_RESPONSE"}
+	if d.PublicTransport != TransportLegacy {
+		responseFailure.Code = "GATEWAY_CONTRACT_UNCONFIRMED"
+	}
 	if err = c.call(ctx, http.MethodPut, id, d, &response); err != nil {
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && (apiErr.Code == "GATEWAY_INVALID_RESPONSE" || (d.PublicTransport != TransportLegacy && apiErr.Status >= 200 && apiErr.Status < 300)) {
+			return result, responseFailure
+		}
 		return result, err
 	}
 	result = response.Route
 	if response.TLS == nil || result.InstanceID != id || !validHostname.MatchString(result.Hostname) || result.Port < 1 || result.Port > 65535 || result.Protocol != d.Protocol || result.CreatedAt.IsZero() {
-		return Route{}, &APIError{Code: "GATEWAY_INVALID_RESPONSE"}
+		return Route{}, responseFailure
 	}
 	result.TLS = *response.TLS
+	if d.PublicTransport != TransportLegacy && (result.PublicTransport != d.PublicTransport || result.OwnerTeamID != d.OwnerTeamID || !result.OwnerAccessEnforced || result.TLS != (d.PublicTransport == TransportTLS)) {
+		return Route{}, responseFailure
+	}
 	if d.Protocol == "http" {
 		if result.Port != 443 || !result.TLS || result.URL == nil || *result.URL != "https://"+result.Hostname {
-			return Route{}, &APIError{Code: "GATEWAY_INVALID_RESPONSE"}
+			return Route{}, responseFailure
 		}
 	} else if result.URL != nil {
-		return Route{}, &APIError{Code: "GATEWAY_INVALID_RESPONSE"}
+		return Route{}, responseFailure
 	}
 	return result, nil
 }
@@ -176,12 +192,18 @@ func (c *Client) call(ctx context.Context, method, id string, body any, result a
 	_ = json.Unmarshal(raw, &failure)
 	code := "GATEWAY_HTTP_ERROR"
 	switch failure.Error.Code {
-	case "GATEWAY_BUSY", "INSTANCE_CONFLICT", "TARGET_IN_USE", "INSTANCE_DELETED", "NGINX_APPLY_FAILED", "INVALID_RUNTIME_TOKEN", "RUNTIME_AUTH_NOT_CONFIGURED", "GATEWAY_NOT_CONFIGURED", "CONTROLLER_UNAVAILABLE", "REGISTRY_INVALID", "NGINX_RECOVERY_REQUIRED", "VALIDATION_ERROR", "INVALID_TARGET", "INVALID_REQUEST", "INVALID_JSON", "INVALID_INSTANCE_ID":
+	case "GATEWAY_BUSY", "INSTANCE_CONFLICT", "TARGET_IN_USE", "INSTANCE_DELETED", "NGINX_APPLY_FAILED", "INVALID_RUNTIME_TOKEN", "RUNTIME_AUTH_NOT_CONFIGURED", "GATEWAY_NOT_CONFIGURED", "CONTROLLER_UNAVAILABLE", "REGISTRY_INVALID", "NGINX_RECOVERY_REQUIRED", "VALIDATION_ERROR", "INVALID_TARGET", "INVALID_REQUEST", "INVALID_JSON", "INVALID_INSTANCE_ID",
+		"PORT_POOL_EXHAUSTED", "PORT_ALLOCATION_CONFLICT", "OWNER_CONFLICT", "OWNER_ACCESS_NOT_CONFIGURED", "TRANSPORT_NOT_SUPPORTED", "ROUTE_CLEANUP_PENDING":
 		code = failure.Error.Code
 		if !strings.HasPrefix(code, "GATEWAY_") {
 			code = "GATEWAY_" + code
 		}
 	}
 	permanent := response.StatusCode == 400 || response.StatusCode == 409 || response.StatusCode == 422
+	if destination, ok := body.(Destination); ok && destination.PublicTransport != TransportLegacy && response.StatusCode == http.StatusConflict && (failure.Error.Code == "PORT_ALLOCATION_CONFLICT" || failure.Error.Code == "ROUTE_CLEANUP_PENDING") {
+		// Draft allocator contention and an unfinished route cleanup are not
+		// evidence that a different instance owns the backend NodePort.
+		permanent = false
+	}
 	return &APIError{Code: code, Status: response.StatusCode, Permanent: permanent}
 }

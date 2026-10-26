@@ -61,6 +61,18 @@ func TestKubernetesBackendReadsActualNodePortAndQuiescesWithoutDeletingService(t
 	if err != nil || destination.TargetPort != 31042 || uid != "svc1" {
 		t.Fatal(destination, uid, err)
 	}
+	backend.TCPTransport = TransportPlain
+	// The new global option must leave HTTP requests on the v1 contract.
+	httpDestination, _, err := backend.Destination(ctx, command, result)
+	if err != nil || httpDestination != destination {
+		t.Fatalf("HTTP request acquired draft fields: %+v %v", httpDestination, err)
+	}
+	result.Endpoints[0].Protocol = "TCP"
+	tcpDestination, _, err := backend.Destination(ctx, command, result)
+	if err != nil || tcpDestination.PublicTransport != TransportPlain || tcpDestination.OwnerTeamID != string(command.TeamID) || tcpDestination.TargetPort != 31042 {
+		t.Fatalf("trusted TCP owner/mode not stamped: %+v %v", tcpDestination, err)
+	}
+	result.Endpoints[0].Protocol = "HTTP"
 	record := Record{Command: command, Result: result, Destination: destination, ServiceUID: uid}
 	if err = backend.Verify(ctx, record); err != nil {
 		t.Fatal(err)

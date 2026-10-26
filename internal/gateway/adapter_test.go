@@ -104,6 +104,8 @@ type fakeRoutes struct {
 	deleteFailure bool
 	last          Destination
 	conflict      bool
+	putError      *APIError
+	deleteCode    string
 }
 
 func (f *fakeRoutes) Put(ctx context.Context, id string, d Destination) (Route, error) {
@@ -112,17 +114,28 @@ func (f *fakeRoutes) Put(ctx context.Context, id string, d Destination) (Route, 
 		return Route{}, errors.New("changed tuple")
 	}
 	f.last = d
+	if f.putError != nil {
+		return Route{}, f.putError
+	}
 	if f.conflict {
 		return Route{}, &APIError{Code: "GATEWAY_TARGET_IN_USE", Status: 409, Permanent: true}
 	}
 	if f.lost && f.puts == 1 {
 		return Route{}, &APIError{Code: "GATEWAY_UNAVAILABLE"}
 	}
-	return Route{InstanceID: id, Hostname: "abc.gate.msgctf.kr", Port: 443, TLS: true, Protocol: d.Protocol, CreatedAt: time.Now()}, nil
+	route := Route{InstanceID: id, Hostname: "abc.gate.msgctf.kr", Port: 443, TLS: true, Protocol: d.Protocol, CreatedAt: time.Now()}
+	if d.PublicTransport != TransportLegacy {
+		route.Port, route.TLS = 42817, d.PublicTransport == TransportTLS
+		route.PublicTransport, route.OwnerTeamID, route.OwnerAccessEnforced = d.PublicTransport, d.OwnerTeamID, true
+	}
+	return route, nil
 }
 func (f *fakeRoutes) Delete(context.Context, string) error {
 	f.deletes++
 	if f.deleteFailure {
+		if f.deleteCode != "" {
+			return &APIError{Code: f.deleteCode}
+		}
 		return &APIError{Code: "GATEWAY_BUSY"}
 	}
 	return nil
@@ -132,6 +145,7 @@ type fakeBackend struct {
 	creates, deletes, quiesces int
 	result                     provisioner.CreateWorkloadResult
 	err                        error
+	destination                Destination
 }
 
 func (f *fakeBackend) CreateWorkloadForOperation(context.Context, provisioner.CreateWorkloadCommand, string) (provisioner.CreateWorkloadResult, error) {
@@ -146,6 +160,9 @@ func (f *fakeBackend) CleanupFailedCreate(context.Context, provisioner.CreateWor
 	return nil
 }
 func (f *fakeBackend) Destination(context.Context, provisioner.CreateWorkloadCommand, provisioner.CreateWorkloadResult) (Destination, string, error) {
+	if f.destination.TargetIP != "" {
+		return f.destination, "service-uid", nil
+	}
 	return Destination{TargetIP: "8.8.8.8", TargetPort: 31042, Protocol: "tcp"}, "service-uid", nil
 }
 func (f *fakeBackend) Verify(context.Context, Record) error          { return nil }
