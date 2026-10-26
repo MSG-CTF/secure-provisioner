@@ -133,6 +133,10 @@ func (api *API) handleCreateInstance(writer http.ResponseWriter, request *http.R
 		command.RequestFingerprint = fingerprint
 		operation, created, err := api.runtime.EnqueueCreate(command)
 		if err != nil {
+			if code, _ := operations.ClassifyExecutionError(err); code == "TARGET_NOT_FOUND" || code == "TARGET_DISABLED" {
+				writeAPIError(writer, http.StatusUnprocessableEntity, code, "runtime target is not available for creation")
+				return
+			}
 			if code, _ := operations.ClassifyExecutionError(err); code == "GATEWAY_SINGLE_ENDPOINT_REQUIRED" {
 				writeAPIError(writer, http.StatusUnprocessableEntity, code, "Gateway v1 requires exactly one public endpoint")
 				return

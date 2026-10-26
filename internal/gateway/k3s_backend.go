@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/MSG-CTF/secure-provisioner/internal/k3s"
+	"github.com/MSG-CTF/secure-provisioner/internal/operations"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 	"github.com/MSG-CTF/secure-provisioner/internal/runtimebinding"
 	corev1 "k8s.io/api/core/v1"
@@ -33,6 +34,10 @@ func (b *KubernetesBackend) ValidateCreateCommand(c provisioner.CreateWorkloadCo
 	}
 	cluster, err := b.Registry.LookupForCreate(c.TargetID)
 	if err != nil {
+		var rejected *k3s.RuntimeError
+		if errors.As(err, &rejected) {
+			return operations.NewExecutionError(rejected.Code(), rejected.Retryable(), err)
+		}
 		return err
 	}
 	return cluster.Supports(c.Policy)

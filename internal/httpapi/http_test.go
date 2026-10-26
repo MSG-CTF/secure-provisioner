@@ -19,6 +19,21 @@ func newTestHandler(createWorkload provisioner.CreateWorkloadUseCase) http.Handl
 	return withTestServiceAuthentication(NewHandler(createWorkload, ServiceAuthConfig{CurrentToken: testCurrentServiceToken}))
 }
 
+func TestCreateRejectsUnavailableTargetBeforeReturningQueueAcceptance(t *testing.T) {
+	for _, code := range []string{"TARGET_NOT_FOUND", "TARGET_DISABLED"} {
+		t.Run(code, func(t *testing.T) {
+			runtime := &recordingRuntimeUseCase{createErr: operations.NewExecutionError(code, false, nil)}
+			handler := newTestHandlerWithRuntime(&recordingCreateUseCase{}, runtime)
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(validCreateRequestJSON()))
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusUnprocessableEntity || !strings.Contains(response.Body.String(), code) {
+				t.Fatalf("status=%d body=%s, want admission rejection %s", response.Code, response.Body.String(), code)
+			}
+		})
+	}
+}
+
 func newTestHandlerWithRuntime(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase) http.Handler {
 	return withTestServiceAuthentication(NewHandlerWithRuntime(createWorkload, runtime, ServiceAuthConfig{CurrentToken: testCurrentServiceToken}))
 }
