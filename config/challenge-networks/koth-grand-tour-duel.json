@@ -1,0 +1,155 @@
+{
+  "contract_version": "CHALLENGE_NETWORK_READINESS_V1",
+  "challenge_id": "koth-grand-tour-duel",
+  "stage": "candidate",
+  "enabled": false,
+  "status": "blocked_pending_operator_inputs",
+  "approval": null,
+  "artifact_role": "readiness_contract_not_runtime_catalog",
+  "source": {
+    "repository": "MSG-CTF/2026_MSG_CTF",
+    "revision": "84742c511bb126a5e94d9d21c85ddf9b0611b923",
+    "container_manifest": "koth-grand-tour-duel/info.yaml"
+  },
+  "published_candidate": {
+    "status": "published_unapproved_candidate",
+    "discovery_scope": "latest_available_publish_bundle_in_downloaded_index",
+    "artifact_id": 12186016197,
+    "artifact_name": "koth-grand-tour-duel-39250207559-1-c235ea8e54c743b9a33a5864f796bf9f-publish-bundle",
+    "artifact_created_at": "2026-10-19T12:20:50Z",
+    "artifact_url": "https://github.com/MSG-CTF/2026_MSG_CTF/actions/runs/39250207559/artifacts/12186016197",
+    "run_id": 39250207559,
+    "run_url": "https://github.com/MSG-CTF/2026_MSG_CTF/actions/runs/39250207559",
+    "workflow_head_sha": "7e852818f66755a8d858c973189098ceb00b300d",
+    "source_sha": "7e852818f66755a8d858c973189098ceb00b300d",
+    "source_ref": "refs/heads/main",
+    "artifact_revision": 552,
+    "registry_revision": 552,
+    "images": [
+      {
+        "container": "service",
+        "image": "ghcr.io/msg-ctf/challenges/koth-grand-tour-duel/service@sha256:40507edc760724a88603c9038f4ce0fefe3da6430fb7b5967f66c50d236744be"
+      }
+    ],
+    "metadata_validation": {
+      "schema_version": "2.0",
+      "runtime_type": "KUBERNETES",
+      "architecture": "AMD64",
+      "isolation_profile": "WEB",
+      "registry_payload_identical": true,
+      "workflow_head_matches_source_sha": true,
+      "container_names_ports_and_exposure_match": true,
+      "resource_profile_matches": true,
+      "evidence_published_images_match": true,
+      "scan_result_reported": "PASS",
+      "execution_policy_fields_present": false,
+      "image_configuration_or_signature_verified": false,
+      "scope_note": "Downloaded metadata supplies image identities and ports, not execution approval. Evidence source_digest is not treated as the final published_image digest; its relation is not independently assessed here."
+    },
+    "source_comparison": {
+      "contract_baseline_sha": "84742c511bb126a5e94d9d21c85ddf9b0611b923",
+      "published_source_sha": "7e852818f66755a8d858c973189098ceb00b300d",
+      "scope": "koth-grand-tour-duel/",
+      "status": "no_scoped_source_drift",
+      "changed_paths": [],
+      "scope_note": "Scoped git diff compares the challenge tree only. The candidate still declares its original source SHA; this does not claim a build at the newer baseline or verify shared build infrastructure, signatures, image configuration or reproducibility."
+    }
+  },
+  "network_required_repositories": [
+    "ghcr.io/msg-ctf/challenges/koth-grand-tour-duel/service"
+  ],
+  "operator_network_candidate_status": "incomplete_must_not_activate",
+  "operator_network_candidate": {
+    "id": "koth-grand-tour-duel-candidate-v1",
+    "mode": "EXPLICIT_TCP_V1",
+    "isolation_profile": "WEB",
+    "containers": [
+      {
+        "name": "service",
+        "image": "ghcr.io/msg-ctf/challenges/koth-grand-tour-duel/service@sha256:40507edc760724a88603c9038f4ce0fefe3da6430fb7b5967f66c50d236744be",
+        "ports": [
+          8080,
+          9090
+        ]
+      }
+    ],
+    "allow": []
+  },
+  "containers": [
+    {"name": "service", "source_component": "final_Dockerfile_service_stage_with_bundled_runner", "ports": [8080, 9090], "exposed_ports": [8080, 9090], "published_image_ref": "ghcr.io/msg-ctf/challenges/koth-grand-tour-duel/service@sha256:40507edc760724a88603c9038f4ce0fefe3da6430fb7b5967f66c50d236744be", "approved_image_digest": null}
+  ],
+  "capacity_observation": {
+    "checked_at_utc": "2026-10-23T06:25:35.419246+00:00",
+    "evidence_workspace_relative": ".scratch/network-solve-audit-20261023/test-node-capacity.json",
+    "status": "insufficient_allocatable_bounds_on_both_observed_targets",
+    "targets": [
+      {
+        "target_id": "gcp-msg-runtime-k3s",
+        "node": "msg-runtime-k3s",
+        "declared_profile_within_allocatable_cpu_memory_storage": false
+      },
+      {
+        "target_id": "e058d71c-24a6-4109-b025-750aca85077a",
+        "node": "msg-test-1",
+        "declared_profile_within_allocatable_cpu_memory_storage": false
+      }
+    ],
+    "separate_target_capacities_must_not_be_summed": true,
+    "scope_note": "Necessary allocatable bounds only; current requests, placement, runtime overhead, execution compatibility and live readiness are not proven."
+  },
+  "declared_resource_profile": {"cpu_millicores": 6000, "memory_mib": 1536, "ephemeral_storage_mib": 2048},
+  "author_defined_contract": {
+    "official_runner_mode": "bundled",
+    "required_directed_tcp_edges": [],
+    "local_runner_transport": {"type": "Unix_socket", "path": "/run/koth-runner/runner.sock", "access_group": 20001},
+    "ingress": [
+      {"to": "service", "port": 8080, "purpose": "participant_UI_API_and_authenticated_score_collection"},
+      {"to": "service", "port": 9090, "purpose": "minimal_healthz_only"}
+    ],
+    "external_calls": [
+      {"from": "service", "destination_id": "platform-origin", "method": "POST", "path": "/internal/koth/team_tokens/verify"},
+      {"from": "service", "destination_id": "platform-origin", "method": "GET", "path": "/internal/teams"}
+    ],
+    "local_compose_exception": "Separate runner/platform-test/checker/e2e services are local tooling, not info.yaml production containers. External runner mode requires a separately approved Unix-socket deployment; its local runner has network_mode none.",
+    "evidence_ids": ["info-containers", "official-image", "admin-execution", "platform-client", "local-compose"]
+  },
+  "candidate_runtime_mapping": {
+    "mode": "EXPLICIT_TCP_V1",
+    "allow": [],
+    "egress_baseline": "NONE_except_reviewed_exact_host_TCP",
+    "destination_inputs": [
+      {"id": "platform-origin", "from": "service", "configuration_keys": ["KOTH_PLATFORM_BASE_URL"], "host_addresses": [], "tcp_ports": [], "port_rule": "explicit_URL_port_or_HTTP_HTTPS_scheme_default", "status": "operator_input_required"}
+    ],
+    "inferred_boundary": "Exact-host platform egress is a candidate platform restriction; no extra network container or runner TCP edge is inferred from local Compose.",
+    "platform_egress_configured": false,
+    "normal_production_operation_without_platform_egress": "blocked_by_missing_required_platform_calls",
+    "ready_for_activation": false,
+    "execution_compatible_with_standard_nonroot": false,
+    "execution_blocker": "The official bundled supervisor must start as root and retain required capabilities before dropping HTTP children to UID/GID 10001. A blanket STANDARD nonroot policy breaks startup. A network policy cannot authorize this execution exception."
+  },
+  "operator_inputs": [
+    {"id": "approved-execution-path", "owner": "platform_security_and_challenge_operator", "required": true, "value_status": "missing", "description": "Explicitly approve a compatible isolated bundled execution path or a separately designed external Unix-socket runner deployment; do not broaden shared-node privileges."},
+    {"id": "approved-image", "owner": "release_operator", "required": true, "value_status": "published_candidate_found_approval_pending", "description": "Published final service image candidate is recorded; verify provenance and image configuration and resolve the separately blocked supervisor execution approval."},
+    {"id": "platform-destination", "owner": "platform_API_operator", "required": true, "value_status": "missing", "description": "Actual KOTH_PLATFORM_BASE_URL, exact destination host addresses, TCP port and drift handling."},
+    {"id": "backend-secret-bindings", "owner": "Backend_release_operator", "required": true, "value_status": "missing", "description": "Current approved release references, required authentication/session keys, challenge UUID and public origin; no secret values stored here."},
+    {"id": "persistent-state-and-limits", "owner": "platform_operator", "required": true, "value_status": "missing", "description": "Persistent SQLite/submission/replay paths, correct ownership, runner socket group, required capabilities, PID budget and RLIMIT_NOFILE hard limit at least 8192."},
+    {"id": "target-capacity", "owner": "platform_capacity_operator", "required": true, "value_status": "insufficient_allocatable_bounds_on_both_observed_targets", "description": "The declared 6000m CPU profile exceeds both observed single-node targets. Supply an approved target with sufficient schedulable CPU/memory/storage; do not lower the source profile without challenge approval.", "evidence_workspace_relative": ".scratch/network-solve-audit-20261023/test-node-capacity.json"}
+  ],
+  "activation_requirements": [
+    "Supply an approved target with sufficient schedulable resources; the declared 6000m CPU profile exceeds both observed targets.",
+    "Resolve the root-supervisor incompatibility before creating any active Runtime graph or image entry.",
+    "Preserve bundled mode unless a separately reviewed external runner deployment is chosen; do not add local test/stub containers to production.",
+    "Verify startup privilege transitions, runner isolation/readiness, official scheduler and submissions, real platform authentication/team listing, scoring and restart recovery.",
+    "Prove exact-host egress succeeds and other destinations remain denied in the approved execution environment.",
+    "Approve actual images and current Backend Secret bindings separately from the candidate network mapping."
+  ],
+  "evidence": [
+    {"id": "info-containers", "path": "koth-grand-tour-duel/info.yaml", "lines": [12, 27]},
+    {"id": "official-image", "path": "koth-grand-tour-duel/prob/for_organizer/service/README.md", "lines": [119, 128]},
+    {"id": "admin-execution", "path": "koth-grand-tour-duel/prob/for_organizer/admin.md", "lines": [8, 103]},
+    {"id": "root-entrypoint", "path": "koth-grand-tour-duel/prob/for_organizer/service/Dockerfile", "lines": [99, 104]},
+    {"id": "root-and-limit-gates", "path": "koth-grand-tour-duel/prob/for_organizer/service/src/koth_duel/bootstrap.py", "lines": [28, 248]},
+    {"id": "platform-client", "path": "koth-grand-tour-duel/prob/for_organizer/service/src/koth_duel/platform/client.py", "lines": [21, 67]},
+    {"id": "local-compose", "path": "koth-grand-tour-duel/prob/for_organizer/docker-compose.yml", "lines": [1, 118]}
+  ]
+}

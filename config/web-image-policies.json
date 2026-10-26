@@ -1,5 +1,21 @@
 {
   "schema_version": 1,
+  "endpoint_protocols": [
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web3-infinite-pack/server@sha256:43cc32512af5ce6a06d5a1541be1f9ca2397a1dab744d37580d4bfc4a04b437b",
+      "container": "server",
+      "ports": [{"port": 31337, "protocol": "TCP"}]
+    }
+  ],
+  "vm_required_repositories": [
+    "ghcr.io/msg-ctf/challenges/web-afterimage/portal",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/core",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/bot",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/exporter",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/inventory-metadata",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/indexer",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/case-vault"
+  ],
   "managed_repositories": [
     "ghcr.io/msg-ctf/challenges/web-grade-tampering/web",
     "ghcr.io/msg-ctf/challenges/web-daily-point/web",

@@ -1,0 +1,221 @@
+{
+  "contract_version": "CHALLENGE_NETWORK_READINESS_V1",
+  "challenge_id": "koth-swanopoly",
+  "stage": "candidate",
+  "enabled": false,
+  "status": "blocked_pending_operator_inputs",
+  "approval": null,
+  "artifact_role": "readiness_contract_not_runtime_catalog",
+  "source": {
+    "repository": "MSG-CTF/2026_MSG_CTF",
+    "revision": "84742c511bb126a5e94d9d21c85ddf9b0611b923",
+    "container_manifest": "koth-swanopoly/info.yaml"
+  },
+  "published_candidate": {
+    "status": "published_unapproved_candidate",
+    "discovery_scope": "latest_available_publish_bundle_in_downloaded_index",
+    "artifact_id": 12185018549,
+    "artifact_name": "koth-swanopoly-39250207559-1-caab5c7b5ebd4ff3bdfd85f62fd51b33-publish-bundle",
+    "artifact_created_at": "2026-10-19T12:22:07Z",
+    "artifact_url": "https://github.com/MSG-CTF/2026_MSG_CTF/actions/runs/39250207559/artifacts/12185018549",
+    "run_id": 39250207559,
+    "run_url": "https://github.com/MSG-CTF/2026_MSG_CTF/actions/runs/39250207559",
+    "workflow_head_sha": "7e852818f66755a8d858c973189098ceb00b300d",
+    "source_sha": "7e852818f66755a8d858c973189098ceb00b300d",
+    "source_ref": "refs/heads/main",
+    "artifact_revision": 552,
+    "registry_revision": 552,
+    "images": [
+      {
+        "container": "service",
+        "image": "ghcr.io/msg-ctf/challenges/koth-swanopoly/service@sha256:27d0956d23fef1139b5e327d95b9c4cb820b504c01924209697092a4458a038a"
+      },
+      {
+        "container": "backend",
+        "image": "ghcr.io/msg-ctf/challenges/koth-swanopoly/backend@sha256:603fc6cdb26a989fad930369b7a6d8787d4b019ff2bb89a5d6f7e4ab7d1f9b3d"
+      },
+      {
+        "container": "test",
+        "image": "ghcr.io/msg-ctf/challenges/koth-swanopoly/test@sha256:3382e199d1ffa019e43a4522ab9e3fcae22c4457f108f1ba802677dd4a74260d"
+      },
+      {
+        "container": "submit",
+        "image": "ghcr.io/msg-ctf/challenges/koth-swanopoly/submit@sha256:9ea9c6ba6c95c4404c9741855d80e5eaed6f56e1a38ed434e7ab61a42632b776"
+      }
+    ],
+    "metadata_validation": {
+      "schema_version": "2.0",
+      "runtime_type": "KUBERNETES",
+      "architecture": "AMD64",
+      "isolation_profile": "WEB",
+      "registry_payload_identical": true,
+      "workflow_head_matches_source_sha": true,
+      "container_names_ports_and_exposure_match": true,
+      "resource_profile_matches": true,
+      "evidence_published_images_match": true,
+      "scan_result_reported": "PASS",
+      "execution_policy_fields_present": false,
+      "image_configuration_or_signature_verified": false,
+      "scope_note": "Downloaded metadata supplies image identities and ports, not execution approval. Evidence source_digest is not treated as the final published_image digest; its relation is not independently assessed here."
+    },
+    "source_comparison": {
+      "contract_baseline_sha": "84742c511bb126a5e94d9d21c85ddf9b0611b923",
+      "published_source_sha": "7e852818f66755a8d858c973189098ceb00b300d",
+      "scope": "koth-swanopoly/",
+      "status": "no_scoped_source_drift",
+      "changed_paths": [],
+      "scope_note": "Scoped git diff compares the challenge tree only. The candidate still declares its original source SHA; this does not claim a build at the newer baseline or verify shared build infrastructure, signatures, image configuration or reproducibility."
+    }
+  },
+  "network_required_repositories": [
+    "ghcr.io/msg-ctf/challenges/koth-swanopoly/service",
+    "ghcr.io/msg-ctf/challenges/koth-swanopoly/backend",
+    "ghcr.io/msg-ctf/challenges/koth-swanopoly/test",
+    "ghcr.io/msg-ctf/challenges/koth-swanopoly/submit"
+  ],
+  "operator_network_candidate_status": "incomplete_must_not_activate",
+  "operator_network_candidate": {
+    "id": "koth-swanopoly-candidate-v1",
+    "mode": "EXPLICIT_TCP_V1",
+    "isolation_profile": "WEB",
+    "containers": [
+      {
+        "name": "service",
+        "image": "ghcr.io/msg-ctf/challenges/koth-swanopoly/service@sha256:27d0956d23fef1139b5e327d95b9c4cb820b504c01924209697092a4458a038a",
+        "ports": [
+          8080,
+          9090
+        ]
+      },
+      {
+        "name": "backend",
+        "image": "ghcr.io/msg-ctf/challenges/koth-swanopoly/backend@sha256:603fc6cdb26a989fad930369b7a6d8787d4b019ff2bb89a5d6f7e4ab7d1f9b3d",
+        "ports": [
+          8082
+        ]
+      },
+      {
+        "name": "test",
+        "image": "ghcr.io/msg-ctf/challenges/koth-swanopoly/test@sha256:3382e199d1ffa019e43a4522ab9e3fcae22c4457f108f1ba802677dd4a74260d",
+        "ports": [
+          9001
+        ]
+      },
+      {
+        "name": "submit",
+        "image": "ghcr.io/msg-ctf/challenges/koth-swanopoly/submit@sha256:9ea9c6ba6c95c4404c9741855d80e5eaed6f56e1a38ed434e7ab61a42632b776",
+        "ports": [
+          9002
+        ]
+      }
+    ],
+    "allow": [
+      {
+        "from": "service",
+        "to": "backend",
+        "port": 8082
+      },
+      {
+        "from": "backend",
+        "to": "test",
+        "port": 9001
+      },
+      {
+        "from": "backend",
+        "to": "submit",
+        "port": 9002
+      }
+    ]
+  },
+  "containers": [
+    {"name": "service", "source_component": "frontend", "ports": [8080, 9090], "exposed_ports": [8080, 9090], "published_image_ref": "ghcr.io/msg-ctf/challenges/koth-swanopoly/service@sha256:27d0956d23fef1139b5e327d95b9c4cb820b504c01924209697092a4458a038a", "approved_image_digest": null},
+    {"name": "backend", "source_component": "service", "ports": [8082], "exposed_ports": [], "published_image_ref": "ghcr.io/msg-ctf/challenges/koth-swanopoly/backend@sha256:603fc6cdb26a989fad930369b7a6d8787d4b019ff2bb89a5d6f7e4ab7d1f9b3d", "approved_image_digest": null},
+    {"name": "test", "source_component": "test", "ports": [9001], "exposed_ports": [], "published_image_ref": "ghcr.io/msg-ctf/challenges/koth-swanopoly/test@sha256:3382e199d1ffa019e43a4522ab9e3fcae22c4457f108f1ba802677dd4a74260d", "approved_image_digest": null},
+    {"name": "submit", "source_component": "submit", "ports": [9002], "exposed_ports": [], "published_image_ref": "ghcr.io/msg-ctf/challenges/koth-swanopoly/submit@sha256:9ea9c6ba6c95c4404c9741855d80e5eaed6f56e1a38ed434e7ab61a42632b776", "approved_image_digest": null}
+  ],
+  "capacity_observation": {
+    "checked_at_utc": "2026-10-23T06:25:35.419246+00:00",
+    "evidence_workspace_relative": ".scratch/network-solve-audit-20261023/test-node-capacity.json",
+    "status": "insufficient_allocatable_bounds_on_both_observed_targets",
+    "targets": [
+      {
+        "target_id": "gcp-msg-runtime-k3s",
+        "node": "msg-runtime-k3s",
+        "declared_profile_within_allocatable_cpu_memory_storage": false
+      },
+      {
+        "target_id": "e058d71c-24a6-4109-b025-750aca85077a",
+        "node": "msg-test-1",
+        "declared_profile_within_allocatable_cpu_memory_storage": false
+      }
+    ],
+    "separate_target_capacities_must_not_be_summed": true,
+    "scope_note": "Necessary allocatable bounds only; current requests, placement, runtime overhead, execution compatibility and live readiness are not proven."
+  },
+  "declared_resource_profile": {"cpu_millicores": 6000, "memory_mib": 4096, "ephemeral_storage_mib": 2048},
+  "author_defined_contract": {
+    "basis": "organizer_deployment_document_and_info_yaml",
+    "required_directed_tcp_edges": [
+      {"from": "service", "to": "backend", "port": 8082},
+      {"from": "backend", "to": "test", "port": 9001},
+      {"from": "backend", "to": "submit", "port": 9002}
+    ],
+    "ingress": [
+      {"to": "service", "port": 8080, "purpose": "participant_and_authenticated_platform_score_collection"},
+      {"to": "service", "port": 9090, "purpose": "platform_healthcheck"}
+    ],
+    "forbidden_ingress": [
+      {"from": "external", "to": "backend", "port": 8082},
+      {"from": "external", "to": "test", "port": 9001},
+      {"from": "external", "to": "submit", "port": 9002},
+      {"from": "any_container_except_backend", "to": "test", "port": 9001},
+      {"from": "any_container_except_backend", "to": "submit", "port": 9002}
+    ],
+    "external_calls": [
+      {"from": "backend", "destination_id": "platform-team-verification", "method": "POST", "url_config": "TEAM_TOKEN_VERIFY_URL"},
+      {"from": "backend", "destination_id": "platform-team-list", "method": "GET", "url_config": "TEAM_LIST_URL"}
+    ],
+    "database": {"type": "SQLite_only", "replicas": 1, "persistent_root": "/data", "path_rule": "STATE_DIR/KOTH_MATCH_ID/swan.db"},
+    "compose_note": "Local Compose is flat. Backend-only runner ingress comes from the organizer deployment document, not Compose network groups.",
+    "evidence_ids": ["info-containers", "deployment-ports", "deployment-state", "deployment-platform", "runner-contract"]
+  },
+  "candidate_runtime_mapping": {
+    "mode": "EXPLICIT_TCP_V1",
+    "allow_from": "author_defined_contract.required_directed_tcp_edges",
+    "egress_baseline": "NONE_except_reviewed_exact_host_TCP_from_backend",
+    "destination_inputs": [
+      {"id": "platform-team-verification", "from": "backend", "configuration_keys": ["TEAM_TOKEN_VERIFY_URL"], "host_addresses": [], "tcp_ports": [], "port_rule": "explicit_URL_port_or_HTTP_HTTPS_scheme_default", "status": "operator_input_required"},
+      {"id": "platform-team-list", "from": "backend", "configuration_keys": ["TEAM_LIST_URL"], "host_addresses": [], "tcp_ports": [], "port_rule": "explicit_URL_port_or_HTTP_HTTPS_scheme_default", "status": "operator_input_required"}
+    ],
+    "inferred_boundary": "The candidate denies all unspecified private edges and runner-initiated external traffic. These additional default-deny restrictions require normal-operation acceptance; the author explicitly requires backend-only runner ingress and no public backend/runner ports.",
+    "platform_egress_configured": false,
+    "normal_production_operation_without_platform_egress": "blocked_by_missing_required_platform_calls",
+    "ready_for_activation": false
+  },
+  "operator_inputs": [
+    {"id": "approved-images", "owner": "release_operator", "required": true, "value_status": "published_candidates_found_approval_pending", "description": "Four published image candidates are recorded; image configurations, source provenance and compatible enabled per-image policies still require approval."},
+    {"id": "platform-destinations", "owner": "platform_API_operator", "required": true, "value_status": "missing", "description": "Actual verification/team-list URLs, exact host-address sets, TCP ports and drift handling; no platform egress from runners."},
+    {"id": "backend-secret-bindings", "owner": "Backend_release_operator", "required": true, "value_status": "missing", "description": "Valid current release references, challenge and match IDs, shared runner authentication and backend-only database/platform credentials; names and references only."},
+    {"id": "persistent-state", "owner": "platform_operator", "required": true, "value_status": "missing", "description": "Single backend replica, durable /data volume, stable match ID and restart/new-match recovery procedure. An external PostgreSQL DSN alone is unsupported."},
+    {"id": "runner-execution", "owner": "platform_and_challenge_operator", "required": true, "value_status": "missing", "description": "UID 10001 runners, allowed modes, no parent Secret environment in participant children, concurrency within assigned CPU, and bounded queues/time/memory."},
+    {"id": "target-capacity", "owner": "platform_capacity_operator", "required": true, "value_status": "insufficient_allocatable_bounds_on_both_observed_targets", "description": "The declared 6000m CPU profile exceeds both observed single-node targets. Supply an approved target with sufficient schedulable CPU/memory/storage; do not lower the source profile without challenge approval.", "evidence_workspace_relative": ".scratch/network-solve-audit-20261023/test-node-capacity.json"}
+  ],
+  "activation_requirements": [
+    "Supply an approved target with sufficient schedulable resources; the declared 6000m CPU profile exceeds both observed targets.",
+    "Use LOCAL_DEV=0 and BOT_RUNNER_ALLOW_INPROCESS=0 with real separated test/submit runners.",
+    "Set TEST_RUNNER_URL and SUBMIT_RUNNER_URL to the actual deployment names or loopback only when deliberately colocated; verify enforcement supports the required role boundaries.",
+    "Keep test mode test-only and submit modes validate/evaluate; preserve authentication and child-process execution limits.",
+    "Verify normal gameplay, test run, official submit, actual platform authentication/listing and score finalization.",
+    "Verify public ports, backend-only runner access, all other denied candidate edges, exact platform egress and database persistence through backend and full-deployment restart.",
+    "Approve images and current Secret references before writing a separate active Runtime catalog."
+  ],
+  "evidence": [
+    {"id": "info-containers", "path": "koth-swanopoly/info.yaml", "lines": [13, 40]},
+    {"id": "deployment-ports", "path": "koth-swanopoly/prob/for_organizer/README-DEPLOYMENT.md", "lines": [7, 25]},
+    {"id": "deployment-state", "path": "koth-swanopoly/prob/for_organizer/README-DEPLOYMENT.md", "lines": [30, 49]},
+    {"id": "deployment-platform", "path": "koth-swanopoly/prob/for_organizer/README-DEPLOYMENT.md", "lines": [54, 102]},
+    {"id": "runner-contract", "path": "koth-swanopoly/prob/for_organizer/README-DEPLOYMENT.md", "lines": [129, 160]},
+    {"id": "platform-client-config", "path": "koth-swanopoly/prob/for_organizer/service/lib/runtimeConfig.js", "lines": [10, 102]},
+    {"id": "local-compose", "path": "koth-swanopoly/prob/for_organizer/docker-compose.yml", "lines": [1, 52]}
+  ]
+}

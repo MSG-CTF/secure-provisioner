@@ -7,6 +7,7 @@ import (
 	"io"
 	"maps"
 	"path"
+	"slices"
 	"strings"
 
 	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
@@ -39,19 +40,20 @@ type RuntimeHealthcheck struct {
 }
 
 type RuntimeContainer struct {
-	Name           string            `json:"name"`
-	Image          string            `json:"image"`
-	Ports          []int             `json:"ports"`
-	Expose         bool              `json:"expose"`
-	ExposedPorts   []int             `json:"exposed_ports,omitempty"`
-	RunAsUser      int64             `json:"run_as_user"`
-	WritablePaths  []WritablePath    `json:"writable_paths,omitempty"`
-	Env            map[string]string `json:"env,omitempty"`
-	SecretRef      string            `json:"secret_ref,omitempty"`
-	readinessHTTP  *provisioner.HTTPReadiness
-	tcpStartupOnly bool
-	requiresFlag   bool
-	flagFilePath   string
+	Name              string            `json:"name"`
+	Image             string            `json:"image"`
+	Ports             []int             `json:"ports"`
+	Expose            bool              `json:"expose"`
+	ExposedPorts      []int             `json:"exposed_ports,omitempty"`
+	RunAsUser         int64             `json:"run_as_user"`
+	WritablePaths     []WritablePath    `json:"writable_paths,omitempty"`
+	Env               map[string]string `json:"env,omitempty"`
+	SecretRef         string            `json:"secret_ref,omitempty"`
+	readinessHTTP     *provisioner.HTTPReadiness
+	tcpStartupOnly    bool
+	requiresFlag      bool
+	flagFilePath      string
+	endpointProtocols []provisioner.PortProtocol
 }
 
 func (container *RuntimeContainer) UnmarshalJSON(data []byte) error {
@@ -143,6 +145,7 @@ type CreateWorkloadRequest struct {
 	IsolationProfile string             `json:"isolation_profile"`
 	Target           RuntimeTarget      `json:"target"`
 	Workload         RuntimeWorkload    `json:"workload"`
+	workloadNetwork  *isolation.WorkloadNetwork
 }
 
 func (request *CreateWorkloadRequest) UnmarshalJSON(data []byte) error {
@@ -377,8 +380,9 @@ func (request CreateWorkloadRequest) normalizedContainers() ([]provisioner.Workl
 		normalized := provisioner.WorkloadContainer{
 			Name: container.Name, Image: container.Image, Ports: ports, Expose: container.Expose,
 			Env: maps.Clone(container.Env), SecretRef: container.SecretRef, RequiresFlag: container.requiresFlag,
-			FlagFilePath:   container.flagFilePath,
-			TCPStartupOnly: container.tcpStartupOnly,
+			FlagFilePath:      container.flagFilePath,
+			TCPStartupOnly:    container.tcpStartupOnly,
+			EndpointProtocols: slices.Clone(container.endpointProtocols),
 		}
 		if container.readinessHTTP != nil {
 			readiness := *container.readinessHTTP
@@ -509,6 +513,7 @@ func (request CreateWorkloadRequest) toPolicyRequest(containers []provisioner.Wo
 		VMProfile:       request.VMProfile,
 		WorkloadProfile: isolation.WorkloadProfile(request.IsolationProfile),
 		Containers:      requirements,
+		WorkloadNetwork: isolation.CloneWorkloadNetwork(request.workloadNetwork),
 		ResourceLimits: isolation.ResourceLimits{
 			CPUMillicores:       request.Workload.ResourceLimits.CPUMillicores,
 			MemoryMiB:           request.Workload.ResourceLimits.MemoryMiB,

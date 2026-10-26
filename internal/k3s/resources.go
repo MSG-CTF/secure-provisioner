@@ -33,19 +33,20 @@ const (
 )
 
 type ResourceSet struct {
-	Namespace          *corev1.Namespace
-	ServiceAccount     *corev1.ServiceAccount
-	ResourceQuota      *corev1.ResourceQuota
-	LimitRange         *corev1.LimitRange
-	NetworkPolicies    []*networkingv1.NetworkPolicy
-	EnvSecret          *corev1.Secret
-	Deployments        []*appsv1.Deployment
-	Services           []*corev1.Service
-	Ingress            *networkingv1.Ingress
-	ExpectedSpecHashes map[string]string
-	RuntimeWorkloadID  string
-	ServiceURL         string
-	Endpoints          []provisioner.WorkloadEndpoint
+	Namespace                *corev1.Namespace
+	ServiceAccount           *corev1.ServiceAccount
+	ResourceQuota            *corev1.ResourceQuota
+	LimitRange               *corev1.LimitRange
+	NetworkPolicies          []*networkingv1.NetworkPolicy
+	ExclusiveNetworkPolicies bool
+	EnvSecret                *corev1.Secret
+	Deployments              []*appsv1.Deployment
+	Services                 []*corev1.Service
+	Ingress                  *networkingv1.Ingress
+	ExpectedSpecHashes       map[string]string
+	RuntimeWorkloadID        string
+	ServiceURL               string
+	Endpoints                []provisioner.WorkloadEndpoint
 
 	// Deprecated single-resource aliases are retained until the Adapter is
 	// migrated to iterate over Deployments and Services.
@@ -101,15 +102,16 @@ func buildResourceSetForOperation(cluster Cluster, command provisioner.CreateWor
 	pathType := networkingv1.PathTypePrefix
 	replicas := int32(1)
 	resources := ResourceSet{
-		Namespace:          buildNamespace(command, namespace, operationID),
-		ServiceAccount:     buildRuntimeServiceAccount(namespace, labels),
-		ResourceQuota:      buildRuntimeResourceQuota(namespace, labels, command.Policy, len(containers), nodePortQuota(cluster.Config.ExposureMode, containers)),
-		LimitRange:         buildRuntimeLimitRange(namespace, labels, command.Policy, len(containers)),
-		NetworkPolicies:    networkPolicies,
-		Deployments:        make([]*appsv1.Deployment, 0, len(containers)),
-		Services:           make([]*corev1.Service, 0, len(containers)),
-		ExpectedSpecHashes: make(map[string]string, len(containers)),
-		Endpoints:          make([]provisioner.WorkloadEndpoint, 0),
+		Namespace:                buildNamespace(command, namespace, operationID),
+		ServiceAccount:           buildRuntimeServiceAccount(namespace, labels),
+		ResourceQuota:            buildRuntimeResourceQuota(namespace, labels, command.Policy, len(containers), nodePortQuota(cluster.Config.ExposureMode, containers)),
+		LimitRange:               buildRuntimeLimitRange(namespace, labels, command.Policy, len(containers)),
+		NetworkPolicies:          networkPolicies,
+		ExclusiveNetworkPolicies: command.Policy.WorkloadNetwork != nil,
+		Deployments:              make([]*appsv1.Deployment, 0, len(containers)),
+		Services:                 make([]*corev1.Service, 0, len(containers)),
+		ExpectedSpecHashes:       make(map[string]string, len(containers)),
+		Endpoints:                make([]provisioner.WorkloadEndpoint, 0),
 	}
 	if cluster.Config.ExposureMode != ExposureModeNodePort {
 		resources.Ingress = &networkingv1.Ingress{
@@ -370,6 +372,36 @@ func BuildNodePortEndpoints(
 	return endpoints, nil
 }
 
+func applyEndpointProtocols(endpoints []provisioner.WorkloadEndpoint, containers []provisioner.WorkloadContainer) ([]provisioner.WorkloadEndpoint, error) {
+	for index := range endpoints {
+		endpoint := &endpoints[index]
+		for _, container := range containers {
+			if container.Name != endpoint.ContainerName {
+				continue
+			}
+			for _, hint := range container.EndpointProtocols {
+				if hint.Port != endpoint.Port {
+					continue
+				}
+				if hint.Protocol != isolation.EndpointProtocolHTTP && hint.Protocol != isolation.EndpointProtocolTCP {
+					return nil, newRuntimeError("INVALID_CREATE_COMMAND", false, nil)
+				}
+				parsed, err := url.Parse(endpoint.ServiceURL)
+				if err != nil {
+					return nil, newRuntimeError("INVALID_CREATE_COMMAND", false, err)
+				}
+				if hint.Protocol == isolation.EndpointProtocolTCP {
+					parsed.Scheme = "tcp"
+				} else if parsed.Scheme == "tcp" {
+					parsed.Scheme = "http"
+				}
+				endpoint.Protocol, endpoint.ServiceURL = hint.Protocol, parsed.String()
+			}
+		}
+	}
+	return endpoints, nil
+}
+
 func normalizedCommandContainers(command provisioner.CreateWorkloadCommand) []provisioner.WorkloadContainer {
 	return command.Containers
 }
@@ -512,6 +544,15 @@ func validWorkloadCommand(
 			return false
 		}
 		publicPorts := container.PublicPorts()
+		seenProtocols := make(map[int]bool)
+		for _, hint := range container.EndpointProtocols {
+			if _, declared := ports[hint.Port]; !declared || seenProtocols[hint.Port] ||
+				(hint.Protocol != isolation.EndpointProtocolHTTP && hint.Protocol != isolation.EndpointProtocolTCP) ||
+				(hint.Protocol == isolation.EndpointProtocolTCP && cluster.Config.ExposureMode != ExposureModeNodePort) {
+				return false
+			}
+			seenProtocols[hint.Port] = true
+		}
 		hasExposed = hasExposed || len(publicPorts) > 0
 	}
 	return hasExposed

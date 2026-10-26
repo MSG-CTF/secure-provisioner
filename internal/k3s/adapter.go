@@ -31,6 +31,8 @@ type AdapterConfig struct {
 	Secrets            SecretResolver
 	RequiredFlagImages []string
 	RequiredFlagFiles  map[string]string
+	// RequiresVMImage is an immutable operator policy shared with HTTP admission.
+	RequiresVMImage func(string) bool
 }
 
 type Adapter struct {
@@ -110,6 +112,9 @@ func (a *Adapter) createWorkload(ctx context.Context, command provisioner.Create
 	}
 	// HTTP admission is bypassed when a queued command is replayed after an upgrade.
 	for _, container := range normalizedCommandContainers(command) {
+		if a.config.RequiresVMImage != nil && a.config.RequiresVMImage(container.Image) {
+			return provisioner.CreateWorkloadResult{}, a.failBeforeNamespace(command, newRuntimeError("VM_POLICY_REJECTED", false, nil))
+		}
 		if a.requiredFlagImages[container.Image] && (!container.RequiresFlag || container.SecretRef == "") {
 			return provisioner.CreateWorkloadResult{}, a.failBeforeNamespace(command, newRuntimeError("SECRET_RESOLUTION_FAILED", false, nil))
 		}
@@ -162,6 +167,11 @@ func (a *Adapter) createWorkload(ctx context.Context, command provisioner.Create
 		}
 		return provisioner.CreateWorkloadResult{}, a.failAfterNamespace(cluster.Client, createdNamespace, "RESOURCE_APPLY_FAILED", err)
 	}
+	if resources.ExclusiveNetworkPolicies {
+		if err := verifyExclusiveNetworkPolicies(ctx, cluster.Client, resources); err != nil {
+			return provisioner.CreateWorkloadResult{}, a.failAfterNamespace(cluster.Client, createdNamespace, "RESOURCE_APPLY_FAILED", err)
+		}
+	}
 
 	readyCtx, cancel := context.WithTimeout(ctx, a.config.ReadyTimeout)
 	defer cancel()
@@ -189,10 +199,18 @@ func (a *Adapter) createWorkload(ctx context.Context, command provisioner.Create
 		}
 		return provisioner.CreateWorkloadResult{}, a.failAfterNamespace(cluster.Client, createdNamespace, "RESOURCE_APPLY_FAILED", err)
 	}
+	if resources.ExclusiveNetworkPolicies {
+		if err := verifyExclusiveNetworkPolicies(ctx, cluster.Client, resources); err != nil {
+			return provisioner.CreateWorkloadResult{}, a.failAfterNamespace(cluster.Client, createdNamespace, "RESOURCE_APPLY_FAILED", err)
+		}
+	}
 	endpoints := append([]provisioner.WorkloadEndpoint(nil), resources.Endpoints...)
 	serviceURL := resources.ServiceURL
 	if cluster.Config.ExposureMode == ExposureModeNodePort {
 		endpoints, err = BuildNodePortEndpoints(cluster.Config.PublicGateway, command.Policy.EndpointProtocol, applied.Services)
+		if err == nil {
+			endpoints, err = applyEndpointProtocols(endpoints, command.Containers)
+		}
 		if err != nil {
 			return provisioner.CreateWorkloadResult{}, a.failWithRollback(cluster.Client, observedNamespace, "RESOURCE_APPLY_FAILED", err)
 		}
@@ -305,6 +323,9 @@ func applyResourceSet(ctx context.Context, client kubernetes.Interface, resource
 			return appliedResourceSet{}, err
 		}
 	}
+	if err := verifyExclusiveNetworkPolicies(ctx, client, resources); err != nil {
+		return appliedResourceSet{}, err
+	}
 	applied := appliedResourceSet{
 		Deployments: make([]*appsv1.Deployment, 0, len(resources.Deployments)),
 		Services:    make([]*corev1.Service, 0, len(resources.Services)),
@@ -329,6 +350,36 @@ func applyResourceSet(ctx context.Context, client kubernetes.Interface, resource
 		}
 	}
 	return applied, nil
+}
+
+// NetworkPolicies are additive. Any policy outside this operator snapshot,
+// especially an old allow-instance-internal, can broaden the graph.
+func verifyExclusiveNetworkPolicies(ctx context.Context, client kubernetes.Interface, resources ResourceSet) error {
+	if !resources.ExclusiveNetworkPolicies {
+		return nil
+	}
+	list, err := client.NetworkingV1().NetworkPolicies(resources.Namespace.Name).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return applyError(err)
+	}
+	expected := make(map[string]struct{}, len(resources.NetworkPolicies))
+	for _, policy := range resources.NetworkPolicies {
+		expected[policy.Name] = struct{}{}
+	}
+	if len(list.Items) != len(expected) {
+		return newRuntimeError("RESOURCE_APPLY_FAILED", false, errors.New("unexpected or missing namespace NetworkPolicy"))
+	}
+	for _, policy := range list.Items {
+		if _, found := expected[policy.Name]; !found {
+			return newRuntimeError("RESOURCE_APPLY_FAILED", false, errors.New("unexpected namespace NetworkPolicy"))
+		}
+		for _, desired := range resources.NetworkPolicies {
+			if desired.Name == policy.Name && (!approvedSemanticMetadata(&policy, desired, false) || !apiequality.Semantic.DeepEqual(policy.Spec, desired.Spec)) {
+				return newRuntimeError("RESOURCE_APPLY_FAILED", false, errors.New("namespace NetworkPolicy changed after apply"))
+			}
+		}
+	}
+	return nil
 }
 
 func preflightResourceSet(ctx context.Context, client kubernetes.Interface, resources ResourceSet) error {

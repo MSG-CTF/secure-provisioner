@@ -173,6 +173,7 @@ func sameCreateCommand(first, second provisioner.CreateWorkloadCommand) bool {
 func copyPolicyRequest(request isolation.Request) isolation.Request {
 	copied := request
 	copied.Containers = copyContainerRequirements(request.Containers)
+	copied.WorkloadNetwork = isolation.CloneWorkloadNetwork(request.WorkloadNetwork)
 	copied.InternalConnections = append([]isolation.InternalConnection(nil), request.InternalConnections...)
 	return copied
 }
@@ -180,6 +181,7 @@ func copyPolicyRequest(request isolation.Request) isolation.Request {
 func copyResolvedPolicy(policy isolation.ResolvedPolicy) isolation.ResolvedPolicy {
 	copied := policy
 	copied.Containers = copyContainerRequirements(policy.Containers)
+	copied.WorkloadNetwork = isolation.CloneWorkloadNetwork(policy.WorkloadNetwork)
 	copied.InternalConnections = append([]isolation.InternalConnection(nil), policy.InternalConnections...)
 	return copied
 }

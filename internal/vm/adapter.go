@@ -145,6 +145,14 @@ func (r *Router) Apply(req *httpapi.CreateWorkloadRequest) error {
 		if ok {
 			return errors.New("VM target requires VM type")
 		}
+		if r.RequiresVMImage(req.Workload.Image) {
+			return errors.New("image requires a dedicated VM target")
+		}
+		for _, c := range req.Workload.Containers {
+			if r.RequiresVMImage(c.Image) {
+				return errors.New("image requires a dedicated VM target")
+			}
+		}
 		return nil
 	}
 	if !ok || req.IsolationProfile != "WEB" || req.Workload.ResourceLimits != t.Limits || len(req.Workload.Containers) != len(t.Containers) {
@@ -169,6 +177,23 @@ func (r *Router) Apply(req *httpapi.CreateWorkloadRequest) error {
 	}
 	req.VMProfile = t.Profile
 	return nil
+}
+
+// RequiresVMImage reserves every repository in the trusted VM catalog, including
+// future digests. It never treats an image-name prefix as a repository match.
+func (r *Router) RequiresVMImage(image string) bool {
+	if r == nil || image == "" {
+		return false
+	}
+	repository := provisioner.ImageRepository(image)
+	for _, t := range r.targets {
+		for _, c := range t.Containers {
+			if provisioner.ImageRepository(c.Image) == repository {
+				return true
+			}
+		}
+	}
+	return false
 }
 func (r *Router) Resolve(req isolation.Request) (isolation.ResolvedPolicy, error) {
 	if req.VMProfile == "" {

@@ -1,0 +1,147 @@
+{
+  "contract_version": "CHALLENGE_NETWORK_READINESS_V1",
+  "challenge_id": "koth-card-battle-arena",
+  "stage": "candidate",
+  "enabled": false,
+  "status": "blocked_pending_operator_inputs",
+  "approval": null,
+  "artifact_role": "readiness_contract_not_runtime_catalog",
+  "source": {
+    "repository": "MSG-CTF/2026_MSG_CTF",
+    "revision": "84742c511bb126a5e94d9d21c85ddf9b0611b923",
+    "container_manifest": "koth-card-battle-arena/info.yaml"
+  },
+  "published_candidate": {
+    "status": "published_unapproved_candidate",
+    "discovery_scope": "latest_available_publish_bundle_in_downloaded_index",
+    "artifact_id": 12186011245,
+    "artifact_name": "koth-card-battle-arena-39250207559-1-062b38da0bfe42c59735b794e5a9d847-publish-bundle",
+    "artifact_created_at": "2026-10-19T12:21:03Z",
+    "artifact_url": "https://github.com/MSG-CTF/2026_MSG_CTF/actions/runs/39250207559/artifacts/12186011245",
+    "run_id": 39250207559,
+    "run_url": "https://github.com/MSG-CTF/2026_MSG_CTF/actions/runs/39250207559",
+    "workflow_head_sha": "7e852818f66755a8d858c973189098ceb00b300d",
+    "source_sha": "7e852818f66755a8d858c973189098ceb00b300d",
+    "source_ref": "refs/heads/main",
+    "artifact_revision": 552,
+    "registry_revision": 552,
+    "images": [
+      {
+        "container": "service",
+        "image": "ghcr.io/msg-ctf/challenges/koth-card-battle-arena/service@sha256:9ea6c06d7817752b36e97667002e411030a860803f96c2b1fef5dabf738e0791"
+      }
+    ],
+    "metadata_validation": {
+      "schema_version": "2.0",
+      "runtime_type": "KUBERNETES",
+      "architecture": "AMD64",
+      "isolation_profile": "WEB",
+      "registry_payload_identical": true,
+      "workflow_head_matches_source_sha": true,
+      "container_names_ports_and_exposure_match": true,
+      "resource_profile_matches": true,
+      "evidence_published_images_match": true,
+      "scan_result_reported": "PASS",
+      "execution_policy_fields_present": false,
+      "image_configuration_or_signature_verified": false,
+      "scope_note": "Downloaded metadata supplies image identities and ports, not execution approval. Evidence source_digest is not treated as the final published_image digest; its relation is not independently assessed here."
+    },
+    "source_comparison": {
+      "contract_baseline_sha": "84742c511bb126a5e94d9d21c85ddf9b0611b923",
+      "published_source_sha": "7e852818f66755a8d858c973189098ceb00b300d",
+      "scope": "koth-card-battle-arena/",
+      "status": "no_scoped_source_drift",
+      "changed_paths": [],
+      "scope_note": "Scoped git diff compares the challenge tree only. The candidate still declares its original source SHA; this does not claim a build at the newer baseline or verify shared build infrastructure, signatures, image configuration or reproducibility."
+    }
+  },
+  "network_required_repositories": [
+    "ghcr.io/msg-ctf/challenges/koth-card-battle-arena/service"
+  ],
+  "operator_network_candidate_status": "incomplete_must_not_activate",
+  "operator_network_candidate": {
+    "id": "koth-card-battle-arena-candidate-v1",
+    "mode": "EXPLICIT_TCP_V1",
+    "isolation_profile": "WEB",
+    "containers": [
+      {
+        "name": "service",
+        "image": "ghcr.io/msg-ctf/challenges/koth-card-battle-arena/service@sha256:9ea6c06d7817752b36e97667002e411030a860803f96c2b1fef5dabf738e0791",
+        "ports": [
+          8080,
+          9090
+        ]
+      }
+    ],
+    "allow": []
+  },
+  "containers": [
+    {"name": "service", "source_component": "service", "ports": [8080, 9090], "exposed_ports": [8080, 9090], "published_image_ref": "ghcr.io/msg-ctf/challenges/koth-card-battle-arena/service@sha256:9ea6c06d7817752b36e97667002e411030a860803f96c2b1fef5dabf738e0791", "approved_image_digest": null}
+  ],
+  "capacity_observation": {
+    "checked_at_utc": "2026-10-23T06:25:35.419246+00:00",
+    "evidence_workspace_relative": ".scratch/network-solve-audit-20261023/test-node-capacity.json",
+    "status": "necessary_bounds_fit_both_targets_actual_schedulability_unverified",
+    "targets": [
+      {
+        "target_id": "gcp-msg-runtime-k3s",
+        "node": "msg-runtime-k3s",
+        "declared_profile_within_allocatable_cpu_memory_storage": true
+      },
+      {
+        "target_id": "e058d71c-24a6-4109-b025-750aca85077a",
+        "node": "msg-test-1",
+        "declared_profile_within_allocatable_cpu_memory_storage": true
+      }
+    ],
+    "separate_target_capacities_must_not_be_summed": true,
+    "scope_note": "Necessary allocatable bounds only; current requests, placement, runtime overhead, execution compatibility and live readiness are not proven."
+  },
+  "declared_resource_profile": {"cpu_millicores": 500, "memory_mib": 512, "ephemeral_storage_mib": 1024},
+  "author_defined_contract": {
+    "required_directed_tcp_edges": [],
+    "ingress": [
+      {"to": "service", "port": 8080, "purpose": "participant_UI_API_and_authenticated_platform_score_collection"},
+      {"to": "service", "port": 9090, "purpose": "minimal_healthz_for_platform_or_Kubernetes_healthchecks"}
+    ],
+    "external_calls": [{"from": "service", "destination_id": "platform-team-verification", "method": "POST", "url_config": "TEAM_TOKEN_VERIFY_URL"}],
+    "production_url_requirement": "HTTPS",
+    "evidence_ids": ["info-containers", "admin-ports", "platform-client", "production-config"]
+  },
+  "candidate_runtime_mapping": {
+    "mode": "EXPLICIT_TCP_V1",
+    "allow": [],
+    "egress_baseline": "NONE_except_reviewed_exact_host_TCP",
+    "destination_inputs": [
+      {"id": "platform-team-verification", "from": "service", "configuration_keys": ["TEAM_TOKEN_VERIFY_URL"], "host_addresses": [], "tcp_ports": [], "port_rule": "explicit_URL_port_or_HTTPS_default", "status": "operator_input_required"}
+    ],
+    "inferred_boundary": "Deny other outbound destinations after the required platform endpoint is supplied; this is the platform candidate restriction, not an egress ACL declared by local Compose.",
+    "platform_egress_configured": false,
+    "normal_production_operation_without_platform_egress": "blocked_by_missing_required_platform_calls",
+    "ready_for_activation": false
+  },
+  "operator_inputs": [
+    {"id": "approved-image", "owner": "release_operator", "required": true, "value_status": "published_candidate_found_approval_pending", "description": "Published immutable service candidate is recorded; image configuration, source provenance and matching enabled execution policy still require approval."},
+    {"id": "platform-destination", "owner": "platform_API_operator", "required": true, "value_status": "missing", "description": "Actual verification URL, hostname, complete exact host-address set, TCP port and address-drift procedure."},
+    {"id": "backend-secret-bindings", "owner": "Backend_release_operator", "required": true, "value_status": "missing", "description": "Current approved release Secret references, session/platform/score authentication key names and challenge UUID; no secret bytes in this contract."},
+    {"id": "persistent-data", "owner": "platform_operator", "required": true, "value_status": "missing", "description": "Writable persistent SQLite data directory and recovery procedure."},
+    {"id": "health-ingress-consumers", "owner": "platform_operator", "required": true, "value_status": "missing", "description": "Record how the info.yaml exposed 9090 health port is consumed. Local Compose publishes it on host loopback; do not describe that local binding as the production ingress policy."},
+    {"id": "target-capacity", "owner": "platform_capacity_operator", "required": true, "value_status": "necessary_bounds_fit_both_targets_actual_schedulability_unverified", "description": "The declared profile fits necessary CPU/memory/storage allocatable bounds of both observed targets. Confirm current free schedulable resources, placement, requests, runtime overhead and storage before activation.", "evidence_workspace_relative": ".scratch/network-solve-audit-20261023/test-node-capacity.json"}
+  ],
+  "activation_requirements": [
+    "Confirm current free schedulable resources and placement; fitting observed allocatable bounds alone does not establish deployment readiness.",
+    "Run with DEV_MODE disabled; validate real accepted and rejected platform authentication and score collection.",
+    "Approve UID/GID 10001, read-only root, writable data volume, bounded tmpfs and resource settings against the actual image.",
+    "Convert supplied destination addresses to reviewed exact /32 or /128 TCP rules in a separate operator-owned catalog; do not permit all Internet egress.",
+    "Verify allowed platform calls, denied other destinations, DNS, both declared ingress ports and persistent state after restart.",
+    "Keep this readiness document inactive; catalog activation requires approved images, valid Secret references and acceptance evidence."
+  ],
+  "evidence": [
+    {"id": "info-containers", "path": "koth-card-battle-arena/info.yaml", "lines": [16, 33]},
+    {"id": "admin-ports", "path": "koth-card-battle-arena/prob/for_organizer/admin.md", "lines": [54, 55]},
+    {"id": "local-compose", "path": "koth-card-battle-arena/prob/for_organizer/docker-compose.yml", "lines": [1, 29]},
+    {"id": "image-user", "path": "koth-card-battle-arena/prob/for_organizer/service/Dockerfile", "lines": [22, 23]},
+    {"id": "platform-client", "path": "koth-card-battle-arena/prob/for_organizer/service/platform_client.py", "lines": [23, 48]},
+    {"id": "production-config", "path": "koth-card-battle-arena/prob/for_organizer/service/config.py", "lines": [82, 148]}
+  ]
+}

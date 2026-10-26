@@ -43,10 +43,9 @@ raw Kubernetes/보안 설정과 제거된 과거 profile 참조 필드는 API �
 | `PROVISIONER_BACKEND_SECRET_URL` | 없음 | 비밀값 조회용 Backend origin, 운영 HTTPS 필수 |
 | `PROVISIONER_BACKEND_SECRET_TOKEN` | 없음 | Backend의 Runtime worker 전용 조회 토큰 |
 | `PROVISIONER_ADDR` | `127.0.0.1:8080` | HTTP 수신 주소 |
-| `PROVISIONER_WORKER_CONCURRENCY` | `4` | Operation Worker 수 |
-| `PROVISIONER_MAX_ATTEMPTS` | `3` | Operation 최대 시도 횟수 |
+| `PROVISIONER_MAX_ATTEMPTS` | `4` | Operation 최대 시도 횟수 |
 | `PROVISIONER_READY_TIMEOUT` | `2m` | 생성 후 Ready 확인 제한 시간 |
-| `PROVISIONER_POLL_INTERVAL` | `1s` | K3s 상태 확인 간격 |
+| `PROVISIONER_POLL_INTERVAL` | Worker `200ms`, K3s `1s` | 설정하면 Worker claim 대기와 K3s Ready 확인 간격 모두 변경 |
 | `PROVISIONER_ROLLBACK_TIMEOUT` | `30s` | 생성 실패 rollback 제한 시간 |
 | `PROVISIONER_DELETE_TIMEOUT` | `1m` | Namespace 삭제 완료 제한 시간 |
 | `PROVISIONER_WORKER_SHUTDOWN_TIMEOUT` | rollback + `10s` | 종료 시 Worker cleanup 대기 시간 |
@@ -60,6 +59,12 @@ raw Kubernetes/보안 설정과 제거된 과거 profile 참조 필드는 API �
 | `PROVISIONER_SERVICE_TOKEN_FILE` | 없음 | 현재 token을 담은 절대 경로 Secret 파일 |
 | `PROVISIONER_PREVIOUS_SERVICE_TOKEN` | 없음 | 교체 기간에 허용하는 이전 token; 선택 사항 |
 | `PROVISIONER_PREVIOUS_SERVICE_TOKEN_FILE` | 없음 | 이전 token을 담은 절대 경로 Secret 파일 |
+
+Worker 수는 `PROVISIONER_WORKERS`로 조절합니다. 과거 문서의
+`PROVISIONER_WORKER_CONCURRENCY`는 현재 설정 코드에서 읽지 않습니다.
+기본값 10은 동시 실행 슬롯 수이며, 비동기 요청 접수의 최대 인원 수가 아닙니다.
+[150건 동시 요청 실험](docs/testing/worker-capacity-150.md)은 재현 방법과
+Kubernetes 실행을 포함하지 않은 측정 범위를 설명합니다.
 
 현재 token은 필수이며 Base64URL 문자로 구성된 43~128자여야 합니다. 운영에서는
 값을 직접 환경 변수에 넣기보다 절대 경로의 Secret 파일을 사용합니다. 현재·이전

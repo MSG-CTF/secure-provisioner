@@ -1,0 +1,256 @@
+{
+  "contract_version": "CHALLENGE_NETWORK_READINESS_V1",
+  "challenge_id": "web-afterimage",
+  "stage": "candidate",
+  "enabled": false,
+  "status": "blocked_pending_operator_inputs",
+  "approval": null,
+  "artifact_role": "readiness_contract_not_runtime_catalog",
+  "source": {
+    "repository": "MSG-CTF/2026_MSG_CTF",
+    "revision": "84742c511bb126a5e94d9d21c85ddf9b0611b923",
+    "container_manifest": "web-afterimage/info.yaml"
+  },
+  "published_candidate": {
+    "status": "published_unapproved_candidate",
+    "discovery_scope": "latest_available_publish_bundle_in_downloaded_index",
+    "artifact_id": 12241266703,
+    "artifact_name": "web-afterimage-39370165254-1-475b5cc9400541f4b5347b75891ffca1-publish-bundle",
+    "artifact_created_at": "2026-10-20T04:40:47Z",
+    "artifact_url": "https://github.com/MSG-CTF/2026_MSG_CTF/actions/runs/39370165254/artifacts/12241266703",
+    "run_id": 39370165254,
+    "run_url": "https://github.com/MSG-CTF/2026_MSG_CTF/actions/runs/39370165254",
+    "workflow_head_sha": "e2199fdf0ce1f05652518246001af8cd3e4c8490",
+    "source_sha": "e2199fdf0ce1f05652518246001af8cd3e4c8490",
+    "source_ref": "refs/heads/main",
+    "artifact_revision": 578,
+    "registry_revision": 578,
+    "images": [
+      {
+        "container": "portal",
+        "image": "ghcr.io/msg-ctf/challenges/web-afterimage/portal@sha256:d6afb41a588fea8218f8889e1c99e666ab33b65f5f46446cd7a57305af595674"
+      },
+      {
+        "container": "core",
+        "image": "ghcr.io/msg-ctf/challenges/web-afterimage/core@sha256:94783ad7da386efe96ecb1191883373ea61e8495c02fba47da09f6b7e3724026"
+      },
+      {
+        "container": "bot",
+        "image": "ghcr.io/msg-ctf/challenges/web-afterimage/bot@sha256:23df4e201846c3f12f03a10c36b9ff8a23ac54a0732dfd209f238bf053234f5b"
+      },
+      {
+        "container": "exporter",
+        "image": "ghcr.io/msg-ctf/challenges/web-afterimage/exporter@sha256:02da90eb73db1fbecad291655086410615ddb8db723447c73f845f6828f4c098"
+      },
+      {
+        "container": "inventory-metadata",
+        "image": "ghcr.io/msg-ctf/challenges/web-afterimage/inventory-metadata@sha256:dc452c26c081bc351964013e2246061a57c288a3fd5497065dcfecee5e3a5eb1"
+      },
+      {
+        "container": "indexer",
+        "image": "ghcr.io/msg-ctf/challenges/web-afterimage/indexer@sha256:2b22f2d3617c7b1286382d2771e60a52ee1d3e5a0aad71c82bf09c2d7defcd1e"
+      },
+      {
+        "container": "case-vault",
+        "image": "ghcr.io/msg-ctf/challenges/web-afterimage/case-vault@sha256:3b083576ed6e04877b0707797d307a9d7f22c4bbb9268744ab4f935a4f84df28"
+      }
+    ],
+    "metadata_validation": {
+      "schema_version": "2.0",
+      "runtime_type": "KUBERNETES",
+      "architecture": "AMD64",
+      "isolation_profile": "WEB",
+      "registry_payload_identical": true,
+      "workflow_head_matches_source_sha": true,
+      "container_names_ports_and_exposure_match": true,
+      "resource_profile_matches": true,
+      "evidence_published_images_match": true,
+      "scan_result_reported": "PASS",
+      "execution_policy_fields_present": false,
+      "image_configuration_or_signature_verified": false,
+      "scope_note": "Downloaded metadata supplies image identities and ports, not execution approval. Evidence source_digest is not treated as the final published_image digest; its relation is not independently assessed here."
+    },
+    "source_comparison": {
+      "contract_baseline_sha": "84742c511bb126a5e94d9d21c85ddf9b0611b923",
+      "published_source_sha": "e2199fdf0ce1f05652518246001af8cd3e4c8490",
+      "scope": "web-afterimage/",
+      "status": "no_scoped_source_drift",
+      "changed_paths": [],
+      "scope_note": "Scoped git diff compares the challenge tree only. The candidate still declares its original source SHA; this does not claim a build at the newer baseline or verify shared build infrastructure, signatures, image configuration or reproducibility."
+    }
+  },
+  "network_required_repositories": [
+    "ghcr.io/msg-ctf/challenges/web-afterimage/portal",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/core",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/bot",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/exporter",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/inventory-metadata",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/indexer",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/case-vault"
+  ],
+  "operator_network_candidate_status": "incomplete_must_not_activate",
+  "operator_network_candidate": {
+    "id": "web-afterimage-candidate-v1",
+    "mode": "PEER_GROUPS_V1",
+    "isolation_profile": "WEB",
+    "containers": [
+      {
+        "name": "portal",
+        "image": "ghcr.io/msg-ctf/challenges/web-afterimage/portal@sha256:d6afb41a588fea8218f8889e1c99e666ab33b65f5f46446cd7a57305af595674",
+        "ports": [
+          8080
+        ]
+      },
+      {
+        "name": "core",
+        "image": "ghcr.io/msg-ctf/challenges/web-afterimage/core@sha256:94783ad7da386efe96ecb1191883373ea61e8495c02fba47da09f6b7e3724026",
+        "ports": [
+          3000
+        ]
+      },
+      {
+        "name": "bot",
+        "image": "ghcr.io/msg-ctf/challenges/web-afterimage/bot@sha256:23df4e201846c3f12f03a10c36b9ff8a23ac54a0732dfd209f238bf053234f5b",
+        "ports": [
+          4000
+        ]
+      },
+      {
+        "name": "exporter",
+        "image": "ghcr.io/msg-ctf/challenges/web-afterimage/exporter@sha256:02da90eb73db1fbecad291655086410615ddb8db723447c73f845f6828f4c098",
+        "ports": [
+          4100
+        ]
+      },
+      {
+        "name": "inventory-metadata",
+        "image": "ghcr.io/msg-ctf/challenges/web-afterimage/inventory-metadata@sha256:dc452c26c081bc351964013e2246061a57c288a3fd5497065dcfecee5e3a5eb1",
+        "ports": [
+          4200
+        ]
+      },
+      {
+        "name": "indexer",
+        "image": "ghcr.io/msg-ctf/challenges/web-afterimage/indexer@sha256:2b22f2d3617c7b1286382d2771e60a52ee1d3e5a0aad71c82bf09c2d7defcd1e",
+        "ports": [
+          4300
+        ]
+      },
+      {
+        "name": "case-vault",
+        "image": "ghcr.io/msg-ctf/challenges/web-afterimage/case-vault@sha256:3b083576ed6e04877b0707797d307a9d7f22c4bbb9268744ab4f935a4f84df28",
+        "ports": [
+          4400
+        ]
+      }
+    ],
+    "peer_groups": [
+      {
+        "name": "appnet",
+        "members": [
+          "portal",
+          "core",
+          "bot"
+        ]
+      },
+      {
+        "name": "exportnet",
+        "members": [
+          "portal",
+          "exporter",
+          "inventory-metadata"
+        ]
+      },
+      {
+        "name": "cartridgenet",
+        "members": [
+          "portal",
+          "indexer"
+        ]
+      },
+      {
+        "name": "vaultnet",
+        "members": [
+          "core",
+          "case-vault"
+        ]
+      }
+    ]
+  },
+  "containers": [
+    {"name": "portal", "source_component": "portal", "ports": [8080], "exposed_ports": [8080], "published_image_ref": "ghcr.io/msg-ctf/challenges/web-afterimage/portal@sha256:d6afb41a588fea8218f8889e1c99e666ab33b65f5f46446cd7a57305af595674", "approved_image_digest": null},
+    {"name": "core", "source_component": "core", "ports": [3000], "exposed_ports": [], "published_image_ref": "ghcr.io/msg-ctf/challenges/web-afterimage/core@sha256:94783ad7da386efe96ecb1191883373ea61e8495c02fba47da09f6b7e3724026", "approved_image_digest": null},
+    {"name": "bot", "source_component": "bot", "ports": [4000], "exposed_ports": [], "published_image_ref": "ghcr.io/msg-ctf/challenges/web-afterimage/bot@sha256:23df4e201846c3f12f03a10c36b9ff8a23ac54a0732dfd209f238bf053234f5b", "approved_image_digest": null},
+    {"name": "exporter", "source_component": "exporter", "ports": [4100], "exposed_ports": [], "published_image_ref": "ghcr.io/msg-ctf/challenges/web-afterimage/exporter@sha256:02da90eb73db1fbecad291655086410615ddb8db723447c73f845f6828f4c098", "approved_image_digest": null},
+    {"name": "inventory-metadata", "source_component": "inventory-metadata", "ports": [4200], "exposed_ports": [], "published_image_ref": "ghcr.io/msg-ctf/challenges/web-afterimage/inventory-metadata@sha256:dc452c26c081bc351964013e2246061a57c288a3fd5497065dcfecee5e3a5eb1", "approved_image_digest": null},
+    {"name": "indexer", "source_component": "indexer", "ports": [4300], "exposed_ports": [], "published_image_ref": "ghcr.io/msg-ctf/challenges/web-afterimage/indexer@sha256:2b22f2d3617c7b1286382d2771e60a52ee1d3e5a0aad71c82bf09c2d7defcd1e", "approved_image_digest": null},
+    {"name": "case-vault", "source_component": "case-vault", "ports": [4400], "exposed_ports": [], "published_image_ref": "ghcr.io/msg-ctf/challenges/web-afterimage/case-vault@sha256:3b083576ed6e04877b0707797d307a9d7f22c4bbb9268744ab4f935a4f84df28", "approved_image_digest": null}
+  ],
+  "capacity_observation": {
+    "checked_at_utc": "2026-10-23T06:25:35.419246+00:00",
+    "evidence_workspace_relative": ".scratch/network-solve-audit-20261023/test-node-capacity.json",
+    "status": "necessary_bounds_fit_second_target_only_actual_schedulability_unverified",
+    "targets": [
+      {
+        "target_id": "gcp-msg-runtime-k3s",
+        "node": "msg-runtime-k3s",
+        "declared_profile_within_allocatable_cpu_memory_storage": false
+      },
+      {
+        "target_id": "e058d71c-24a6-4109-b025-750aca85077a",
+        "node": "msg-test-1",
+        "declared_profile_within_allocatable_cpu_memory_storage": true
+      }
+    ],
+    "separate_target_capacities_must_not_be_summed": true,
+    "scope_note": "Necessary allocatable bounds only; current requests, placement, runtime overhead, execution compatibility and live readiness are not proven."
+  },
+  "declared_resource_profile": {"cpu_millicores": 2000, "memory_mib": 4000, "ephemeral_storage_mib": 2048},
+  "author_defined_contract": {
+    "basis": "official_organizer_compose_network_membership",
+    "peer_groups": [
+      {"name": "appnet", "members": ["portal", "core", "bot"]},
+      {"name": "exportnet", "members": ["portal", "exporter", "inventory-metadata"]},
+      {"name": "cartridgenet", "members": ["portal", "indexer"]},
+      {"name": "vaultnet", "members": ["core", "case-vault"]}
+    ],
+    "shared_peer_semantics": "bidirectional_all_protocols_and_ports_between_distinct_members_of_any_shared_group",
+    "forbidden_direct_pairs_rule": "distinct_containers_with_no_shared_group",
+    "required_directed_tcp_edges": null,
+    "tcp_edge_note": "Compose expose declarations are listener metadata, not port ACLs or proof of every application call.",
+    "external_networks": [{"name": "edge", "members": ["portal"], "internal": false}],
+    "private_networks_internal": true,
+    "evidence_ids": ["compose-memberships", "compose-networks", "info-containers"]
+  },
+  "candidate_runtime_mapping": {
+    "mode": "PEER_GROUPS_V1",
+    "peer_groups_from": "author_defined_contract.peer_groups",
+    "dns": "existing_Runtime_CoreDNS_exception",
+    "egress_baseline": "NONE",
+    "destination_inputs": [],
+    "ready_for_activation": false,
+    "source_difference_requiring_review": "Compose gives portal a non-internal edge network. Egress NONE preserves the existing platform baseline but is not exact reproduction of portal external routing. Review portal runtime needs before activation; add only reviewed exact-host TCP exceptions if necessary."
+  },
+  "operator_inputs": [
+    {"id": "approved-images", "owner": "release_operator", "required": true, "value_status": "published_candidates_found_approval_pending", "description": "Seven published candidate digests are recorded in published_candidate; verify image configuration, source provenance, per-image UID/ports/writes and release approval before activation."},
+    {"id": "backend-secret-bindings", "owner": "Backend_release_operator", "required": true, "value_status": "missing", "description": "Current valid release references and shared-secret injection contracts; record references and key names only."},
+    {"id": "portal-egress-decision", "owner": "challenge_author_and_platform_operator", "required": true, "value_status": "missing", "description": "Confirm normal operation under egress NONE, or provide required destination host addresses and TCP ports. No external destination is guessed here."},
+    {"id": "execution-compatibility", "owner": "platform_operator", "required": true, "value_status": "missing", "description": "Review browser shared memory, indexer SETUID/SETGID and bounded writable tmpfs, case-vault restrictions, and actual image users against the execution profile."},
+    {"id": "target-capacity", "owner": "platform_capacity_operator", "required": true, "value_status": "necessary_bounds_fit_second_target_only_actual_schedulability_unverified", "description": "The declared 2000m CPU / 4000MiB profile exceeds the main target but fits necessary allocatable bounds of the separate 4000m CPU / 15984MiB test target. Confirm actual schedulability and execution approval; no deployment is authorized by this capacity check.", "evidence_workspace_relative": ".scratch/network-solve-audit-20261023/test-node-capacity.json"}
+  ],
+  "activation_requirements": [
+    "Use an approved target meeting the declared resource profile; observed main-target capacity is insufficient and only the separate second target meets necessary allocatable bounds.",
+    "Approve every image, execution setting and current Backend Secret reference before creating a separate Runtime catalog entry.",
+    "Use the complete seven-container identity set and PEER_GROUPS_V1 memberships; do not replace groups with the older inferred eight-edge example.",
+    "Add repository requirements alongside the approved graph so digest rotation cannot fall back to instance full mesh.",
+    "Resolve and record the portal external-routing difference explicitly.",
+    "Verify allowed peers, every nonmember pair, DNS, public portal behavior, denied external traffic, and Pod-IP plus NodePort negative paths in disposable namespaces.",
+    "Verify browser flow, image execution, readiness, Secret injection and author acceptance; preserve approved operation snapshots during replay."
+  ],
+  "evidence": [
+    {"id": "info-containers", "path": "web-afterimage/info.yaml", "lines": [11, 46]},
+    {"id": "compose-memberships", "path": "web-afterimage/prob/for_organizer/docker-compose.yml", "lines": [2, 120]},
+    {"id": "compose-networks", "path": "web-afterimage/prob/for_organizer/docker-compose.yml", "lines": [137, 146]},
+    {"id": "compose-execution", "path": "web-afterimage/prob/for_organizer/docker-compose.yml", "lines": [41, 135]}
+  ]
+}

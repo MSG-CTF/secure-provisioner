@@ -1,0 +1,177 @@
+{
+  "contract_version": "CHALLENGE_NETWORK_READINESS_V1",
+  "challenge_id": "koth-dependency-hell",
+  "stage": "candidate",
+  "enabled": false,
+  "status": "blocked_pending_operator_inputs",
+  "approval": null,
+  "artifact_role": "readiness_contract_not_runtime_catalog",
+  "source": {
+    "repository": "MSG-CTF/2026_MSG_CTF",
+    "revision": "84742c511bb126a5e94d9d21c85ddf9b0611b923",
+    "container_manifest": "koth-dependency-hell/info.yaml"
+  },
+  "published_candidate": {
+    "status": "published_unapproved_candidate",
+    "discovery_scope": "latest_available_publish_bundle_in_downloaded_index",
+    "artifact_id": 12185492586,
+    "artifact_name": "koth-dependency-hell-39250207559-1-30454cb20046422a94b7397687d5d2b8-publish-bundle",
+    "artifact_created_at": "2026-10-19T12:20:44Z",
+    "artifact_url": "https://github.com/MSG-CTF/2026_MSG_CTF/actions/runs/39250207559/artifacts/12185492586",
+    "run_id": 39250207559,
+    "run_url": "https://github.com/MSG-CTF/2026_MSG_CTF/actions/runs/39250207559",
+    "workflow_head_sha": "7e852818f66755a8d858c973189098ceb00b300d",
+    "source_sha": "7e852818f66755a8d858c973189098ceb00b300d",
+    "source_ref": "refs/heads/main",
+    "artifact_revision": 552,
+    "registry_revision": 552,
+    "images": [
+      {
+        "container": "service",
+        "image": "ghcr.io/msg-ctf/challenges/koth-dependency-hell/service@sha256:c86e1f05fa0c7967a7928cbe0bc0d6fe4c890c2bf44767cd30bcef316b8256b4"
+      },
+      {
+        "container": "backend",
+        "image": "ghcr.io/msg-ctf/challenges/koth-dependency-hell/backend@sha256:6a48fb1ab651931be34601bf8870e85c562d106ee76ff58b3aa2e195de24137a"
+      },
+      {
+        "container": "score-service",
+        "image": "ghcr.io/msg-ctf/challenges/koth-dependency-hell/score-service@sha256:630d071c01ef0bdbd5086fd81351d11586ee695899d656078afdcf25f4b05e9a"
+      },
+      {
+        "container": "judge-coordinator",
+        "image": "ghcr.io/msg-ctf/challenges/koth-dependency-hell/judge-coordinator@sha256:600d49f2139816346331703490759eadd1fd4e1274d82e18112bd1213ce41ab8"
+      }
+    ],
+    "metadata_validation": {
+      "schema_version": "2.0",
+      "runtime_type": "KUBERNETES",
+      "architecture": "AMD64",
+      "isolation_profile": "WEB",
+      "registry_payload_identical": true,
+      "workflow_head_matches_source_sha": true,
+      "container_names_ports_and_exposure_match": true,
+      "resource_profile_matches": true,
+      "evidence_published_images_match": true,
+      "scan_result_reported": "PASS",
+      "execution_policy_fields_present": false,
+      "image_configuration_or_signature_verified": false,
+      "scope_note": "Downloaded metadata supplies image identities and ports, not execution approval. Evidence source_digest is not treated as the final published_image digest; its relation is not independently assessed here."
+    },
+    "source_comparison": {
+      "contract_baseline_sha": "84742c511bb126a5e94d9d21c85ddf9b0611b923",
+      "published_source_sha": "7e852818f66755a8d858c973189098ceb00b300d",
+      "scope": "koth-dependency-hell/",
+      "status": "no_scoped_source_drift",
+      "changed_paths": [],
+      "scope_note": "Scoped git diff compares the challenge tree only. The candidate still declares its original source SHA; this does not claim a build at the newer baseline or verify shared build infrastructure, signatures, image configuration or reproducibility."
+    }
+  },
+  "network_required_repositories": null,
+  "operator_network_candidate_status": "not_applicable_requires_dedicated_Kustomize",
+  "operator_network_candidate": null,
+  "containers": [
+    {"name": "service", "source_component": "frontend", "production_manifest_container": "frontend", "ports": [8080, 9090], "exposed_ports": [8080, 9090], "published_image_ref": "ghcr.io/msg-ctf/challenges/koth-dependency-hell/service@sha256:c86e1f05fa0c7967a7928cbe0bc0d6fe4c890c2bf44767cd30bcef316b8256b4", "approved_image_digest": null},
+    {"name": "backend", "source_component": "service", "production_manifest_container": "backend", "ports": [8081], "exposed_ports": [], "published_image_ref": "ghcr.io/msg-ctf/challenges/koth-dependency-hell/backend@sha256:6a48fb1ab651931be34601bf8870e85c562d106ee76ff58b3aa2e195de24137a", "approved_image_digest": null},
+    {"name": "score-service", "source_component": "score-service", "production_manifest_container": "score-service", "ports": [8082], "exposed_ports": [], "published_image_ref": "ghcr.io/msg-ctf/challenges/koth-dependency-hell/score-service@sha256:630d071c01ef0bdbd5086fd81351d11586ee695899d656078afdcf25f4b05e9a", "approved_image_digest": null},
+    {"name": "judge-coordinator", "source_component": "judge-coordinator", "production_manifest_container": "coordinator", "ports": [8090], "exposed_ports": [], "published_image_ref": "ghcr.io/msg-ctf/challenges/koth-dependency-hell/judge-coordinator@sha256:600d49f2139816346331703490759eadd1fd4e1274d82e18112bd1213ce41ab8", "approved_image_digest": null}
+  ],
+  "capacity_observation": {
+    "checked_at_utc": "2026-10-23T06:25:35.419246+00:00",
+    "evidence_workspace_relative": ".scratch/network-solve-audit-20261023/test-node-capacity.json",
+    "status": "declared_aggregate_exceeds_each_observed_target_dedicated_architecture_review_required",
+    "targets": [
+      {
+        "target_id": "gcp-msg-runtime-k3s",
+        "node": "msg-runtime-k3s",
+        "declared_profile_within_allocatable_cpu_memory_storage": false
+      },
+      {
+        "target_id": "e058d71c-24a6-4109-b025-750aca85077a",
+        "node": "msg-test-1",
+        "declared_profile_within_allocatable_cpu_memory_storage": false
+      }
+    ],
+    "separate_target_capacities_must_not_be_summed": true,
+    "scope_note": "Necessary allocatable bounds only; current requests, placement, runtime overhead, execution compatibility and live readiness are not proven."
+  },
+  "declared_resource_profile": {"cpu_millicores": 5500, "memory_mib": 3072, "ephemeral_storage_mib": 4096},
+  "author_defined_contract": {
+    "deployment_kind": "dedicated_hostile_production_Kustomize",
+    "authoritative_entrypoint": "koth-dependency-hell/prob/for_organizer/deploy/k8s/hostile-production",
+    "runtime_info_yaml_limitation": "The public image/port/resource declaration cannot express production namespaces, PVCs, RBAC, admission, RuntimeClass or portless dynamic runner Jobs.",
+    "namespaces": [
+      {"name": "dependency-hell", "runtime_containers": ["service", "backend", "score-service"]},
+      {"name": "dependency-hell-judge-control", "runtime_containers": ["judge-coordinator"]},
+      {"name": "dependency-hell-judge-runners", "runtime_containers": [], "dynamic_workload": "one_disposable_job_runner_per_evaluation"}
+    ],
+    "default_policy": "deny_ingress_and_egress_in_all_three_namespaces",
+    "required_directed_tcp_edges": [
+      {"from": "gateway_namespace", "to": "service", "port": 8080},
+      {"from": "gateway_namespace", "to": "backend", "port": 8081},
+      {"from": "service", "to": "backend", "port": 8081},
+      {"from": "platform_namespace", "to": "score-service", "port": 8082},
+      {"from": "backend", "to": "judge-coordinator", "port": 8090},
+      {"from": "dynamic_job_runner", "to": "judge-coordinator", "port": 8090}
+    ],
+    "external_calls": [
+      {"from": "backend", "destination_id": "application-postgres", "tcp_ports": [5432]},
+      {"from": "score-service", "destination_id": "application-postgres", "tcp_ports": [5432]},
+      {"from": "backend", "destination_id": "canonical-platform-origin", "tcp_ports": [443]},
+      {"from": "score-service", "destination_id": "canonical-platform-origin", "tcp_ports": [443]},
+      {"from": "judge-coordinator", "destination_id": "coordinator-postgres", "tcp_ports": [5432]},
+      {"from": "judge-coordinator", "destination_id": "target-cluster-kubernetes-api", "tcp_ports": [443]}
+    ],
+    "DNS": {"protocols": ["TCP", "UDP"], "port": 53, "consumers": ["service", "backend", "score-service", "database_migration", "judge-coordinator", "dynamic_job_runner"]},
+    "callback_direction": "runner_pulls_artifact_and_inputs_then_posts_results_to_coordinator_8090",
+    "forbidden": [
+      "All unspecified ingress and egress, including runner ingress and runner access to DB/platform/application services/cloud metadata.",
+      "No coordinator-to-runner TCP initiation and no score-service-to-coordinator edge.",
+      "Participant network syscalls are denied additionally inside the runner sandbox."
+    ],
+    "public_routing": "Gateway HTTP 80 redirects to HTTPS 443; /api routes to backend:8081 and other routes to frontend:8080. Frontend 9090 is a health probe, not a public Gateway route.",
+    "evidence_ids": ["info-containers", "authoritative-entrypoint", "app-network-policy", "judge-network-policy", "external-egress", "gateway", "deployment-contract"]
+  },
+  "candidate_runtime_mapping": {
+    "mode": null,
+    "ordinary_Runtime_graph_generation_allowed": false,
+    "reason": "Retain the official separate application/control/runner namespaces, coordinator controller and dynamic Jobs. Do not flatten this deployment into an ordinary four-container Runtime graph or PEER_GROUPS_V1 catalog entry.",
+    "ready_for_activation": false,
+    "destination_inputs": [
+      {"id": "application-postgres", "from": ["backend", "score-service"], "configuration_keys": ["PUBLIC_DATABASE_URL", "SCORE_DATABASE_URL"], "host_addresses": [], "tcp_ports": [5432], "status": "operator_input_required"},
+      {"id": "canonical-platform-origin", "from": ["backend", "score-service"], "configuration_keys": ["TEAM_TOKEN_VERIFY_URL", "TEAM_LIST_URL"], "host_addresses": [], "tcp_ports": [443], "status": "operator_input_required"},
+      {"id": "coordinator-postgres", "from": ["judge-coordinator"], "configuration_keys": ["COORDINATOR_DATABASE_URL"], "host_addresses": [], "tcp_ports": [5432], "status": "operator_input_required"},
+      {"id": "target-cluster-kubernetes-api", "from": ["judge-coordinator"], "configuration_keys": [], "host_addresses": [], "tcp_ports": [443], "status": "operator_input_required"}
+    ],
+    "address_policy": "Replace every portable/documentation destination in the official manifests with exact operator-owned managed-service peers or an explicitly reviewed equivalent CNI FQDN policy. Do not retain placeholder peers or add broad egress."
+  },
+  "operator_inputs": [
+    {"id": "approved-architecture-and-five-images", "owner": "platform_security_and_release_operator", "required": true, "value_status": "four_static_candidates_found_runner_image_and_approvals_missing", "description": "Four static image candidates are recorded. The separate job-runner digest is absent from this public publish bundle; approve all five images, signatures/provenance, dedicated architecture and runner digest/profile binding through the official release gates."},
+    {"id": "real-destinations", "owner": "platform_DB_and_cluster_operators", "required": true, "value_status": "missing", "description": "Actual app DB, coordinator DB, canonical platform and Kubernetes API host/address sets, namespace selectors and address-drift ownership."},
+    {"id": "namespace-and-admission-contracts", "owner": "cluster_security_operator", "required": true, "value_status": "missing", "description": "Namespace labels, supported isolated RuntimeClass, trusted/untrusted node pools, exact runner Job/Pod admission, least-privilege controller RBAC, quotas and PID enforcement."},
+    {"id": "storage-and-database-predeploy", "owner": "DB_and_storage_operators", "required": true, "value_status": "missing", "description": "RWX artifact PVC, managed DB databases and separated owner/runtime/migration roles, supported migrations, protected-key readiness, CA trust and recovery."},
+    {"id": "secret-and-mtls-bindings", "owner": "Backend_release_and_platform_security_operators", "required": true, "value_status": "missing", "description": "Approved Secret references and key/certificate names for platform mTLS, coordinator mTLS, DB TLS and isolated signing/authentication functions; no secret bytes here."},
+    {"id": "gateway-and-release-evidence", "owner": "platform_gateway_operator", "required": true, "value_status": "missing", "description": "Actual hostname, GatewayClass/controller, ingress namespace labels, TLS/WAF/streaming/timeout enforcement and immutable release-test evidence."},
+    {"id": "target-capacity", "owner": "platform_capacity_operator", "required": true, "value_status": "declared_aggregate_exceeds_each_observed_target_dedicated_architecture_review_required", "description": "The declared 5500m CPU aggregate exceeds both separate single-node targets. Supply resources for the official dedicated multi-namespace architecture; do not infer ordinary four-container readiness or sum separate target capacities.", "evidence_workspace_relative": ".scratch/network-solve-audit-20261023/test-node-capacity.json"}
+  ],
+  "activation_requirements": [
+    "Approve sufficient capacity for the official dedicated coordinator/runner architecture; its 5500m aggregate exceeds each observed separate single-node target.",
+    "Use the authoritative hostile-production Kustomize entrypoint with an operator private release overlay; the Compose production file is rehearsal only.",
+    "Replace all release placeholders and satisfy the official render, supply-chain, admission, runtime, migration and gateway gates.",
+    "Preserve separate namespaces, one coordinator replica, disposable isolated runners, no runner DB/PVC/platform access, and callback direction runner-to-coordinator.",
+    "Preserve managed DB verify-full TLS, platform/coordinator mTLS and separate least-privilege roles; perform predeploy migration and protected-key assertions.",
+    "Verify normal authenticated upload/evaluation, callbacks, score collection, denied flows, restart recovery, cleanup and capacity on the actual production-compatible cluster.",
+    "Do not activate this readiness contract or use the four info.yaml container names as evidence that the complete architecture is supported by ordinary Runtime."
+  ],
+  "evidence": [
+    {"id": "info-containers", "path": "koth-dependency-hell/info.yaml", "lines": [15, 53]},
+    {"id": "authoritative-entrypoint", "path": "koth-dependency-hell/prob/for_organizer/deploy/k8s/hostile-production/kustomization.yaml", "lines": [4, 36]},
+    {"id": "app-network-policy", "path": "koth-dependency-hell/prob/for_organizer/deploy/k8s/base/networkpolicy.yaml", "lines": [1, 131]},
+    {"id": "judge-network-policy", "path": "koth-dependency-hell/prob/for_organizer/judge-coordinator/manifests/networkpolicy.yaml", "lines": [1, 120]},
+    {"id": "external-egress", "path": "koth-dependency-hell/prob/for_organizer/deploy/k8s/overlays/production/external-egress.yaml", "lines": [1, 83]},
+    {"id": "gateway", "path": "koth-dependency-hell/prob/for_organizer/deploy/k8s/overlays/production/gateway.yaml", "lines": [12, 96]},
+    {"id": "deployment-contract", "path": "koth-dependency-hell/prob/for_organizer/deploy/README.md", "lines": [26, 345]},
+    {"id": "rehearsal-only", "path": "koth-dependency-hell/prob/for_organizer/deploy/compose.production.yml", "lines": [1, 4]},
+    {"id": "callback-and-isolation", "path": "koth-dependency-hell/prob/for_organizer/judge-coordinator/README.md", "lines": [133, 260]}
+  ]
+}
