@@ -157,10 +157,15 @@ func publicResult(r Record) provisioner.CreateWorkloadResult {
 	for i := range result.Endpoints {
 		e := &result.Endpoints[i]
 		e.Hostname = r.Route.Hostname
-		e.ConnectionPort = 443
-		e.TLS = true
-		e.ServerName = r.Route.Hostname
-		e.ServiceURL = "tls://" + net.JoinHostPort(r.Route.Hostname, strconv.Itoa(443))
+		e.ConnectionPort = r.Route.Port
+		e.TLS = r.Route.TLS
+		e.ServerName = ""
+		scheme := "tcp"
+		if r.Route.TLS {
+			scheme = "tls"
+			e.ServerName = r.Route.Hostname
+		}
+		e.ServiceURL = scheme + "://" + net.JoinHostPort(r.Route.Hostname, strconv.Itoa(r.Route.Port))
 		if r.Destination.Protocol == "http" && r.Route.URL != nil {
 			e.ServiceURL = *r.Route.URL
 		}

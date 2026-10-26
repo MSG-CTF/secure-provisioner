@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"sync"
@@ -12,6 +13,49 @@ import (
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 	"github.com/MSG-CTF/secure-provisioner/internal/runtimebinding"
 )
+
+func TestAdapterRestoresAssignedTCPTransportFromJournal(t *testing.T) {
+	for _, tc := range []struct {
+		name, url, sni string
+		tls            bool
+	}{
+		{"plaintext", "tcp://abc.gate.msgctf.kr:42817", "", false},
+		{"encrypted", "tls://abc.gate.msgctf.kr:42817", "abc.gate.msgctf.kr", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			command := provisioner.CreateWorkloadCommand{InstanceID: "instance-1", TargetID: "target", RuntimeType: provisioner.RuntimeTypeKubernetes, Containers: []provisioner.WorkloadContainer{{Name: "pwn", Ports: []int{1337}, Expose: true}}}
+			record := Record{Command: command, OperationID: "op1", Phase: PhaseApplied,
+				Destination: Destination{TargetIP: "8.8.8.8", TargetPort: 31042, Protocol: "tcp"},
+				Result:      provisioner.CreateWorkloadResult{RuntimeWorkloadID: "target/ns/id", NamespaceUID: "ns-uid", Endpoints: []provisioner.WorkloadEndpoint{{ContainerName: "pwn", Port: 1337, Protocol: "TCP", ServerName: "stale.example"}}},
+				Route:       Route{InstanceID: "instance-1", Hostname: "abc.gate.msgctf.kr", Port: 42817, TLS: tc.tls, Protocol: "tcp", CreatedAt: time.Now()},
+			}
+			// Simulate a process restart by restoring the persisted JSON snapshot.
+			raw, err := json.Marshal(record)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var restored Record
+			if err := json.Unmarshal(raw, &restored); err != nil {
+				t.Fatal(err)
+			}
+			journal := &memoryJournal{records: map[string]Record{"instance-1": restored}}
+			remote := &fakeRoutes{}
+			adapter := NewAdapter(&fakeBackend{}, remote, journal)
+			result, err := adapter.CreateWorkloadForOperation(context.Background(), command, "op1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			ep := result.Endpoints[0]
+			if result.ServiceURL != tc.url || ep.ServiceURL != tc.url || ep.ConnectionPort != 42817 || ep.Port != 1337 || ep.TLS != tc.tls || ep.ServerName != tc.sni || ep.Hostname != "abc.gate.msgctf.kr" {
+				t.Fatalf("restored transport changed: %+v", result)
+			}
+			binding, err := adapter.RecoveryBinding(context.Background(), "instance-1")
+			if err != nil || !reflect.DeepEqual(binding.Endpoints, result.Endpoints) || remote.puts != 0 {
+				t.Fatalf("recovery=%+v err=%v puts=%d", binding.Endpoints, err, remote.puts)
+			}
+		})
+	}
+}
 
 type memoryJournal struct {
 	mu        sync.Mutex

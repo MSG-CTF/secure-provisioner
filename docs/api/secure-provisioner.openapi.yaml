@@ -1034,16 +1034,18 @@ components:
           format: uri
         hostname:
           type: string
-          description: Gateway TLS hostname; omitted for legacy endpoints.
+          description: Instance-specific Gateway hostname; omitted for legacy endpoints.
         connection_port:
           type: integer
-          const: 443
+          minimum: 1
+          maximum: 65535
+          description: Public port assigned by the Gateway, independent of the container port and backend NodePort. HTTP endpoints remain on port 443.
         tls:
           type: boolean
-          const: true
+          description: Whether the public connection uses TLS. Explicit false is preserved for plaintext TCP; omitted for legacy endpoints without transport metadata.
         server_name:
           type: string
-          description: Required TLS SNI name when Gateway metadata is present. TCP service_url uses tls://hostname:443; port remains the internal container port.
+          description: TLS SNI hostname for encrypted Gateway connections; omitted for plaintext TCP. TCP service_url uses tls://hostname:connection_port or tcp://hostname:connection_port; port remains the internal container port.
     DeleteOperationResult:
       type: object
       additionalProperties: false

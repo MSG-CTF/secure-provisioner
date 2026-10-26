@@ -96,19 +96,26 @@ func PublicIP(raw string) (string, error) {
 }
 func (c *Client) Put(ctx context.Context, id string, d Destination) (Route, error) {
 	var result Route
+	// A missing/null TLS field must not silently select plaintext transport.
+	var response struct {
+		Route
+		TLS *bool `json:"tls"`
+	}
 	ip, err := PublicIP(d.TargetIP)
 	if err != nil || d.TargetPort < 1 || d.TargetPort > 65535 || (d.Protocol != "http" && d.Protocol != "tcp") {
 		return result, &APIError{Code: "GATEWAY_INVALID_DESTINATION", Permanent: true}
 	}
 	d.TargetIP = ip
-	if err = c.call(ctx, http.MethodPut, id, d, &result); err != nil {
+	if err = c.call(ctx, http.MethodPut, id, d, &response); err != nil {
 		return result, err
 	}
-	if result.InstanceID != id || !validHostname.MatchString(result.Hostname) || result.Port != 443 || !result.TLS || result.Protocol != d.Protocol || result.CreatedAt.IsZero() {
+	result = response.Route
+	if response.TLS == nil || result.InstanceID != id || !validHostname.MatchString(result.Hostname) || result.Port < 1 || result.Port > 65535 || result.Protocol != d.Protocol || result.CreatedAt.IsZero() {
 		return Route{}, &APIError{Code: "GATEWAY_INVALID_RESPONSE"}
 	}
+	result.TLS = *response.TLS
 	if d.Protocol == "http" {
-		if result.URL == nil || *result.URL != "https://"+result.Hostname {
+		if result.Port != 443 || !result.TLS || result.URL == nil || *result.URL != "https://"+result.Hostname {
 			return Route{}, &APIError{Code: "GATEWAY_INVALID_RESPONSE"}
 		}
 	} else if result.URL != nil {
