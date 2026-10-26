@@ -69,6 +69,8 @@ func (container WorkloadContainer) PublicPorts() []int {
 }
 
 type CreateWorkloadCommand struct {
+	ReleaseID    string
+	Architecture string
 	// RequestFingerprint identifies the caller input before server-owned policy
 	// overrides. Legacy snapshots decode this field to an empty string.
 	RequestFingerprint string

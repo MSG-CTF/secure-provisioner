@@ -244,3 +244,10 @@ resident-node/metadata host boundary는 각각 `#11`, `#32`의 검증이 끝날 
 production 완료로 간주하지 않습니다.
 
 실행 설정 전환: [백엔드 비밀값 주입](docs/operations/backend-secret-injection.md)
+# Optional image preparation
+
+Runtime can prepare approved immutable images in actual K3s node caches through
+dedicated, disabled-by-default APIs and workers. See the
+[installation and verification runbook](docs/operations/image-preparation.md),
+[API contract](docs/api/image-preparation-b-contract.md), and
+[trusted node configuration](config/image-prefetch-nodes.example.json).

@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "IMAGE_POLICY_REJECTED",
+    "message": "Image digest is not approved"
+  }
+}
