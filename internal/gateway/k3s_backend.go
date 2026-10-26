@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/MSG-CTF/secure-provisioner/internal/k3s"
+	"github.com/MSG-CTF/secure-provisioner/internal/operations"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 	"github.com/MSG-CTF/secure-provisioner/internal/runtimebinding"
 	corev1 "k8s.io/api/core/v1"
@@ -23,6 +24,23 @@ type KubernetesBackend struct {
 	Registry *k3s.Registry
 	Create   CreateBackend
 	Delete   DeleteBackend
+}
+
+// Reject unknown or disabled targets before the request enters the durable
+// create queue. A reconcile_create fence can then prove it was never accepted.
+func (b *KubernetesBackend) ValidateCreateCommand(c provisioner.CreateWorkloadCommand) error {
+	if c.RuntimeType != provisioner.RuntimeTypeKubernetes {
+		return nil
+	}
+	cluster, err := b.Registry.LookupForCreate(c.TargetID)
+	if err != nil {
+		var rejected *k3s.RuntimeError
+		if errors.As(err, &rejected) {
+			return operations.NewExecutionError(rejected.Code(), rejected.Retryable(), err)
+		}
+		return err
+	}
+	return cluster.Supports(c.Policy)
 }
 
 func (b *KubernetesBackend) Enabled(id string) bool {

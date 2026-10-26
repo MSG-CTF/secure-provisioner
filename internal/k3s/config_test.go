@@ -324,6 +324,25 @@ func TestLoadRegistryBuildsARegistry(t *testing.T) {
 	}
 }
 
+func TestLoadRegistryAcceptsBrokerCredentialIdentityWithNodeUIDLookup(t *testing.T) {
+	path := writeRegistryFile(t, `{"clusters":[{"target_id":"99f2f3b0-495a-4a7a-9e84-b4b35a7d21b8","broker_resource_target_id":"de42849c-e0dc-43d4-8e63-9bb2bd056db4","provider":"GCP","region":"test-region","architecture":"amd64","kubeconfig_path":"broker-kubeconfig","public_gateway":"https://gateway.example.invalid","enabled":true,"security_capabilities":`+completeSecurityCapabilitiesJSON+`}]}`)
+	client := fake.NewSimpleClientset()
+	registry, err := LoadRegistry(path, &sequenceFactory{clients: []kubernetes.Interface{client}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cluster, err := registry.Lookup("99f2f3b0-495a-4a7a-9e84-b4b35a7d21b8")
+	if err != nil || cluster.Client != client {
+		t.Fatalf("Scheduler node UID must resolve to its credential client: %v", err)
+	}
+	if cluster.Config.BrokerResourceTargetID != "de42849c-e0dc-43d4-8e63-9bb2bd056db4" {
+		t.Fatal("registry must retain the credential resource identity separately")
+	}
+	if _, err := registry.Lookup("de42849c-e0dc-43d4-8e63-9bb2bd056db4"); err == nil {
+		t.Fatal("credential lookup identity must not silently become a lifecycle alias")
+	}
+}
+
 func TestLoadRegistryNormalizesExposureMode(t *testing.T) {
 	for _, test := range []struct {
 		name  string
