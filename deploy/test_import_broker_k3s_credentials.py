@@ -110,6 +110,21 @@ class CredentialImportTests(unittest.TestCase):
         self.assertFalse(entries[1]["enabled"])
         self.assertEqual(len(list(self.credentials.glob("*.yaml"))), 1)
 
+    def test_client_certificate_chain_uses_leaf_fingerprint(self):
+        chain = self.certificate + self.certificate
+        self.config["users"][0]["user"]["client-certificate-data"] = base64.b64encode(chain.encode()).decode()
+        self.raw_config = json.dumps(self.config)
+        self.credential["kubeconfig_base64"] = base64.b64encode(self.raw_config.encode()).decode()
+        real_decode = ssl.PEM_cert_to_DER_cert
+
+        def decode_one_leaf(value):
+            self.assertEqual(value.count("-----BEGIN CERTIFICATE-----"), 1)
+            return real_decode(value)
+
+        with patch.object(importer.ssl, "PEM_cert_to_DER_cert", side_effect=decode_one_leaf):
+            result = self.perform()
+        self.assertEqual(result["target_id"], NODE)
+
     def test_explicit_legacy_migration_preserves_disabled_maintenance_route(self):
         legacy = {**self.original["clusters"][0], "target_id": RESOURCE, "enabled": True}
         self.original["clusters"].append(legacy)

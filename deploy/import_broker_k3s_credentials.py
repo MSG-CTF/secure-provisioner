@@ -137,7 +137,10 @@ def verify_credential(credential, resource_id, runner, kubectl_command):
         decoded(cluster["certificate-authority-data"])
         decoded(user["client-key-data"])
         certificate = decoded(user["client-certificate-data"])
-        fingerprint = hashlib.sha256(ssl.PEM_cert_to_DER_cert(certificate)).hexdigest()
+        # K3s embeds the client leaf followed by its issuer. Fingerprint the
+        # leaf explicitly; Python versions differ in decoding PEM chains.
+        leaf = certificate.split("-----END CERTIFICATE-----", 1)[0] + "-----END CERTIFICATE-----\n"
+        fingerprint = hashlib.sha256(ssl.PEM_cert_to_DER_cert(leaf)).hexdigest()
         if fingerprint != credential.get("client_certificate_fingerprint_sha256"):
             raise ValueError()
         enddate = checked_run(runner, ["openssl", "x509", "-noout", "-enddate", "-checkend", "300"], certificate)
