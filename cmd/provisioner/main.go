@@ -28,6 +28,7 @@ type appConfig struct {
 	APIOnly               bool
 	Address               string
 	RegistryPath          string
+	Broker                k3s.BrokerSyncConfig
 	VMTargetsPath         string
 	ImagePoliciesPath     string
 	BackendSecretURL      string
@@ -48,13 +49,15 @@ type appConfig struct {
 }
 
 type application struct {
-	handler   http.Handler
-	runWorker func(context.Context) error
-	close     func() error
+	handler     http.Handler
+	runWorker   func(context.Context) error
+	syncTargets func(context.Context)
+	close       func() error
 }
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	slog.SetDefault(logger)
 	if len(os.Args) > 1 && os.Args[1] == "--validate-registry" {
 		if err := validateRegistryCommand(os.Args[2:], os.Stdout); err != nil {
 			logger.Error("registry validation failed")
@@ -135,6 +138,9 @@ func loadConfig(getenv func(string) string) (appConfig, error) {
 	}
 
 	var err error
+	if config.Broker, err = loadBrokerConfig(getenv); err != nil {
+		return appConfig{}, err
+	}
 	if config.ServiceAuth, err = loadServiceAuthConfig(getenv); err != nil {
 		return appConfig{}, err
 	}
@@ -219,6 +225,21 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 	registry, err := k3s.LoadRegistry(config.RegistryPath, factory)
 	if err != nil {
 		return nil, err
+	}
+	var broker *k3s.BrokerSync
+	if config.Broker.BaseURL != "" {
+		config.Broker.ReadOnly = config.APIOnly
+		broker, err = k3s.NewBrokerSync(registry, config.Broker)
+		if err != nil {
+			return nil, err
+		}
+		if broker.RequiresGateway() && config.GatewayTokenFile == "" {
+			return nil, errors.New("Broker Gateway targets require PROVISIONER_GATEWAY_RUNTIME_TOKEN_FILE")
+		}
+		if !config.APIOnly {
+			result, syncErr := broker.Sync(context.Background())
+			reportBrokerSync(result, syncErr)
+		}
 	}
 	var imagePolicies *httpapi.ImagePolicyCatalog
 	if config.ImagePoliciesPath != "" {
@@ -360,11 +381,15 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 		}
 		return nil, err
 	}
-	return &application{
+	app := &application{
 		handler:   httpapi.NewHandlerWithVM(service, service, config.ServiceAuth, imagePolicies, readiness, vmPolicy),
 		runWorker: service.Run,
 		close:     closeStore,
-	}, nil
+	}
+	if broker != nil {
+		app.syncTargets = func(ctx context.Context) { broker.Run(ctx, reportBrokerSync) }
+	}
+	return app, nil
 }
 
 func operationBackoff(attempt int) time.Duration {
@@ -396,7 +421,7 @@ func runApplication(ctx context.Context, config appConfig, app *application, log
 	if config.APIOnly {
 		logger.Info("deployment API bridge: workers disabled; schema migrations disabled")
 	} else {
-		go func() { workerErrors <- app.runWorker(runCtx) }()
+		go func() { workerErrors <- runWorkers(runCtx, app) }()
 	}
 	logger.Info("starting secure provisioner", "address", config.Address)
 

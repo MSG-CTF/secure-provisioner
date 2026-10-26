@@ -5,11 +5,13 @@ import (
 	"net/url"
 	"reflect"
 	"strings"
+	"sync"
 
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 type Registry struct {
+	mu      sync.RWMutex
 	targets map[string]Cluster
 }
 
@@ -78,6 +80,8 @@ func (r *Registry) Lookup(targetID string) (Cluster, error) {
 }
 
 func (r *Registry) LookupForCreate(targetID string) (Cluster, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	cluster, found := r.targets[targetID]
 	if !found {
 		return Cluster{}, newRuntimeError("TARGET_NOT_FOUND", false, nil)
@@ -89,6 +93,8 @@ func (r *Registry) LookupForCreate(targetID string) (Cluster, error) {
 }
 
 func (r *Registry) LookupForMaintenance(targetID string) (Cluster, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	cluster, found := r.targets[targetID]
 	if !found {
 		return Cluster{}, newRuntimeError("TARGET_NOT_FOUND", false, nil)
@@ -155,6 +161,8 @@ func copyCluster(cluster Cluster) Cluster {
 }
 
 func (r *Registry) GatewayTargets() map[string]string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	out := map[string]string{}
 	for id, c := range r.targets {
 		if c.Config.Gateway != nil && c.Config.Gateway.Enabled {
@@ -162,6 +170,22 @@ func (r *Registry) GatewayTargets() map[string]string {
 		}
 	}
 	return out
+}
+
+func (r *Registry) snapshot() map[string]Cluster {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := make(map[string]Cluster, len(r.targets))
+	for id, cluster := range r.targets {
+		result[id] = copyCluster(cluster)
+	}
+	return result
+}
+
+func (r *Registry) replaceSnapshot(targets map[string]Cluster) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.targets = targets
 }
 
 func copySecurityCapabilities(capabilities SecurityCapabilities) SecurityCapabilities {

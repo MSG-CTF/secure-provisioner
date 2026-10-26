@@ -223,3 +223,21 @@ func (KubeconfigClientFactory) FromKubeconfig(path string) (ClientSet, error) {
 	}
 	return ClientSet{Kubernetes: kubernetesClient, Metrics: metrics}, nil
 }
+
+// FromKubeconfigData constructs independent clients from already verified,
+// inline Broker credentials; it does not write a shared kubeconfig file.
+func (KubeconfigClientFactory) FromKubeconfigData(raw []byte) (ClientSet, error) {
+	config, err := clientcmd.RESTConfigFromKubeConfig(raw)
+	if err != nil {
+		return ClientSet{}, err
+	}
+	client, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return ClientSet{}, err
+	}
+	metrics, err := metricsclient.NewForConfig(config)
+	if err != nil {
+		return ClientSet{}, err
+	}
+	return ClientSet{Kubernetes: client, Metrics: metrics}, nil
+}
