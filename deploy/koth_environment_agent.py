@@ -423,7 +423,9 @@ class Kubernetes:
                 raise Fault("ROLLBACK_CONFLICT") from None
 
     def ready(self):
-        self.run(["rollout", "status", "deployment/" + self.game["deployment"], "--timeout=90s"], timeout=95, raw=True)
+        grace = self.deployment()["spec"]["template"]["spec"].get("terminationGracePeriodSeconds", 30)
+        seconds = max(90, min(360, grace + 60))
+        self.run(["rollout", "status", "deployment/" + self.game["deployment"], "--timeout=" + str(seconds) + "s"], timeout=seconds + 5, raw=True)
 
     def collect_unused_secrets(self):
         # Keep every Secret referenced by a live Pod or retained ReplicaSet for safe rollback.
