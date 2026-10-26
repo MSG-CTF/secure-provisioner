@@ -204,7 +204,7 @@ func (w *Worker) processLeased(ctx context.Context, claimed ClaimedOperation) er
 		return w.leaseStore.ReleaseLease(claimed, now)
 	}
 	_, retryable := ClassifyExecutionError(executeErr)
-	if !retryable || claimed.Operation.Attempt >= claimed.Operation.MaxAttempts {
+	if !heldRetry(executeErr) && (!retryable || claimed.Operation.Attempt >= claimed.Operation.MaxAttempts) {
 		_, err := w.leaseStore.MarkLeaseFailed(claimed, failure, now)
 		return err
 	}
@@ -287,7 +287,7 @@ func (w *Worker) process(ctx context.Context, operation Operation) error {
 		return w.legacyStore.Requeue(running.ID)
 	}
 	_, retryable := ClassifyExecutionError(err)
-	if !retryable || running.Attempt >= running.MaxAttempts {
+	if !heldRetry(err) && (!retryable || running.Attempt >= running.MaxAttempts) {
 		_, markErr := w.legacyStore.MarkFailed(running.ID, failure)
 		return markErr
 	}
