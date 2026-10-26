@@ -26,6 +26,7 @@ func TestCreateRejectsUnavailableTargetBeforeReturningQueueAcceptance(t *testing
 			handler := newTestHandlerWithRuntime(&recordingCreateUseCase{}, runtime)
 			response := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodPost, "/internal/v1/instances", strings.NewReader(validCreateRequestJSON()))
+			request.Header.Set("Content-Type", "application/json")
 			handler.ServeHTTP(response, request)
 			if response.Code != http.StatusUnprocessableEntity || !strings.Contains(response.Body.String(), code) {
 				t.Fatalf("status=%d body=%s, want admission rejection %s", response.Code, response.Body.String(), code)
