@@ -326,8 +326,14 @@ class Kubernetes:
         if deployment.get("status", {}).get("updatedReplicas", 0) != count or deployment.get("status", {}).get("readyReplicas", 0) != count:
             return False
         selector = ",".join(k + "=" + v for k, v in sorted(deployment["spec"]["selector"]["matchLabels"].items()))
+        replicasets = self.run(["get", "replicasets", "-l", selector, "-o", "json"])["items"]
+        owned = {row["metadata"]["uid"] for row in replicasets if any(
+            ref.get("controller") is True and ref.get("kind") == "Deployment" and ref.get("uid") == deployment["metadata"]["uid"]
+            for ref in row["metadata"].get("ownerReferences", []))}
         pods = self.run(["get", "pods", "-l", selector, "-o", "json"])["items"]
-        pods = [p for p in pods if not p["metadata"].get("deletionTimestamp")]
+        pods = [p for p in pods if not p["metadata"].get("deletionTimestamp") and any(
+            ref.get("controller") is True and ref.get("kind") == "ReplicaSet" and ref.get("uid") in owned
+            for ref in p["metadata"].get("ownerReferences", []))]
         if len(pods) != count or not all(any(c["type"] == "Ready" and c["status"] == "True" for c in p.get("status", {}).get("conditions", [])) for p in pods):
             return False
         for container in desired["settings"]["containers"]:

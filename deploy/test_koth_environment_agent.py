@@ -263,15 +263,21 @@ class EnvironmentAgentTests(unittest.TestCase):
     def test_removed_managed_variables_cannot_be_adopted_as_a_matching_subset(self):
         kube = agent.Kubernetes(self.game)
         deployment = copy.deepcopy(self.kube.deployment())
-        deployment['metadata'] = {'generation':1}
+        deployment['metadata'] = {'generation':1,'uid':'deployment-id'}
         deployment['status'] = {'observedGeneration':1,'updatedReplicas':1,'readyReplicas':1}
         deployment['spec']['selector'] = {'matchLabels':{'app':'game'}}
         kube.deployment = lambda: deployment
         values = {k:e['value'] for k,e in self.desired['settings']['containers'][0]['entries'].items() if e['value'] is not None}
         values['REMOVED_SETTING'] = 'stale'
         def run(args, **kwargs):
+            if args[0:2] == ['get','replicasets']:
+                return {'items':[{'metadata':{'uid':'replicaset-id','ownerReferences':[{'kind':'Deployment','uid':'deployment-id','controller':True}]}}]}
             if args[0:2] == ['get','pods']:
-                return {'items':[{'metadata':{'name':'pod'},'status':{'conditions':[{'type':'Ready','status':'True'}]}}]}
+                return {'items':[
+                    {'metadata':{'name':'pod','ownerReferences':[{'kind':'ReplicaSet','uid':'replicaset-id','controller':True}]},'status':{'conditions':[{'type':'Ready','status':'True'}]}},
+                    {'metadata':{'name':'same-label-migration','ownerReferences':[{'kind':'Job','uid':'migration-id','controller':True}]},'status':{'phase':'Running'}},
+                    {'metadata':{'name':'other-deployment-pod','ownerReferences':[{'kind':'ReplicaSet','uid':'other-rs','controller':True}]},'status':{'phase':'Succeeded'}},
+                ]}
             if args[0:2] == ['get','secret']:
                 return {'data':{k:base64.b64encode(v.encode()).decode() for k,v in values.items()}}
             if args[0] == 'exec':
