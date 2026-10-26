@@ -39,6 +39,13 @@ func NewAdapter(backend Backend, remote Routes, journal Journal) *Adapter {
 }
 
 func (a *Adapter) ValidateCreateCommand(c provisioner.CreateWorkloadCommand) error {
+	if validator, ok := a.backend.(interface {
+		ValidateCreateCommand(provisioner.CreateWorkloadCommand) error
+	}); ok {
+		if err := validator.ValidateCreateCommand(c); err != nil {
+			return err
+		}
+	}
 	if !a.backend.Enabled(c.TargetID) || c.RuntimeType != provisioner.RuntimeTypeKubernetes {
 		return nil
 	}

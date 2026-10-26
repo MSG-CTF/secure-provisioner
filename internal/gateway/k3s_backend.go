@@ -25,6 +25,19 @@ type KubernetesBackend struct {
 	Delete   DeleteBackend
 }
 
+// Reject unknown or disabled targets before the request enters the durable
+// create queue. A reconcile_create fence can then prove it was never accepted.
+func (b *KubernetesBackend) ValidateCreateCommand(c provisioner.CreateWorkloadCommand) error {
+	if c.RuntimeType != provisioner.RuntimeTypeKubernetes {
+		return nil
+	}
+	cluster, err := b.Registry.LookupForCreate(c.TargetID)
+	if err != nil {
+		return err
+	}
+	return cluster.Supports(c.Policy)
+}
+
 func (b *KubernetesBackend) Enabled(id string) bool {
 	c, err := b.Registry.LookupForMaintenance(id)
 	return err == nil && c.Config.Gateway != nil && c.Config.Gateway.Enabled

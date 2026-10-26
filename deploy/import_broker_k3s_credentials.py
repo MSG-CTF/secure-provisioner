@@ -196,7 +196,8 @@ def write_atomic(path, data, owner, mode, *, immutable=False):
 
 
 def import_credential(credential, resource_id, registry_path, template, credential_directory,
-                      *, output_registry, validator_binary, runner=run_command, kubectl_command=("kubectl",)):
+                      *, output_registry, validator_binary, runner=run_command, kubectl_command=("kubectl",),
+                      migrate_legacy=False):
     if fcntl is None:
         raise ImportFailure("Credential import must run on Linux")
     resource_id = uuid_value(resource_id)
@@ -230,8 +231,12 @@ def import_credential(credential, resource_id, registry_path, template, credenti
                 raise ImportFailure("Duplicate or invalid registry target")
             seen.add(entry["target_id"])
             broker_id = entry.get("broker_resource_target_id")
-            if ((entry["target_id"] == resource_id and target_id != resource_id)
-                    or (broker_id == resource_id and entry["target_id"] != target_id)):
+            legacy = entry["target_id"] == resource_id and target_id != resource_id
+            if legacy and migrate_legacy:
+                # Keep the old identity and client for maintenance of existing
+                # bindings, but admit new work only through the verified Node UID.
+                entry["enabled"] = False
+            elif legacy or (broker_id == resource_id and entry["target_id"] != target_id):
                 raise ImportFailure("Legacy or changed target identity requires operator migration; existing cleanup routes were preserved")
             if entry["target_id"] == target_id:
                 if broker_id not in (None, resource_id):
@@ -298,13 +303,16 @@ def main():
     parser.add_argument("--template", type=Path, required=True)
     parser.add_argument("--credential-directory", type=Path, required=True)
     parser.add_argument("--k3s", action="store_true", help="Use k3s kubectl instead of kubectl")
+    parser.add_argument("--migrate-legacy", action="store_true",
+                        help="Disable a legacy resource-ID create target while preserving its maintenance route")
     args = parser.parse_args()
     try:
         credential = fetch_credential(args.broker_base_url, args.resource_target_id, args.token_file.read_text().strip())
         result = import_credential(credential, args.resource_target_id, args.registry,
                                    json_value(args.template.read_bytes()), args.credential_directory,
                                    output_registry=args.output_registry, validator_binary=args.runtime_binary,
-                                   kubectl_command=("k3s", "kubectl") if args.k3s else ("kubectl",))
+                                   kubectl_command=("k3s", "kubectl") if args.k3s else ("kubectl",),
+                                   migrate_legacy=args.migrate_legacy)
         print(json.dumps(result))
         return 0
     except ImportFailure as error:
