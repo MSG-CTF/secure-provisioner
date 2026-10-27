@@ -800,15 +800,29 @@ class ScopedRetentionTests(unittest.TestCase):
         with self.assertRaises(enroll.EnrollmentError):
             self.run_enrollment(apply=True, preserve_other_targets=True)
 
-    def test_rotation_removes_old_owned_target_without_retaining_stale_entry(self):
-        other = self.existing()
+    def test_scoped_retention_rejects_rotation_before_remote_queries(self):
+        self.existing()
         self.broker()
         self.policy_data["nodes"][0].update(target_id=TARGET, allow_target_rotation=True)
         self.write(self.policy, self.policy_data)
-        self.run_enrollment(apply=True, preserve_other_targets=True, broker_state_path=self.state)
-        result = json.loads(self.output.read_bytes())["nodes"]
-        self.assertIn(other, result)
-        self.assertEqual({n["target_id"] for n in result}, {"unrelated-qa", "uid-new"})
+        before = self.output.read_bytes()
+        with self.assertRaisesRegex(enroll.EnrollmentError, "SCOPED_RETENTION_REQUIRES_PINNED_TARGETS"):
+            self.run_enrollment(apply=True, preserve_other_targets=True, broker_state_path=self.state)
+        self.assertEqual(self.output.read_bytes(), before)
+        self.assertEqual(self.cluster.queries, [])
+
+    def test_cli_forwards_retention_and_rejects_unsafe_rotation_combination(self):
+        self.existing()
+        self.broker()
+        self.policy_data["nodes"][0]["allow_target_rotation"] = True
+        self.write(self.policy, self.policy_data)
+        output, errors = io.StringIO(), io.StringIO()
+        with patch.object(enroll, "KubernetesClient", return_value=self.cluster), redirect_stdout(output), redirect_stderr(errors):
+            status = enroll.main(["reconcile", "--policy", str(self.policy), "--registry", str(self.registry),
+                "--output", str(self.output), "--broker-state", str(self.state), "--preserve-other-targets", "--apply"])
+        self.assertEqual(status, 1)
+        self.assertEqual(json.loads(errors.getvalue())["error_code"], "SCOPED_RETENTION_REQUIRES_PINNED_TARGETS")
+        self.assertEqual(self.cluster.queries, [])
 
 
 if __name__ == "__main__":

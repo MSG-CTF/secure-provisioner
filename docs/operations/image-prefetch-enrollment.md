@@ -153,6 +153,12 @@ replacement is unchanged. Use this only with explicitly separated ownership;
 removing a target from a scoped policy does not revoke a retained registration.
 Its owning policy/operator must explicitly revoke it. Policy must cover the whole
 managed target, not just a healthy subset of that target's eligible nodes.
+Scoped retention requires pinned targets and rejects any policy with
+`allow_target_rotation:true` before remote calls or publication. The shared output
+does not carry durable ownership history for intermediate canonical IDs. Default
+whole-file reconciliation still supports approved rotation. Repinning a scoped
+policy requires the operator to explicitly retire its former canonical entry;
+removing it from policy alone does not revoke it.
 
 For a target admitted dynamically by Runtime, keep `--registry` pointing to the
 normal static registry and add `--broker-state <PROVISIONER_BROKER_STATE_DIRECTORY>/targets.json`.

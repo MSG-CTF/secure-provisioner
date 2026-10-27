@@ -611,6 +611,10 @@ def reconcile(policy_path, registry_path, output_path, *, client=None, apply=Fal
         policy_raw, original_revision = read_bytes(policy_path, with_revision=True)
         policy = validate_policy(decode(policy_raw))
         updated = apply_receipt(policy, read_json(receipt_path)) if receipt_path else policy
+        if preserve_other_targets and any(n.get("allow_target_rotation", False) for n in updated["nodes"]):
+            # This shared file has no persistent owner history for intermediate
+            # canonical IDs; do not mistake an earlier rotation for another owner.
+            raise EnrollmentError("SCOPED_RETENTION_REQUIRES_PINNED_TARGETS")
         client = client or KubernetesClient(runtime_uid=runtime_uid)
         nodes = []
         generations = []

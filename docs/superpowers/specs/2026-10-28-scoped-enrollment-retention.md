@@ -13,8 +13,10 @@ claims for retained targets. Default whole-file replacement remains unchanged.
 
 Require a bounded, protected, structurally valid Kubernetes-only previous file;
 reject duplicate target/name keys, unsupported fields/modes and malformed bindings.
-Use the existing shared output lock and policy revision checks. Rotation removes
-both previous approved and resolved target IDs from the retained set. Explicit
+Use the existing shared output lock and policy revision checks. Scoped retention
+rejects any `allow_target_rotation:true` policy because the shared output lacks
+durable history of intermediate canonical ownership. Default whole-file rotation
+is unchanged. Explicit
 revocation of a retained target requires its owning policy/operator, not this flag.
 
 The user authorized merging and operational tests through the Backend integration
