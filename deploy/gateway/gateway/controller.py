@@ -133,7 +133,7 @@ def allocate_public_port(routes: dict[str, dict]) -> int | None:
     raise ControllerError(503, "PORT_POOL_EXHAUSTED", "No public TCP port is available; retry the same instance ID.")
 
 
-def _render(routes: dict[str, dict], deleted: set[str], *, connect_retry: bool) -> str:
+def _render(routes: dict[str, dict], deleted: set[str], *, connect_retry: bool, attempts: int = 6, connect_seconds: int = 1) -> str:
     parts = [HEADER]
     for instance_id in sorted(deleted):
         parts.append(f"{DELETED}{json.dumps(instance_id)}\n")
@@ -144,13 +144,13 @@ def _render(routes: dict[str, dict], deleted: set[str], *, connect_retry: bool) 
         backend = f"{destination}:{route['target_port']}"
         if connect_retry:
             upstream = "gw_backend_" + hashlib.sha256(instance_id.encode()).hexdigest()
-            # Both peers point at the same approved endpoint. NGINX may open a
+            # Every peer points at the same approved endpoint. NGINX may open a
             # fresh socket only if the first connection was never established
             parts.append(
                 f"upstream {upstream} {{\n"
                 f"    server {backend} max_fails=0;\n"
-                f"    server {backend} max_fails=0 backup;\n"
-                "}\n"
+                + f"    server {backend} max_fails=0 backup;\n" * (attempts - 1)
+                + "}\n"
             )
             backend = upstream
         listener = (
@@ -166,10 +166,10 @@ def _render(routes: dict[str, dict], deleted: set[str], *, connect_retry: bool) 
             f"{META}{json.dumps(route, sort_keys=True, ensure_ascii=True)}\n"
             "server {\n"
             f"{listener}"
-            + ("    proxy_connect_timeout 2s;\n"
+            + (f"    proxy_connect_timeout {connect_seconds}s;\n"
                "    proxy_next_upstream on;\n"
-               "    proxy_next_upstream_tries 2;\n"
-               "    proxy_next_upstream_timeout 4s;\n" if connect_retry else "")
+               f"    proxy_next_upstream_tries {attempts};\n"
+               f"    proxy_next_upstream_timeout {attempts * connect_seconds}s;\n" if connect_retry else "")
             + f"    proxy_pass {backend};\n"
             + "}\n"
         )
@@ -182,6 +182,10 @@ def render(routes: dict[str, dict], deleted: set[str]) -> str:
 
 def render_legacy(routes: dict[str, dict], deleted: set[str]) -> str:
     return _render(routes, deleted, connect_retry=False)
+
+
+def render_previous_retry(routes: dict[str, dict], deleted: set[str]) -> str:
+    return _render(routes, deleted, connect_retry=True, attempts=2, connect_seconds=2)
 
 
 def parse_registry(text: str, domain: str, own_ip: str) -> tuple[dict[str, dict], set[str]]:
@@ -225,7 +229,7 @@ def parse_registry(text: str, domain: str, own_ip: str) -> tuple[dict[str, dict]
         routes[instance_id] = route
         hosts.add(route["hostname"])
         targets.add(target)
-    if routes.keys() & deleted or text not in (render(routes, deleted), render_legacy(routes, deleted)):
+    if routes.keys() & deleted or text not in (render(routes, deleted), render_legacy(routes, deleted), render_previous_retry(routes, deleted)):
         raise ValueError("The managed registry was edited outside the controller.")
     return routes, deleted
 
