@@ -85,12 +85,14 @@ func (f *fakeRoutes) Delete(context.Context, string) error {
 }
 
 type fakeBackend struct {
+	lastCommand                provisioner.CreateWorkloadCommand
 	creates, deletes, quiesces int
 	result                     provisioner.CreateWorkloadResult
 	err                        error
 }
 
-func (f *fakeBackend) CreateWorkloadForOperation(context.Context, provisioner.CreateWorkloadCommand, string) (provisioner.CreateWorkloadResult, error) {
+func (f *fakeBackend) CreateWorkloadForOperation(_ context.Context, command provisioner.CreateWorkloadCommand, _ string) (provisioner.CreateWorkloadResult, error) {
+	f.lastCommand = command
 	f.creates++
 	return f.result, f.err
 }
@@ -116,6 +118,8 @@ func TestAdapterReplaysImmutablePUTAfterLostResponseAndRestart(t *testing.T) {
 	remote := &fakeRoutes{lost: true}
 	a := NewAdapter(backend, remote, journal)
 	cmd := provisioner.CreateWorkloadCommand{InstanceID: "instance-1", TargetID: "target", RuntimeType: provisioner.RuntimeTypeKubernetes, Containers: []provisioner.WorkloadContainer{{Name: "web", Ports: []int{8080}, Expose: true}, {Name: "db", Ports: []int{5432}}}}
+	cmd.ReleaseID = "11111111-1111-4111-8111-111111111111"
+	cmd.Architecture = "AMD64"
 	if _, err := a.CreateWorkloadForOperation(ctx, cmd, "op1"); err == nil {
 		t.Fatal("lost response accepted")
 	}
@@ -134,6 +138,14 @@ func TestAdapterReplaysImmutablePUTAfterLostResponseAndRestart(t *testing.T) {
 	replay, err := a.CreateWorkloadForOperation(ctx, cmd, "op1")
 	if err != nil || !reflect.DeepEqual(result, replay) {
 		t.Fatal(replay, err)
+	}
+	if !reflect.DeepEqual(backend.lastCommand, cmd) || !reflect.DeepEqual(journal.records[cmd.InstanceID].Command, cmd) {
+		t.Fatal("Gateway lost immutable create tracing")
+	}
+	changed := cmd
+	changed.Architecture = "ARM64"
+	if _, err := a.CreateWorkloadForOperation(ctx, changed, "op1"); err == nil {
+		t.Fatal("Gateway replay accepted changed architecture")
 	}
 }
 

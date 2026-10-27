@@ -71,6 +71,10 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 }
 
 func buildResourceSetForOperation(cluster Cluster, command provisioner.CreateWorkloadCommand, operationID string) (ResourceSet, error) {
+	architecture := strings.ToLower(cluster.Config.Architecture)
+	if (architecture != "amd64" && architecture != "arm64") || (command.Architecture != "" && strings.ToLower(command.Architecture) != architecture) {
+		return ResourceSet{}, newRuntimeError("PLATFORM_MISMATCH", false, nil)
+	}
 	containers := normalizedCommandContainers(command)
 	if !validWorkloadCommand(cluster, command, containers) {
 		return ResourceSet{}, newRuntimeError("INVALID_CREATE_COMMAND", false, nil)
@@ -205,6 +209,7 @@ func buildResourceSetForOperation(cluster Cluster, command provisioner.CreateWor
 		}
 		// Service-link variables can collide with challenge settings such as SERVICE_PORT.
 		podSpec := corev1.PodSpec{
+			NodeSelector:       map[string]string{"kubernetes.io/os": "linux", "kubernetes.io/arch": architecture},
 			Containers:         []corev1.Container{podContainer},
 			EnableServiceLinks: boolPointer(false),
 		}

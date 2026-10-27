@@ -1,0 +1,12 @@
+{
+  "nodes": [
+    {
+      "target_id": "replace-with-registry-target-id",
+      "node_name": "replace-with-kubernetes-node-name",
+      "node_uid": "replace-with-current-node-uid",
+      "mode": "kubernetes",
+      "namespace": "runtime-image-preparation",
+      "agent_image": "ghcr.io/msg-ctf/runtime-image-agent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ]
+}

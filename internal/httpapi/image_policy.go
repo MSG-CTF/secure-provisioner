@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 // ImagePolicyCatalog is an operator-owned, immutable-at-runtime set of
 // requirements for published challenge images. It contains no secret values.
 type ImagePolicyCatalog struct {
+	revision                 string
 	managed                  map[string]struct{}
 	images                   map[string]ImagePolicy
 	graphByImage             map[string]*isolation.WorkloadNetwork
@@ -124,6 +126,7 @@ func ParseImagePolicies(contents []byte) (*ImagePolicyCatalog, error) {
 		return nil, errors.New("image policy file requires schema_version 1 or 2, managed_repositories, and images; networks require version 2")
 	}
 	catalog := &ImagePolicyCatalog{managed: make(map[string]struct{}), images: make(map[string]ImagePolicy), vmRequired: make(map[string]struct{}), graphByImage: make(map[string]*isolation.WorkloadNetwork), graphManagedRepositories: make(map[string]struct{})}
+	catalog.revision = fmt.Sprintf("sha256:%x", sha256.Sum256(contents))
 	for _, repository := range config.ManagedRepositories {
 		if repository == "" || repository != imageRepository(repository) || strings.ContainsAny(repository, "@: \t\r\n") {
 			return nil, fmt.Errorf("invalid managed image repository %q", repository)
@@ -346,7 +349,7 @@ func (catalog *ImagePolicyCatalog) Apply(request *CreateWorkloadRequest) error {
 		if policy.Status != "create_enabled" {
 			return fmt.Errorf("%w: image is not ready for deployment", ErrImagePolicyRejected)
 		}
-		if policy.Container != container.Name || policy.IsolationProfile != request.IsolationProfile || !slices.Equal(policy.Ports, container.Ports) {
+		if policy.Container != container.Name || policy.IsolationProfile != request.IsolationProfile || !samePolicyPorts(policy.Ports, container.Ports) {
 			return fmt.Errorf("%w: image, container, profile, or ports do not match", ErrImagePolicyRejected)
 		}
 		selected[index] = policy
