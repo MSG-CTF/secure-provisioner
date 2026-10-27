@@ -4,7 +4,12 @@
     {
       "image": "ghcr.io/msg-ctf/challenges/web3-infinite-pack/server@sha256:43cc32512af5ce6a06d5a1541be1f9ca2397a1dab744d37580d4bfc4a04b437b",
       "container": "server",
-      "ports": [{"port": 31337, "protocol": "TCP"}]
+      "ports": [
+        {
+          "port": 31337,
+          "protocol": "TCP"
+        }
+      ]
     }
   ],
   "vm_required_repositories": [
@@ -43,13 +48,26 @@
       "isolation_profile": "WEB",
       "status": "create_enabled",
       "ci_smoke_enabled": true,
-      "readiness_http": {"path": "/", "port": 8080},
+      "readiness_http": {
+        "path": "/",
+        "port": 8080
+      },
       "run_as_user": 10001,
-      "ports": [8080],
-      "exposed_ports": [8080],
+      "ports": [
+        8080
+      ],
+      "exposed_ports": [
+        8080
+      ],
       "writable_paths": [
-        {"path": "/tmp", "size_mib": 32},
-        {"path": "/app/instance", "size_mib": 32}
+        {
+          "path": "/tmp",
+          "size_mib": 32
+        },
+        {
+          "path": "/app/instance",
+          "size_mib": 32
+        }
       ]
     },
     {
@@ -58,13 +76,26 @@
       "isolation_profile": "WEB",
       "status": "create_enabled",
       "ci_smoke_enabled": true,
-      "readiness_http": {"path": "/", "port": 8080},
+      "readiness_http": {
+        "path": "/",
+        "port": 8080
+      },
       "run_as_user": 10001,
-      "ports": [8080],
-      "exposed_ports": [8080],
+      "ports": [
+        8080
+      ],
+      "exposed_ports": [
+        8080
+      ],
       "writable_paths": [
-        {"path": "/tmp", "size_mib": 32},
-        {"path": "/app/instance", "size_mib": 32}
+        {
+          "path": "/tmp",
+          "size_mib": 32
+        },
+        {
+          "path": "/app/instance",
+          "size_mib": 32
+        }
       ]
     },
     {
@@ -74,13 +105,26 @@
       "status": "create_enabled",
       "requires_flag": true,
       "run_as_user": 10001,
-      "ports": [8080],
-      "exposed_ports": [8080],
-      "writable_paths": [
-        {"path": "/tmp", "size_mib": 32},
-        {"path": "/app/instance", "size_mib": 32}
+      "ports": [
+        8080
       ],
-      "readiness_http": {"path": "/", "port": 8080}
+      "exposed_ports": [
+        8080
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 32
+        },
+        {
+          "path": "/app/instance",
+          "size_mib": 32
+        }
+      ],
+      "readiness_http": {
+        "path": "/",
+        "port": 8080
+      }
     },
     {
       "image": "ghcr.io/msg-ctf/challenges/web-daily-point/web@sha256:98c98088662fd5ff538ae9e163fb4a68ad73580e0f4f703624b0650d4a2b499a",
@@ -88,13 +132,26 @@
       "isolation_profile": "WEB",
       "status": "create_enabled",
       "ci_smoke_enabled": true,
-      "readiness_http": {"path": "/", "port": 8080},
+      "readiness_http": {
+        "path": "/",
+        "port": 8080
+      },
       "run_as_user": 10001,
-      "ports": [8080],
-      "exposed_ports": [8080],
+      "ports": [
+        8080
+      ],
+      "exposed_ports": [
+        8080
+      ],
       "writable_paths": [
-        {"path": "/tmp", "size_mib": 64},
-        {"path": "/app/data", "size_mib": 64}
+        {
+          "path": "/tmp",
+          "size_mib": 64
+        },
+        {
+          "path": "/app/data",
+          "size_mib": 64
+        }
       ]
     },
     {
@@ -103,23 +160,48 @@
       "isolation_profile": "WEB",
       "status": "create_enabled",
       "ci_smoke_enabled": true,
-      "readiness_http": {"path": "/", "port": 8080},
+      "readiness_http": {
+        "path": "/",
+        "port": 8080
+      },
       "run_as_user": 10001,
-      "ports": [8080],
-      "exposed_ports": [8080],
-      "writable_paths": [{"path": "/tmp", "size_mib": 64}]
+      "ports": [
+        8080
+      ],
+      "exposed_ports": [
+        8080
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 64
+        }
+      ]
     },
     {
       "image": "ghcr.io/msg-ctf/challenges/web-logout-please/service@sha256:c1736999c957b408c09dda518d49eecbfcb37ffae0d9227e6a378a666f931909",
       "container": "service",
       "isolation_profile": "WEB",
       "status": "create_enabled",
-      "readiness_http": {"path": "/", "port": 8080},
+      "readiness_http": {
+        "path": "/",
+        "port": 8080
+      },
       "requires_flag": true,
       "run_as_user": 10001,
-      "ports": [8080, 9090],
-      "exposed_ports": [8080],
-      "writable_paths": [{"path": "/tmp", "size_mib": 64}]
+      "ports": [
+        8080,
+        9090
+      ],
+      "exposed_ports": [
+        8080
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 64
+        }
+      ]
     },
     {
       "image": "ghcr.io/msg-ctf/challenges/web-notebook/web@sha256:61cebc237880b45ec1157b60d892429bfa6b237fbee83f339cd4e73d659b4a8b",
@@ -127,11 +209,23 @@
       "isolation_profile": "WEB",
       "status": "create_enabled",
       "ci_smoke_enabled": false,
-      "readiness_http": {"path": "/", "port": 8080},
+      "readiness_http": {
+        "path": "/",
+        "port": 8080
+      },
       "run_as_user": 10001,
-      "ports": [8080],
-      "exposed_ports": [8080],
-      "writable_paths": [{"path": "/tmp", "size_mib": 64}]
+      "ports": [
+        8080
+      ],
+      "exposed_ports": [
+        8080
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 64
+        }
+      ]
     },
     {
       "image": "ghcr.io/msg-ctf/challenges/web-notebook/db@sha256:2bcb74bbea090364d812459b3039d6a79ce0521a24a4d3fee7ff8a4f6d32bf3d",
@@ -141,12 +235,23 @@
       "ci_smoke_enabled": false,
       "requires_flag": true,
       "run_as_user": 70,
-      "ports": [5432],
+      "ports": [
+        5432
+      ],
       "exposed_ports": [],
       "writable_paths": [
-        {"path": "/tmp", "size_mib": 64},
-        {"path": "/var/lib/postgresql/data", "size_mib": 256},
-        {"path": "/var/run/postgresql", "size_mib": 16}
+        {
+          "path": "/tmp",
+          "size_mib": 64
+        },
+        {
+          "path": "/var/lib/postgresql/data",
+          "size_mib": 256
+        },
+        {
+          "path": "/var/run/postgresql",
+          "size_mib": 16
+        }
       ]
     },
     {
@@ -154,11 +259,23 @@
       "container": "web",
       "isolation_profile": "WEB",
       "status": "create_enabled",
-      "readiness_http": {"path": "/", "port": 8080},
+      "readiness_http": {
+        "path": "/",
+        "port": 8080
+      },
       "run_as_user": 10001,
-      "ports": [8080],
-      "exposed_ports": [8080],
-      "writable_paths": [{"path": "/tmp", "size_mib": 64}]
+      "ports": [
+        8080
+      ],
+      "exposed_ports": [
+        8080
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 64
+        }
+      ]
     },
     {
       "image": "ghcr.io/msg-ctf/challenges/web-notebook/db@sha256:396878dd36296204aa326c5acfaba267e76e8dd604a940ffdd67e1122f2dc872",
@@ -166,12 +283,23 @@
       "isolation_profile": "WEB",
       "status": "create_enabled",
       "run_as_user": 70,
-      "ports": [5432],
+      "ports": [
+        5432
+      ],
       "exposed_ports": [],
       "writable_paths": [
-        {"path": "/tmp", "size_mib": 64},
-        {"path": "/var/lib/postgresql/data", "size_mib": 256},
-        {"path": "/var/run/postgresql", "size_mib": 16}
+        {
+          "path": "/tmp",
+          "size_mib": 64
+        },
+        {
+          "path": "/var/lib/postgresql/data",
+          "size_mib": 256
+        },
+        {
+          "path": "/var/run/postgresql",
+          "size_mib": 16
+        }
       ]
     },
     {
@@ -181,9 +309,18 @@
       "status": "blocked",
       "blocked_reason": "database image requires PGDATA update and fresh create validation",
       "run_as_user": 10001,
-      "ports": [8080],
-      "exposed_ports": [8080],
-      "writable_paths": [{"path": "/tmp", "size_mib": 64}]
+      "ports": [
+        8080
+      ],
+      "exposed_ports": [
+        8080
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 64
+        }
+      ]
     },
     {
       "image": "ghcr.io/msg-ctf/challenges/web-notebook/db@sha256:7a40ab203a9f16d06269a4506f1f99b770e2991bb0d5c4ee072fddaea722cea0",
@@ -192,12 +329,23 @@
       "status": "blocked",
       "blocked_reason": "database image requires PGDATA update and fresh create validation",
       "run_as_user": 10001,
-      "ports": [5432],
+      "ports": [
+        5432
+      ],
       "exposed_ports": [],
       "writable_paths": [
-        {"path": "/tmp", "size_mib": 64},
-        {"path": "/var/lib/postgresql/data", "size_mib": 256},
-        {"path": "/var/run/postgresql", "size_mib": 16}
+        {
+          "path": "/tmp",
+          "size_mib": 64
+        },
+        {
+          "path": "/var/lib/postgresql/data",
+          "size_mib": 256
+        },
+        {
+          "path": "/var/run/postgresql",
+          "size_mib": 16
+        }
       ]
     },
     {
@@ -236,13 +384,26 @@
       "status": "create_enabled",
       "requires_flag": true,
       "run_as_user": 10001,
-      "ports": [8080],
-      "exposed_ports": [8080],
-      "writable_paths": [
-        {"path": "/tmp", "size_mib": 64},
-        {"path": "/app/data", "size_mib": 64}
+      "ports": [
+        8080
       ],
-      "readiness_http": {"path": "/", "port": 8080}
+      "exposed_ports": [
+        8080
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 64
+        },
+        {
+          "path": "/app/data",
+          "size_mib": 64
+        }
+      ],
+      "readiness_http": {
+        "path": "/",
+        "port": 8080
+      }
     },
     {
       "image": "ghcr.io/msg-ctf/challenges/web3-split-brain-oracle/challenge@sha256:2eb556ab51dc5214c1e4c7ae73a7a1c63d81cb35d980bf40923597456da2ffc4",
@@ -308,10 +469,22 @@
       "status": "create_enabled",
       "requires_flag": true,
       "run_as_user": 10001,
-      "ports": [8080],
-      "exposed_ports": [8080],
-      "writable_paths": [{"path": "/tmp", "size_mib": 64}],
-      "readiness_http": {"path": "/", "port": 8080}
+      "ports": [
+        8080
+      ],
+      "exposed_ports": [
+        8080
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 64
+        }
+      ],
+      "readiness_http": {
+        "path": "/",
+        "port": 8080
+      }
     },
     {
       "image": "ghcr.io/msg-ctf/challenges/crypto-reused-seal/chall@sha256:ac142a1d23fc645823d5de28adc05e980133620638bf784ebaff4e78b68ab1b7",
@@ -363,9 +536,18 @@
       "status": "create_enabled",
       "requires_flag": true,
       "run_as_user": 1000,
-      "ports": [9999],
-      "exposed_ports": [9999],
-      "writable_paths": [{"path": "/tmp", "size_mib": 32}],
+      "ports": [
+        9999
+      ],
+      "exposed_ports": [
+        9999
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 32
+        }
+      ],
       "flag_file_path": "/home/player/flag.txt"
     },
     {
@@ -375,9 +557,18 @@
       "status": "create_enabled",
       "requires_flag": true,
       "run_as_user": 10001,
-      "ports": [1337],
-      "exposed_ports": [1337],
-      "writable_paths": [{"path": "/tmp", "size_mib": 64}],
+      "ports": [
+        1337
+      ],
+      "exposed_ports": [
+        1337
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 64
+        }
+      ],
       "tcp_startup_only": true
     },
     {
@@ -408,9 +599,18 @@
       "status": "create_enabled",
       "requires_flag": true,
       "run_as_user": 10001,
-      "ports": [1337],
-      "exposed_ports": [1337],
-      "writable_paths": [{"path": "/tmp", "size_mib": 64}],
+      "ports": [
+        1337
+      ],
+      "exposed_ports": [
+        1337
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 64
+        }
+      ],
       "tcp_startup_only": true
     },
     {
@@ -442,9 +642,39 @@
       "status": "create_enabled",
       "requires_flag": true,
       "run_as_user": 10001,
-      "ports": [31337],
-      "exposed_ports": [31337],
-      "writable_paths": [{"path": "/tmp", "size_mib": 64}]
+      "ports": [
+        31337
+      ],
+      "exposed_ports": [
+        31337
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 64
+        }
+      ]
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/rev-tinyvm/tinyvm@sha256:3d1dff5cfa702f76bbfd8d244f20ea6e465f57a39e1d87576de55910562e31c1",
+      "container": "tinyvm",
+      "isolation_profile": "PWN",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 10001,
+      "ports": [
+        1337
+      ],
+      "exposed_ports": [
+        1337
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 64
+        }
+      ],
+      "tcp_startup_only": true
     }
   ]
 }
