@@ -245,7 +245,7 @@ func (t *FreeRDPTransport) Execute(ctx context.Context, c Connection, j Job) Out
 		case <-connectDeadline.C:
 			return transportFailure("unreachable", "runner_unavailable")
 		case <-runDeadline:
-			return transportFailure("timeout", "execution_deadline")
+			return Outcome{Result: "timeout", StartedAt: state.startedAt, ErrorCode: "execution_deadline"}
 		case <-tick.C:
 		}
 	}
