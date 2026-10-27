@@ -46,7 +46,7 @@ func TestPublishedPwnCatalogRequiresBackendFlags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(catalog.RequiredFlagImages()) != 9 || len(catalog.RequiredFlagFiles()) != 7 {
+	if len(catalog.RequiredFlagImages()) != 10 || len(catalog.RequiredFlagFiles()) != 8 {
 		t.Fatal("PWN FLAG policy is incomplete")
 	}
 	random6 := "ghcr.io/msg-ctf/challenges/pwn-random6/random6@sha256:8005b9a77163b476a4638d06905f8a18b5770311fa033e163fc706000d3b834a"
@@ -58,6 +58,7 @@ func TestPublishedPwnCatalogRequiresBackendFlags(t *testing.T) {
 	for image, expectedPath := range map[string]string{
 		"ghcr.io/msg-ctf/challenges/pwn-note/service@sha256:3c1dcb4478d82564ad298b1cddee770f5d786a6d1052b1f842a538f91439868e": "/home/ctf/flag.txt",
 		"ghcr.io/msg-ctf/challenges/pwn-ghost-file/chall@sha256:59bdd9111ad77a9a682f0e862eade12193b62d9fd6fd77b9ee810cd7e06460bc": "/flag",
+		"ghcr.io/msg-ctf/challenges/pwn-ghost-file/chall@sha256:d9d2a07ebfcea332f49b07273a8ac64a0665b49995c892a147c31d99e9c7eba8": "/flag",
 		"ghcr.io/msg-ctf/challenges/pwn-price-tag/price-tag@sha256:fb15aab14664eafbcccfa94edec0597e81f6d78c575b8b562547bc8955dee751": "/home/player/flag.txt",
 		"ghcr.io/msg-ctf/challenges/pwn-price-tag/price-tag@sha256:c92f888b7e01c931815409fb61e7224b5ab56d2603fc15edbc3568127aad7169": "/home/player/flag.txt",
 	} {
