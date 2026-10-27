@@ -6,6 +6,7 @@ from pathlib import Path
 import socket
 import socketserver
 import ssl
+import struct
 import subprocess
 import tempfile
 import threading
@@ -163,6 +164,130 @@ stream {{
         connection.request('GET', '/')
         self.assertEqual(connection.getresponse().read(), b'web!')
         self.assertIs(connection.sock, web_socket, 'TCP deletion must not terminate unrelated web connections')
+
+    def blackhole_first_upstream_connection(self, target, suffix):
+        tool = os.environ['GATEWAY_TEST_IPTABLES']
+        chain = 'GW111_' + suffix
+        command = [tool, '-w', '5', '-t', 'mangle']
+        subprocess.run(command + ['-N', chain], check=True, capture_output=True)
+        jump = ['-p', 'tcp', '-d', '127.0.0.1', '--dport', str(target), '--syn', '-j', chain]
+        def remove():
+            subprocess.run(command + ['-D', 'OUTPUT'] + jump, capture_output=True)
+            subprocess.run(command + ['-F', chain], capture_output=True)
+            subprocess.run(command + ['-X', chain], capture_output=True)
+        self.addCleanup(remove)
+        # A dropped initial SYN is not yet a confirmed conntrack entry, so a
+        # connmark cannot reliably remember that flow. Observe its SYN-SENT
+        # socket in this private namespace instead, then allow only different
+        # source ports. Every retransmission of the first socket stays dropped
+        subprocess.run(command + ['-A', chain, '-j', 'DROP'], check=True, capture_output=True)
+        subprocess.run(command + ['-I', 'OUTPUT', '1'] + jump, check=True, capture_output=True)
+        fault = {'source_port': None, 'error': None}
+        def identify_first_flow():
+            try:
+                deadline = time.monotonic() + 6
+                destination = f'0100007F:{target:04X}'
+                while time.monotonic() < deadline:
+                    for line in Path('/proc/net/tcp').read_text().splitlines()[1:]:
+                        fields = line.split()
+                        if fields[2] == destination and fields[3] == '02':
+                            source = int(fields[1].split(':')[1], 16)
+                            subprocess.run(command + ['-I', chain, '1', '-p', 'tcp', '!', '--sport', str(source), '-j', 'RETURN'], check=True, capture_output=True)
+                            fault['source_port'] = source
+                            return
+                    time.sleep(.005)
+                raise TimeoutError('No owned SYN-SENT socket observed')
+            except Exception as error:
+                fault['error'] = repr(error)
+        observer = threading.Thread(target=identify_first_flow, daemon=True)
+        observer.start()
+        self.addCleanup(observer.join, 7)
+        self.faults = getattr(self, 'faults', []) + [fault]
+        return remove
+
+    def tls_http_request(self, hostname):
+        context = ssl._create_unverified_context()  # isolated test certificate
+        start = time.monotonic()
+        with context.wrap_socket(socket.create_connection(('127.0.0.1', 443), timeout=10),
+                                 server_hostname=hostname) as connection:
+            connection.sendall(('GET / HTTP/1.1\r\nHost: ' + hostname + '\r\nConnection: close\r\n\r\n').encode())
+            data = b''
+            while chunk := connection.recv(4096):
+                data += chunk
+        return data, time.monotonic() - start
+
+    @unittest.skipUnless(os.environ.get('GATEWAY_TEST_IPTABLES'), 'Requires private iptables in an isolated network namespace')
+    def test_connect_retry_recovers_first_blackholed_flow_before_any_application_data(self):
+        config = json.loads(c.CONFIG.read_text())
+        config.pop('tcp_public_ports')
+        c.CONFIG.write_text(json.dumps(config))
+        self.config.write_text(self.config.read_text().replace('proxy_connect_timeout 1s;', 'proxy_connect_timeout 5s;'))
+        route = self.put('transient-syn-loss', self.backend(), 'http')
+        routes, deleted = c.parse_registry(c.REGISTRY.read_text(), 'gate.msgctf.kr', '127.0.0.2')
+        target = routes['transient-syn-loss']['target_port']
+        c.REGISTRY.write_text(c.render_legacy(routes, deleted))
+        self.reload_nginx()
+        time.sleep(.2)
+        self.assertIn(b'200 OK', self.tls_http_request(route['hostname'])[0])
+        remove = self.blackhole_first_upstream_connection(target, 'OLD')
+        old_data, old_seconds = self.tls_http_request(route['hostname'])
+        remove()
+        self.assertEqual(old_data, b'')
+        self.assertGreater(old_seconds, 4.5)
+        c.REGISTRY.write_text(c.render(routes, deleted))
+        self.reload_nginx()
+        time.sleep(.2)
+        self.assertIn(b'200 OK', self.tls_http_request(route['hostname'])[0])
+        self.blackhole_first_upstream_connection(target, 'NEW')
+        new_data, new_seconds = self.tls_http_request(route['hostname'])
+        self.assertIn(b'200 OK', new_data)
+        self.assertTrue(new_data.endswith(b'web!'))
+        self.assertLess(new_seconds, 4.5)
+        self.assertTrue(all(fault['source_port'] and not fault['error'] for fault in self.faults), self.faults)
+        print(json.dumps({'fault': 'first_upstream_tcp_flow_blackholed', 'legacy_seconds': old_seconds,
+                          'bounded_retry_seconds': new_seconds, 'legacy_bytes': len(old_data),
+                          'retry_http_200': b'200 OK' in new_data, 'faults': self.faults}), flush=True)
+        self.assertEqual(c.parse_registry(c.REGISTRY.read_text(), 'gate.msgctf.kr', '127.0.0.2'), (routes, deleted))
+
+    def test_reset_after_receiving_command_never_replays_application_bytes(self):
+        received = []
+        class ResetAfterRead(socketserver.BaseRequestHandler):
+            def handle(self):
+                received.append(self.request.recv(4096))
+                self.request.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
+        server = socketserver.ThreadingTCPServer(('127.0.0.1', 0), ResetAfterRead)
+        server.daemon_threads = True
+        self.servers.append(server)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.put('one-command', server.server_address[1])
+        with self.connect() as connection:
+            connection.settimeout(2)
+            connection.sendall(b'execute-once\n')
+            try:
+                self.assertEqual(connection.recv(4096), b'')
+            except ConnectionResetError:
+                pass
+        time.sleep(.2)
+        self.assertEqual(received, [b'execute-once\n'])
+
+    def test_permanently_unavailable_target_has_two_attempts_and_remains_same_owner(self):
+        with socket.socket() as available:
+            available.bind(('127.0.0.1', 0))
+            target = available.getsockname()[1]
+        route = self.put('unavailable', target)
+        start = time.monotonic()
+        with self.connect() as connection:
+            connection.settimeout(2)
+            try:
+                connection.sendall(b'not-executed')
+                self.assertEqual(connection.recv(1), b'')
+            except ConnectionResetError:
+                pass
+        self.assertLess(time.monotonic() - start, 2)
+        errors = [line for line in (self.root / 'error.log').read_text().splitlines()
+                  if 'connect() failed' in line and f'127.0.0.1:{target}' in line]
+        self.assertEqual(len(errors), 2)
+        self.assertEqual(c.dispatch({'operation': 'get', 'instance_id': 'unavailable'}), (200, route))
 
     def test_existing_tls_tcp_works_before_and_after_pool_activation(self):
         config = json.loads(c.CONFIG.read_text())

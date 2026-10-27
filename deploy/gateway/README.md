@@ -50,6 +50,20 @@ problem data; TCP half-close preserves replies after client input EOF.
 
 ## Lifecycle guarantees
 
+Each route now uses two upstream peers with the **same approved IP and port**.
+An upstream connection that never establishes gets a fresh socket after a
+2-second connect timeout, with at most two attempts and a 4-second retry budget.
+NGINX does not retry after a connection establishes, so application commands are
+not replayed. Route metadata, TLS transport and public addresses stay unchanged.
+The optional plaintext TCP pool is not enabled by this change.
+
+The controller accepts both the previous canonical registry and the new
+canonical registry. A normal successful mutation rewrites the current routes in
+the new format. For rollback, stop management mutations, read the **current**
+registry with this compatible controller, render it with `render_legacy`, validate
+and reload NGINX, and only then restore the previous controller. Never restore a
+stale registry snapshot over newer routes or tombstones.
+
 - One host-wide nonblocking registry lock protects allocation and mutation;
   contention returns `GATEWAY_BUSY` 503 for retry with the same ID/body.
 - Persisted route metadata includes `public_port`. Replay, restart and changed
@@ -123,3 +137,13 @@ prefix and echo/web backends; **never run it in the production network namespace
 No production environment/token/configuration is used. An older local WSL kernel
 without `CONFIG_INET_DIAG_DESTROY` can run unit/API tests but cannot validate
 successful active-socket destruction; cleanup must fail safely on that kernel.
+
+The transient-connect fault test additionally requires `GATEWAY_TEST_IPTABLES`
+pointing to iptables. It drops every SYN on the first owned upstream socket in
+the isolated namespace, then permits only different source ports. This avoids
+depending on a particular kernel SYN retransmission schedule or on unconfirmed
+conntrack marks. The legacy renderer must fail after five seconds, while the new
+renderer must recover through a fresh socket to the same endpoint. Additional
+tests require exactly two attempts on connection refusal and no command replay
+after an established connection resets. These tests model a connection failure;
+they do not establish the historical cause of packet loss on a live network.
