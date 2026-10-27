@@ -62,12 +62,21 @@ func LoadConfig(path string) (*RuntimeConfig, error) {
 		return nil, errors.New("Windows broker token requires an absolute path")
 	}
 	if cfg.HTTPSExecutor != nil {
-		if len(cfg.HTTPSExecutor.Targets) == 0 || len(cfg.RDP.Credentials) != 0 {
-			return nil, errors.New("Windows HTTPS executor targets are required without RDP credentials")
+		if len(cfg.RDP.Credentials) != 0 {
+			return nil, errors.New("Windows HTTPS executor cannot share RDP credentials")
 		}
-		for id, target := range cfg.HTTPSExecutor.Targets {
-			if !ValidID(id) || !filepath.IsAbs(target.TokenFile) || !filepath.IsAbs(target.CertificateFile) || target.TokenFile == cfg.BrokerTokenFile || target.CertificateFile == cfg.BrokerTokenFile {
-				return nil, errors.New("invalid Windows HTTPS executor credential reference")
+		if cfg.HTTPSExecutor.UsesBrokerMTLS() {
+			if len(cfg.HTTPSExecutor.Targets) != 0 || !filepath.IsAbs(cfg.HTTPSExecutor.ClientCertificateFile) || !filepath.IsAbs(cfg.HTTPSExecutor.ClientKeyFile) || cfg.HTTPSExecutor.ClientCertificateFile == cfg.HTTPSExecutor.ClientKeyFile || cfg.HTTPSExecutor.ClientCertificateFile == cfg.BrokerTokenFile || cfg.HTTPSExecutor.ClientKeyFile == cfg.BrokerTokenFile || cfg.HTTPSExecutor.Port < 0 || cfg.HTTPSExecutor.Port > 65535 {
+				return nil, errors.New("invalid Windows Broker mTLS credential reference")
+			}
+		} else {
+			if len(cfg.HTTPSExecutor.Targets) == 0 || cfg.HTTPSExecutor.Port != 0 {
+				return nil, errors.New("Windows HTTPS executor targets are required without RDP credentials")
+			}
+			for id, target := range cfg.HTTPSExecutor.Targets {
+				if !ValidID(id) || !filepath.IsAbs(target.TokenFile) || !filepath.IsAbs(target.CertificateFile) || target.TokenFile == cfg.BrokerTokenFile || target.CertificateFile == cfg.BrokerTokenFile {
+					return nil, errors.New("invalid Windows HTTPS executor credential reference")
+				}
 			}
 		}
 	} else {
@@ -115,10 +124,16 @@ func insideDirectory(root, path string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
+// The deployed Runtime uses root:provisioner 0640 secrets. Group read is
+// permitted, but group write/execute and all world access are not.
+func privateSecretPermissions(info os.FileInfo) bool {
+	return runtime.GOOS == "windows" || info.Mode().Perm()&0037 == 0
+}
+
 // ReadBrokerToken never returns a file path or secret contents in an error.
 func (c RuntimeConfig) ReadBrokerToken() (string, error) {
 	info, err := os.Lstat(c.BrokerTokenFile)
-	if err != nil || !info.Mode().IsRegular() || info.Size() > 4096 || runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 4096 || !privateSecretPermissions(info) {
 		return "", errors.New("Windows broker token file must be private and regular")
 	}
 	raw, err := os.ReadFile(c.BrokerTokenFile)

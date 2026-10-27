@@ -145,7 +145,7 @@ func TestDirectCheckerQueuesWithoutVMAndBindsWhenReady(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service.SetPoolTargets(map[string]ExecutorCredential{testTarget: {}})
+	service.SetPoolAnyTargets()
 	digest := sha256.Sum256([]byte("MZ fixture"))
 	request := &CheckerRequest{RequestVersion: 1, SelectionMode: "broker_pool", SubmissionID: testRequest, AssignmentID: "00000000-0000-4000-8000-000000000003", PayloadSHA256: hex.EncodeToString(digest[:]), TimeoutSeconds: 30, MaxOutputBytes: 65536}
 	checker := CheckerJob{AssignmentID: request.AssignmentID, PayloadSHA256: request.PayloadSHA256, BackendURL: "https://backend.example", JobToken: "backend-job-token-secret", Request: request}
@@ -182,5 +182,14 @@ func TestDirectCheckerQueuesWithoutVMAndBindsWhenReady(t *testing.T) {
 	replay, created, err := service.QueueChecker(context.Background(), testRequest, UnboundTargetID, checker, 30*time.Second)
 	if err != nil || created || replay.ID != record.ID {
 		t.Fatalf("replay after bind: %+v created=%v err=%v", replay, created, err)
+	}
+}
+
+func TestCheckerAcceptsBrokerDiscoveredPoolWithoutStaticTargets(t *testing.T) {
+	service, _, _ := serviceFixture(t, &serviceBroker{}, Outcome{})
+	service.SetPoolAnyTargets()
+	checker, err := NewChecker(service, CheckerConfig{BackendURL: "https://backend.example", CheckerCommitSHA: strings.Repeat("a", 40), VMTemplateSHA256: strings.Repeat("b", 64), DriverSHA256: strings.Repeat("c", 64), ConfigVersion: "test-v1"}, &http.Client{Timeout: time.Second})
+	if err != nil || checker == nil {
+		t.Fatalf("dynamic Broker pool rejected: checker=%+v err=%v", checker, err)
 	}
 }

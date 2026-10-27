@@ -94,7 +94,11 @@ func initializeWindows(config appConfig, store *windowsruntime.PostgresStore) (*
 		return nil, nil, err
 	}
 	if cfg.HTTPSExecutor != nil {
-		service.SetPoolTargets(cfg.HTTPSExecutor.Targets)
+		if cfg.HTTPSExecutor.UsesBrokerMTLS() {
+			service.SetPoolAnyTargets()
+		} else {
+			service.SetPoolTargets(cfg.HTTPSExecutor.Targets)
+		}
 	}
 	if cfg.Checker == nil {
 		return service, nil, nil

@@ -40,6 +40,7 @@ type Service struct {
 	checkerHTTPClient    *http.Client
 	checkerServiceTokens map[string]string
 	poolTargets          map[string]bool
+	poolAnyTargets       bool
 }
 
 func NewService(cfg ServiceConfig, store Store, broker Broker, transport Transport) (*Service, error) {
@@ -50,10 +51,15 @@ func NewService(cfg ServiceConfig, store Store, broker Broker, transport Transpo
 }
 func (s *Service) MaxPayload() int { return s.cfg.MaxPayload }
 func (s *Service) SetPoolTargets(targets map[string]ExecutorCredential) {
+	s.poolAnyTargets = false
 	s.poolTargets = make(map[string]bool, len(targets))
 	for id := range targets {
 		s.poolTargets[id] = true
 	}
+}
+func (s *Service) SetPoolAnyTargets() {
+	s.poolTargets = nil
+	s.poolAnyTargets = true
 }
 func (s *Service) SetCheckerServiceTokens(tokens map[string]string) {
 	s.checkerServiceTokens = make(map[string]string, len(tokens))
@@ -447,6 +453,11 @@ func (s *Service) ProcessOne(ctx context.Context) error {
 			}
 			return release("BROKER_CONNECTION_PENDING")
 		}
+		if validator, ok := s.transport.(interface{ ValidateConnection(Connection) error }); ok {
+			if validator.ValidateConnection(conn) != nil {
+				return reject("EXECUTOR_CONNECTION_INVALID")
+			}
+		}
 		r.Connection = &conn
 		r.Phase = "START_PENDING"
 		r.StartedBody, _ = json.Marshal(struct {
@@ -507,7 +518,7 @@ func (s *Service) selectPoolTarget(ctx context.Context, executionID, owner strin
 	source, ok := s.broker.(interface {
 		List(context.Context, int, string) (VMPage, error)
 	})
-	if !ok || len(s.poolTargets) == 0 {
+	if !ok || !s.poolAnyTargets && len(s.poolTargets) == 0 {
 		return "", ErrTargetDiscoveryUnavailable
 	}
 	cursor := ""
@@ -517,7 +528,7 @@ func (s *Service) selectPoolTarget(ctx context.Context, executionID, owner strin
 			return "", err
 		}
 		for _, item := range page.Items {
-			if !s.poolTargets[item.TargetID] {
+			if !s.poolAnyTargets && !s.poolTargets[item.TargetID] {
 				continue
 			}
 			bound, bindErr := s.store.BindTarget(ctx, executionID, owner, item.TargetID)

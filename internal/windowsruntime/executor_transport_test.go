@@ -2,20 +2,101 @@ package windowsruntime
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"testing"
 	"time"
 )
+
+func TestHTTPSExecutorBrokerMTLSUsesPinnedCertificateWithoutBearer(t *testing.T) {
+	id := "b51e0461-746e-424b-a8c0-fb307ed815b3"
+	target := "e0e2843e-728e-47eb-a2ae-281b35cf6784"
+	clientKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientDER, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "runtime-client"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}, &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "runtime-client"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}, &clientKey.PublicKey, clientKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(clientKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	certPath, keyPath := filepath.Join(dir, "client.crt"), filepath.Join(dir, "client.key")
+	if err := os.WriteFile(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: clientDER}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(keyPath, 0640); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if len(r.TLS.PeerCertificates) != 1 || r.Header.Get("Authorization") != "" || r.URL.Path != "/v1/executions/"+id {
+			t.Errorf("unexpected mTLS request: %s %s", r.Method, r.URL.Path)
+		}
+		if r.Method == http.MethodPut {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"execution_id": id, "status": "succeeded", "exit_code": 0, "stdout_base64": "b2sK", "stderr_base64": "", "output_truncated": false, "duration_ms": 1})
+	}))
+	server.TLS = &tls.Config{ClientAuth: tls.RequireAnyClientCert}
+	server.StartTLS()
+	defer server.Close()
+	address, portString, _ := net.SplitHostPort(server.Listener.Addr().String())
+	port, _ := strconv.Atoi(portString)
+	clientPair, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe, err := tls.DialWithDialer(&net.Dialer{Timeout: time.Second}, "tcp", server.Listener.Addr().String(), &tls.Config{InsecureSkipVerify: true, Certificates: []tls.Certificate{clientPair}}) // test-only: capture local TLS interceptor certificate
+	if err != nil {
+		t.Fatalf("mTLS fixture handshake: %v", err)
+	}
+	serverPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: probe.ConnectionState().PeerCertificates[0].Raw})
+	probe.Close()
+	transport, err := NewHTTPSExecutorTransport(HTTPSExecutorConfig{ClientCertificateFile: certPath, ClientKeyFile: keyPath, Port: port})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection := Connection{TargetID: target, Host: address, Protocol: "rdp", Port: 3389, ExecutorCertificatePEM: string(serverPEM)}
+	if err := transport.ValidateConnection(connection); err != nil {
+		t.Fatal(err)
+	}
+	missingPin := connection
+	missingPin.ExecutorCertificatePEM = ""
+	if err := transport.ValidateConnection(missingPin); err == nil {
+		t.Fatal("accepted connection without Broker server certificate")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out := transport.Execute(ctx, connection, Job{ID: id, Payload: []byte("MZtest"), Timeout: 30 * time.Second, ConnectTimeout: time.Second, OutputLimit: 65536})
+	if out.Result != "succeeded" || out.ExitCode == nil || *out.ExitCode != 0 || out.Stdout != "ok\n" {
+		t.Fatalf("mTLS outcome: %+v", out)
+	}
+}
 
 func TestHTTPSExecutorTransportRunsAndCollectsResult(t *testing.T) {
 	id := "b51e0461-746e-424b-a8c0-fb307ed815b3"

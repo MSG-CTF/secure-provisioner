@@ -23,11 +23,13 @@ func validConnection() win.Connection {
 }
 
 func TestBrokerConnectionUsesBearerAndValidatesResponse(t *testing.T) {
+	connection := validConnection()
+	connection.ExecutorCertificatePEM = "-----BEGIN CERTIFICATE-----\nfixture\n-----END CERTIFICATE-----\n"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" || r.URL.Path != "/api/v1/runtime/windows-vms/"+targetID+"/connection" || r.Header.Get("Authorization") != "Bearer secret-token" {
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
-		_ = json.NewEncoder(w).Encode(validConnection())
+		_ = json.NewEncoder(w).Encode(connection)
 	}))
 	defer server.Close()
 	broker, err := win.NewBroker(server.URL+"/api/", "secret-token", server.Client())
@@ -35,7 +37,7 @@ func TestBrokerConnectionUsesBearerAndValidatesResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := broker.Connection(context.Background(), targetID)
-	if err != nil || got.Host != "203.0.113.10" || got.Username != "msgexec" {
+	if err != nil || got.Host != "203.0.113.10" || got.Username != "msgexec" || got.ExecutorCertificatePEM != connection.ExecutorCertificatePEM {
 		t.Fatalf("connection = %#v, %v", got, err)
 	}
 }

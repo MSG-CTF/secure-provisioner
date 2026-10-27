@@ -58,7 +58,7 @@ type Checker struct {
 }
 
 func NewChecker(service *Service, cfg CheckerConfig, client *http.Client) (*Checker, error) {
-	if service == nil || client == nil || (cfg.BackendURL == "") == (len(cfg.Backends) == 0) || len(cfg.Targets) == 0 || !checkerSHA40.MatchString(cfg.CheckerCommitSHA) || !checkerSHA64.MatchString(cfg.VMTemplateSHA256) || !checkerSHA64.MatchString(cfg.DriverSHA256) || cfg.ConfigVersion == "" || len(cfg.ConfigVersion) > 200 {
+	if service == nil || client == nil || (cfg.BackendURL == "") == (len(cfg.Backends) == 0) || len(cfg.Targets) == 0 && !service.poolAnyTargets || !checkerSHA40.MatchString(cfg.CheckerCommitSHA) || !checkerSHA64.MatchString(cfg.VMTemplateSHA256) || !checkerSHA64.MatchString(cfg.DriverSHA256) || cfg.ConfigVersion == "" || len(cfg.ConfigVersion) > 200 {
 		return nil, errors.New("invalid Windows checker configuration")
 	}
 	if cfg.BackendURL != "" {
@@ -124,7 +124,7 @@ func (c *Checker) SubmitForBackend(ctx context.Context, backendID string, reques
 			return Record{}, false, ErrInvalidSubmission
 		}
 	case "broker_pool":
-		if targetID != "" || request.ReadinessCheckID != "" || len(c.service.poolTargets) == 0 {
+		if targetID != "" || request.ReadinessCheckID != "" || !c.service.poolAnyTargets && len(c.service.poolTargets) == 0 {
 			return Record{}, false, ErrInvalidSubmission
 		}
 		targetID = UnboundTargetID

@@ -19,7 +19,6 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -33,7 +32,14 @@ type ExecutorCredential struct {
 }
 
 type HTTPSExecutorConfig struct {
-	Targets map[string]ExecutorCredential `json:"targets"`
+	Targets               map[string]ExecutorCredential `json:"targets,omitempty"`
+	ClientCertificateFile string                        `json:"client_certificate_file,omitempty"`
+	ClientKeyFile         string                        `json:"client_key_file,omitempty"`
+	Port                  int                           `json:"port,omitempty"`
+}
+
+func (c HTTPSExecutorConfig) UsesBrokerMTLS() bool {
+	return c.ClientCertificateFile != "" || c.ClientKeyFile != ""
 }
 
 type executorTarget struct {
@@ -43,9 +49,36 @@ type executorTarget struct {
 	port   int
 }
 
-type HTTPSExecutorTransport struct{ targets map[string]executorTarget }
+type HTTPSExecutorTransport struct {
+	targets    map[string]executorTarget
+	clientCert *tls.Certificate
+	port       int
+}
 
 func NewHTTPSExecutorTransport(cfg HTTPSExecutorConfig) (*HTTPSExecutorTransport, error) {
+	if cfg.UsesBrokerMTLS() {
+		if len(cfg.Targets) != 0 || !filepath.IsAbs(cfg.ClientCertificateFile) || !filepath.IsAbs(cfg.ClientKeyFile) || cfg.ClientCertificateFile == cfg.ClientKeyFile || cfg.Port < 0 || cfg.Port > 65535 {
+			return nil, errors.New("invalid Windows Broker mTLS configuration")
+		}
+		for _, path := range []string{cfg.ClientCertificateFile, cfg.ClientKeyFile} {
+			info, err := os.Lstat(path)
+			if err != nil || !info.Mode().IsRegular() || info.Size() > 1<<20 {
+				return nil, errors.New("Windows Broker mTLS credential unavailable")
+			}
+			if path == cfg.ClientKeyFile && !privateSecretPermissions(info) {
+				return nil, errors.New("Windows Broker mTLS key file must be private")
+			}
+		}
+		certificate, err := tls.LoadX509KeyPair(cfg.ClientCertificateFile, cfg.ClientKeyFile)
+		if err != nil || len(certificate.Certificate) == 0 {
+			return nil, errors.New("Windows Broker mTLS key pair invalid")
+		}
+		port := cfg.Port
+		if port == 0 {
+			port = 443
+		}
+		return &HTTPSExecutorTransport{clientCert: &certificate, port: port}, nil
+	}
 	if len(cfg.Targets) == 0 {
 		return nil, errors.New("Windows HTTPS executor targets are required")
 	}
@@ -55,7 +88,7 @@ func NewHTTPSExecutorTransport(cfg HTTPSExecutorConfig) (*HTTPSExecutorTransport
 			return nil, errors.New("invalid Windows HTTPS executor target")
 		}
 		info, err := os.Lstat(reference.TokenFile)
-		if err != nil || !info.Mode().IsRegular() || info.Size() > 4096 || runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
+		if err != nil || !info.Mode().IsRegular() || info.Size() > 4096 || !privateSecretPermissions(info) {
 			return nil, errors.New("Windows HTTPS executor token file must be private and regular")
 		}
 		tokenRaw, err := os.ReadFile(reference.TokenFile)
@@ -137,15 +170,50 @@ type executorResult struct {
 }
 
 func (t *HTTPSExecutorTransport) endpoint(c Connection) (executorTarget, string, error) {
-	target, ok := t.targets[c.TargetID]
 	address, err := netip.ParseAddr(c.Host)
-	if !ok || !ValidID(c.TargetID) || c.Protocol != "rdp" || err != nil || address.Zone() != "" || address.IsUnspecified() || address.IsMulticast() {
+	if !ValidID(c.TargetID) || c.Protocol != "rdp" || err != nil || address.Zone() != "" || address.IsUnspecified() || address.IsMulticast() {
+		return executorTarget{}, "", errors.New("invalid Windows executor target")
+	}
+	if t.clientCert != nil {
+		block, rest := pemDecodeCertificate([]byte(c.ExecutorCertificatePEM))
+		if block == nil || len(rest) != 0 || len(c.ExecutorCertificatePEM) > 1<<20 {
+			return executorTarget{}, "", errors.New("invalid Broker executor certificate")
+		}
+		cert, err := x509.ParseCertificate(block)
+		if err != nil || cert.VerifyHostname(c.Host) != nil || time.Now().Before(cert.NotBefore) || time.Now().After(cert.NotAfter) {
+			return executorTarget{}, "", errors.New("Broker executor certificate does not match VM")
+		}
+		fingerprint := sha256.Sum256(cert.Raw)
+		roots := x509.NewCertPool()
+		roots.AddCert(cert)
+		client := &http.Client{
+			Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots, Certificates: []tls.Certificate{*t.clientCert}, VerifyConnection: func(state tls.ConnectionState) error {
+				if len(state.PeerCertificates) != 1 {
+					return errors.New("Windows executor certificate changed")
+				}
+				actual := sha256.Sum256(state.PeerCertificates[0].Raw)
+				if subtle.ConstantTimeCompare(fingerprint[:], actual[:]) != 1 {
+					return errors.New("Windows executor certificate changed")
+				}
+				return nil
+			}}, Proxy: nil, MaxIdleConnsPerHost: 2, IdleConnTimeout: 30 * time.Second},
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		}
+		return executorTarget{cert: cert, client: client, port: t.port}, "https://" + net.JoinHostPort(c.Host, strconv.Itoa(t.port)), nil
+	}
+	target, ok := t.targets[c.TargetID]
+	if !ok {
 		return executorTarget{}, "", errors.New("invalid Windows executor target")
 	}
 	if err := target.cert.VerifyHostname(c.Host); err != nil {
 		return executorTarget{}, "", errors.New("Windows executor certificate does not match Broker host")
 	}
 	return target, "https://" + net.JoinHostPort(c.Host, strconv.Itoa(target.port)), nil
+}
+
+func (t *HTTPSExecutorTransport) ValidateConnection(c Connection) error {
+	_, _, err := t.endpoint(c)
+	return err
 }
 
 func (t *HTTPSExecutorTransport) request(ctx context.Context, target executorTarget, method, url string, body []byte, job Job) (*http.Response, error) {
@@ -157,7 +225,9 @@ func (t *HTTPSExecutorTransport) request(ctx context.Context, target executorTar
 	if err != nil {
 		return nil, err
 	}
-	r.Header.Set("Authorization", "Bearer "+target.token)
+	if target.token != "" {
+		r.Header.Set("Authorization", "Bearer "+target.token)
+	}
 	if method == http.MethodPut {
 		digest := sha256.Sum256(body)
 		r.Header.Set("Content-Type", "application/octet-stream")

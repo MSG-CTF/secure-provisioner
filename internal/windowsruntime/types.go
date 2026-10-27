@@ -17,13 +17,14 @@ var (
 const UnboundTargetID = "00000000-0000-0000-0000-000000000000"
 
 type Connection struct {
-	TargetID string `json:"resource_target_id"`
-	Name     string `json:"name"`
-	Protocol string `json:"protocol"`
-	Host     string `json:"host"`
-	Port     int    `json:"port"`
-	Username string `json:"username"`
-	RDPFile  string `json:"rdp_file"`
+	TargetID               string `json:"resource_target_id"`
+	Name                   string `json:"name"`
+	Protocol               string `json:"protocol"`
+	Host                   string `json:"host"`
+	Port                   int    `json:"port"`
+	Username               string `json:"username"`
+	RDPFile                string `json:"rdp_file"`
+	ExecutorCertificatePEM string `json:"executor_certificate_pem,omitempty"`
 }
 
 // VMPage is a broker snapshot, not an execution reservation.

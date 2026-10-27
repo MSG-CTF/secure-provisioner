@@ -135,7 +135,7 @@ func (broker *HTTPBroker) List(ctx context.Context, limit int, after string) (VM
 
 func validBrokerConnection(connection Connection, targetID string) bool {
 	addr, err := netip.ParseAddr(connection.Host)
-	if connection.TargetID != targetID || !ValidID(connection.TargetID) || connection.Protocol != "rdp" || err != nil || addr.Zone() != "" || addr.IsUnspecified() || addr.IsMulticast() || connection.Port < 1 || connection.Port > 65535 {
+	if connection.TargetID != targetID || !ValidID(connection.TargetID) || connection.Protocol != "rdp" || err != nil || addr.Zone() != "" || addr.IsUnspecified() || addr.IsMulticast() || connection.Port < 1 || connection.Port > 65535 || len(connection.ExecutorCertificatePEM) > 1<<20 {
 		return false
 	}
 	if connection.Username == "" || len(connection.Username) > 256 {

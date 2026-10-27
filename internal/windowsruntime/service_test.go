@@ -55,6 +55,37 @@ type serviceTransport struct {
 	job     Job
 }
 
+type rejectedConnectionTransport struct{ calls int }
+
+func (t *rejectedConnectionTransport) ValidateConnection(Connection) error {
+	return errors.New("invalid Broker executor certificate")
+}
+func (t *rejectedConnectionTransport) Execute(context.Context, Connection, Job) Outcome {
+	t.calls++
+	return Outcome{Result: "failed"}
+}
+
+func TestServiceRejectsInvalidExecutorCertificateBeforeBrokerStart(t *testing.T) {
+	broker := &serviceBroker{}
+	store := NewMemoryStore()
+	transport := &rejectedConnectionTransport{}
+	service, err := NewService(DefaultServiceConfig(), store, broker, transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, _, err := service.Submit(context.Background(), testRequest, testTarget, []byte("MZ benign"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ProcessOne(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	final, _ := store.Get(context.Background(), record.ID)
+	if len(broker.events) != 0 || transport.calls != 0 || final.Phase != "REJECTED" {
+		t.Fatalf("invalid certificate used VM: %+v events=%d calls=%d", final, len(broker.events), transport.calls)
+	}
+}
+
 func (x *serviceTransport) Execute(_ context.Context, _ Connection, job Job) Outcome {
 	if !x.broker.approved {
 		panic("RDP before broker approval")

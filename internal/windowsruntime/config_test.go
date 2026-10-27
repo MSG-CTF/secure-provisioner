@@ -4,9 +4,33 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
+
+func TestBrokerTokenAcceptsServiceGroupReadOnly(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits required")
+	}
+	path := filepath.Join(t.TempDir(), "broker-token")
+	if err := os.WriteFile(path, []byte("broker-runtime-token-secret-value"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0640); err != nil {
+		t.Fatal(err)
+	}
+	cfg := RuntimeConfig{BrokerTokenFile: path}
+	if _, err := cfg.ReadBrokerToken(); err != nil {
+		t.Fatalf("service-group readable token rejected: %v", err)
+	}
+	if err := os.Chmod(path, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.ReadBrokerToken(); err == nil {
+		t.Fatal("world-readable Broker token accepted")
+	}
+}
 
 func TestConfigBoundsAndSecretsStayOutsideShare(t *testing.T) {
 	root := t.TempDir()
@@ -71,5 +95,22 @@ func TestConfigSelectsHTTPSExecutorWithoutRDPFiles(t *testing.T) {
 	write()
 	if _, err := LoadConfig(path); err == nil {
 		t.Fatal("Broker token path reused for VM executor")
+	}
+}
+
+func TestConfigSelectsBrokerMTLSWithoutStaticTargets(t *testing.T) {
+	root := t.TempDir()
+	cfg := RuntimeConfig{BrokerURL: "https://broker.mjsec.kr/api", BrokerTokenFile: filepath.Join(root, "broker-token"), HTTPSExecutor: &HTTPSExecutorConfig{ClientCertificateFile: filepath.Join(root, "client.crt"), ClientKeyFile: filepath.Join(root, "client.key")}}
+	path := filepath.Join(root, "windows.json")
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadConfig(path)
+	if err != nil || got.HTTPSExecutor == nil || !got.HTTPSExecutor.UsesBrokerMTLS() {
+		t.Fatalf("Broker mTLS config: %+v err=%v", got, err)
 	}
 }

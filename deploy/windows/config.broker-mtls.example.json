@@ -1,0 +1,23 @@
+{
+  "broker_url": "https://broker.mjsec.kr/api",
+  "broker_token_file": "/etc/secure-provisioner/secrets/gateway-runtime-token",
+  "https_executor": {
+    "client_certificate_file": "/etc/secure-provisioner/secrets/windows-runtime-client.crt",
+    "client_key_file": "/etc/secure-provisioner/secrets/windows-runtime-client.key"
+  },
+  "execution_timeout_seconds": 180,
+  "connect_timeout_seconds": 60,
+  "max_payload_bytes": 10485760,
+  "output_limit_bytes": 65536,
+  "concurrency": 2,
+  "checker": {
+    "backends": {
+      "internal": "https://internal-backend.example.com",
+      "external": "https://external-backend.example.com"
+    },
+    "checker_commit_sha": "<deployed Go commit, 40 lowercase hex characters>",
+    "vm_template_sha256": "<approved Windows VM image, 64 lowercase hex characters>",
+    "driver_sha256": "<approved driver, 64 lowercase hex characters>",
+    "config_version": "windows-broker-mtls-v1"
+  }
+}
