@@ -16,8 +16,6 @@
       "external": "https://external-backend.example.com"
     },
     "checker_commit_sha": "<deployed Go commit, 40 lowercase hex characters>",
-    "vm_template_sha256": "<approved Windows VM image, 64 lowercase hex characters>",
-    "driver_sha256": "<approved driver, 64 lowercase hex characters>",
     "config_version": "windows-broker-mtls-v1"
   }
 }

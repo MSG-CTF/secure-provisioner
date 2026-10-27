@@ -44,7 +44,7 @@ func prepareCheckerResult(record *Record, finishedAt time.Time) error {
 		}
 	}
 	id := uuid.NewString()
-	body, err := json.Marshal(map[string]any{
+	event := map[string]any{
 		"request_version":    1,
 		"event_id":           id,
 		"assignment_id":      request.AssignmentID,
@@ -53,8 +53,6 @@ func prepareCheckerResult(record *Record, finishedAt time.Time) error {
 		"observed_at":        finishedAt.UTC().Format(time.RFC3339Nano),
 		"config_version":     request.ConfigVersion,
 		"checker_commit_sha": request.CheckerCommitSHA,
-		"vm_template_sha256": request.VMTemplateSHA256,
-		"driver_sha256":      request.DriverSHA256,
 		"execution_status":   status,
 		"started":            started,
 		"started_at":         startedAt,
@@ -62,7 +60,12 @@ func prepareCheckerResult(record *Record, finishedAt time.Time) error {
 		"output":             map[string]any{"stdout": record.Outcome.Stdout, "stderr": record.Outcome.Stderr, "encoding": "utf-8", "stdout_truncated": record.Outcome.StdoutTruncated, "stderr_truncated": record.Outcome.StderrTruncated},
 		"cleanup_complete":   nil,
 		"exit_code":          record.Outcome.ExitCode,
-	})
+	}
+	if request.SelectionMode != "broker_pool" {
+		event["vm_template_sha256"] = request.VMTemplateSHA256
+		event["driver_sha256"] = request.DriverSHA256
+	}
+	body, err := json.Marshal(event)
 	if err != nil {
 		return err
 	}

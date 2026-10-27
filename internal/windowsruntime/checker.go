@@ -58,7 +58,8 @@ type Checker struct {
 }
 
 func NewChecker(service *Service, cfg CheckerConfig, client *http.Client) (*Checker, error) {
-	if service == nil || client == nil || (cfg.BackendURL == "") == (len(cfg.Backends) == 0) || len(cfg.Targets) == 0 && !service.poolAnyTargets || !checkerSHA40.MatchString(cfg.CheckerCommitSHA) || !checkerSHA64.MatchString(cfg.VMTemplateSHA256) || !checkerSHA64.MatchString(cfg.DriverSHA256) || cfg.ConfigVersion == "" || len(cfg.ConfigVersion) > 200 {
+	validDigests := cfg.VMTemplateSHA256 == "" && cfg.DriverSHA256 == "" || checkerSHA64.MatchString(cfg.VMTemplateSHA256) && checkerSHA64.MatchString(cfg.DriverSHA256)
+	if service == nil || client == nil || (cfg.BackendURL == "") == (len(cfg.Backends) == 0) || len(cfg.Targets) == 0 && !service.poolAnyTargets || !checkerSHA40.MatchString(cfg.CheckerCommitSHA) || !validDigests || cfg.ConfigVersion == "" || len(cfg.ConfigVersion) > 200 {
 		return nil, errors.New("invalid Windows checker configuration")
 	}
 	if cfg.BackendURL != "" {
@@ -114,17 +115,17 @@ func (c *Checker) SubmitForBackend(ctx context.Context, backendID string, reques
 	if !ok {
 		return Record{}, false, ErrInvalidSubmission
 	}
-	if request.RequestVersion != 1 || !ValidID(request.SubmissionID) || !ValidID(request.AssignmentID) || !ValidID(request.TeamID) || !ValidID(request.ChallengeID) || !ValidID(request.ReleaseID) || request.TimeoutSeconds < 10 || request.TimeoutSeconds > 180 || request.MaxOutputBytes != c.service.cfg.OutputLimit || len(request.PayloadSHA256) != 64 || len(token) < 20 || len(token) > 4096 || strings.ContainsAny(token, " \t\r\n\x00") || request.CheckerCommitSHA != c.cfg.CheckerCommitSHA || request.VMTemplateSHA256 != c.cfg.VMTemplateSHA256 || request.DriverSHA256 != c.cfg.DriverSHA256 || request.ConfigVersion != c.cfg.ConfigVersion {
+	if request.RequestVersion != 1 || !ValidID(request.SubmissionID) || !ValidID(request.AssignmentID) || !ValidID(request.TeamID) || !ValidID(request.ChallengeID) || !ValidID(request.ReleaseID) || request.TimeoutSeconds < 10 || request.TimeoutSeconds > 180 || request.MaxOutputBytes != c.service.cfg.OutputLimit || len(request.PayloadSHA256) != 64 || len(token) < 20 || len(token) > 4096 || strings.ContainsAny(token, " \t\r\n\x00") || request.CheckerCommitSHA != c.cfg.CheckerCommitSHA || request.ConfigVersion != c.cfg.ConfigVersion {
 		return Record{}, false, ErrInvalidSubmission
 	}
 	targetID := request.VMID
 	switch request.SelectionMode {
 	case "":
-		if !ValidID(targetID) || !c.cfg.Targets[targetID] || request.ReadinessCheckID == "" || len(request.ReadinessCheckID) > 200 || strings.ContainsAny(request.ReadinessCheckID, "\r\n\x00") {
+		if !ValidID(targetID) || !c.cfg.Targets[targetID] || request.ReadinessCheckID == "" || len(request.ReadinessCheckID) > 200 || strings.ContainsAny(request.ReadinessCheckID, "\r\n\x00") || !checkerSHA64.MatchString(c.cfg.VMTemplateSHA256) || !checkerSHA64.MatchString(c.cfg.DriverSHA256) || request.VMTemplateSHA256 != c.cfg.VMTemplateSHA256 || request.DriverSHA256 != c.cfg.DriverSHA256 {
 			return Record{}, false, ErrInvalidSubmission
 		}
 	case "broker_pool":
-		if targetID != "" || request.ReadinessCheckID != "" || !c.service.poolAnyTargets && len(c.service.poolTargets) == 0 {
+		if targetID != "" || request.ReadinessCheckID != "" || request.VMTemplateSHA256 != "" || request.DriverSHA256 != "" || !c.service.poolAnyTargets && len(c.service.poolTargets) == 0 {
 			return Record{}, false, ErrInvalidSubmission
 		}
 		targetID = UnboundTargetID

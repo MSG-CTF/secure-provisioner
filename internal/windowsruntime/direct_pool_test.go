@@ -109,11 +109,11 @@ func TestDirectCheckerFetchesPayloadAndReturnsResult(t *testing.T) {
 	}
 	service.SetPoolTargets(map[string]ExecutorCredential{testTarget: {}})
 	service.SetCheckerServiceTokens(map[string]string{"default": "runtime-service-token-secret"})
-	checker, err := NewChecker(service, CheckerConfig{BackendURL: backend.URL, Targets: map[string]bool{testTarget: true}, CheckerCommitSHA: strings.Repeat("a", 40), VMTemplateSHA256: strings.Repeat("b", 64), DriverSHA256: strings.Repeat("c", 64), ConfigVersion: "test-v1"}, &http.Client{Transport: clientTransport})
+	checker, err := NewChecker(service, CheckerConfig{BackendURL: backend.URL, Targets: map[string]bool{testTarget: true}, CheckerCommitSHA: strings.Repeat("a", 40), ConfigVersion: "test-v1"}, &http.Client{Transport: clientTransport})
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := CheckerRequest{RequestVersion: 1, SelectionMode: "broker_pool", SubmissionID: testRequest, AssignmentID: "00000000-0000-4000-8000-000000000003", TeamID: "00000000-0000-4000-8000-000000000005", ChallengeID: "00000000-0000-4000-8000-000000000006", ReleaseID: "00000000-0000-4000-8000-000000000007", PayloadSHA256: hex.EncodeToString(digest[:]), TimeoutSeconds: 30, MaxOutputBytes: 65536, CheckerCommitSHA: strings.Repeat("a", 40), VMTemplateSHA256: strings.Repeat("b", 64), DriverSHA256: strings.Repeat("c", 64), ConfigVersion: "test-v1"}
+	request := CheckerRequest{RequestVersion: 1, SelectionMode: "broker_pool", SubmissionID: testRequest, AssignmentID: "00000000-0000-4000-8000-000000000003", TeamID: "00000000-0000-4000-8000-000000000005", ChallengeID: "00000000-0000-4000-8000-000000000006", ReleaseID: "00000000-0000-4000-8000-000000000007", PayloadSHA256: hex.EncodeToString(digest[:]), TimeoutSeconds: 30, MaxOutputBytes: 65536, CheckerCommitSHA: strings.Repeat("a", 40), ConfigVersion: "test-v1"}
 	record, created, err := checker.Submit(context.Background(), request, "backend-job-token-secret")
 	if err != nil || !created {
 		t.Fatalf("direct submit: %+v %v", record, err)
@@ -128,6 +128,12 @@ func TestDirectCheckerFetchesPayloadAndReturnsResult(t *testing.T) {
 	completed, _ := service.Get(context.Background(), record.ID)
 	if callback == nil || callback["event_type"] != "RESULT" || callback["execution_status"] != "COMPLETED" || callback["assignment_id"] != request.AssignmentID || callback["output"].(map[string]any)["stdout"] != "hello" || callbackAttempts != 2 || payloadAttempts != 2 || refreshes != 2 || completed.Checker.ResultPending {
 		t.Fatalf("Backend result missing or wrong: %+v", callback)
+	}
+	if _, present := callback["vm_template_sha256"]; present {
+		t.Fatalf("broker-pool result claimed an unmeasured VM template digest: %+v", callback)
+	}
+	if _, present := callback["driver_sha256"]; present {
+		t.Fatalf("broker-pool result claimed an unmeasured driver digest: %+v", callback)
 	}
 }
 
@@ -188,8 +194,38 @@ func TestDirectCheckerQueuesWithoutVMAndBindsWhenReady(t *testing.T) {
 func TestCheckerAcceptsBrokerDiscoveredPoolWithoutStaticTargets(t *testing.T) {
 	service, _, _ := serviceFixture(t, &serviceBroker{}, Outcome{})
 	service.SetPoolAnyTargets()
-	checker, err := NewChecker(service, CheckerConfig{BackendURL: "https://backend.example", CheckerCommitSHA: strings.Repeat("a", 40), VMTemplateSHA256: strings.Repeat("b", 64), DriverSHA256: strings.Repeat("c", 64), ConfigVersion: "test-v1"}, &http.Client{Timeout: time.Second})
+	checker, err := NewChecker(service, CheckerConfig{BackendURL: "https://backend.example", CheckerCommitSHA: strings.Repeat("a", 40), ConfigVersion: "test-v1"}, &http.Client{Timeout: time.Second})
 	if err != nil || checker == nil {
 		t.Fatalf("dynamic Broker pool rejected: checker=%+v err=%v", checker, err)
+	}
+}
+
+func TestCheckerBrokerPoolRejectsInventedDigestsAndFixedVMRequiresPins(t *testing.T) {
+	service, _, _ := serviceFixture(t, &serviceBroker{}, Outcome{})
+	service.SetPoolAnyTargets()
+	checker, err := NewChecker(service, CheckerConfig{BackendURL: "https://backend.example", Targets: map[string]bool{testTarget: true}, CheckerCommitSHA: strings.Repeat("a", 40), ConfigVersion: "test-v1"}, &http.Client{Timeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256([]byte("MZ fixture"))
+	request := CheckerRequest{
+		RequestVersion: 1, SelectionMode: "broker_pool", SubmissionID: testRequest,
+		AssignmentID: "00000000-0000-4000-8000-000000000003",
+		TeamID:       "00000000-0000-4000-8000-000000000005", ChallengeID: "00000000-0000-4000-8000-000000000006",
+		ReleaseID: "00000000-0000-4000-8000-000000000007", PayloadSHA256: hex.EncodeToString(digest[:]),
+		TimeoutSeconds: 30, MaxOutputBytes: 65536, CheckerCommitSHA: strings.Repeat("a", 40), ConfigVersion: "test-v1",
+	}
+	request.VMTemplateSHA256 = strings.Repeat("b", 64)
+	request.DriverSHA256 = strings.Repeat("c", 64)
+	if _, _, err := checker.Submit(context.Background(), request, "backend-job-token-secret"); err != ErrInvalidSubmission {
+		t.Fatalf("broker-pool accepted unmeasured digests: %v", err)
+	}
+	request.SelectionMode = ""
+	request.VMID = testTarget
+	request.ReadinessCheckID = "fresh-ready-evidence"
+	request.VMTemplateSHA256 = ""
+	request.DriverSHA256 = ""
+	if _, _, err := checker.Submit(context.Background(), request, "backend-job-token-secret"); err != ErrInvalidSubmission {
+		t.Fatalf("fixed VM accepted missing digest pins: %v", err)
 	}
 }

@@ -1,8 +1,11 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"mime"
 	"net/http"
 	"strings"
@@ -45,10 +48,26 @@ func (api *API) handleCheckerSubmit(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, 400, "INVALID_REQUEST", "checker request headers are invalid")
 		return
 	}
-	var request windowsruntime.CheckerRequest
-	if decodeJSON(r, &request) != nil || !windowsruntime.ValidID(request.SubmissionID) {
+	raw, readErr := io.ReadAll(r.Body)
+	var fields map[string]json.RawMessage
+	if readErr != nil || json.Unmarshal(raw, &fields) != nil {
 		writeAPIError(w, 400, "INVALID_REQUEST", "checker request is invalid")
 		return
+	}
+	decoded := r.Clone(r.Context())
+	decoded.Body = io.NopCloser(bytes.NewReader(raw))
+	var request windowsruntime.CheckerRequest
+	if decodeJSON(decoded, &request) != nil || !windowsruntime.ValidID(request.SubmissionID) {
+		writeAPIError(w, 400, "INVALID_REQUEST", "checker request is invalid")
+		return
+	}
+	if request.SelectionMode == "broker_pool" {
+		_, hasTemplate := fields["vm_template_sha256"]
+		_, hasDriver := fields["driver_sha256"]
+		if hasTemplate || hasDriver {
+			writeAPIError(w, 400, "INVALID_REQUEST", "broker pool request cannot claim VM image or driver digests")
+			return
+		}
 	}
 	keys := r.Header.Values("Idempotency-Key")
 	if len(keys) != 1 || keys[0] != request.SubmissionID {

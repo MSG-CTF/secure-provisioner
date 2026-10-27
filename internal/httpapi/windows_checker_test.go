@@ -98,3 +98,32 @@ func TestCheckerHTTPUsesBackendEnvelopeAndRejectsMissingJobToken(t *testing.T) {
 		t.Fatalf("checker token escaped its route scope: %d %s", w.Code, w.Body.String())
 	}
 }
+
+func TestCheckerHTTPBrokerPoolRejectsDigestKeysEvenWhenEmpty(t *testing.T) {
+	checker := &checkerUseCaseStub{}
+	checkerToken := strings.Repeat("K", 43)
+	h := NewHandlerWithWindows(&recordingCreateUseCase{}, nil, ServiceAuthConfig{CurrentToken: testCurrentServiceToken, CheckerToken: checkerToken}, nil, ReadinessConfig{}, nil, &windowsUseCaseStub{}, checker)
+	base := `{"request_version":1,"selection_mode":"broker_pool","submission_id":"00000000-0000-4000-8000-000000000002","assignment_id":"00000000-0000-4000-8000-000000000003"`
+	call := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/v1/checker-submissions", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+checkerToken)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Idempotency-Key", "00000000-0000-4000-8000-000000000002")
+		req.Header.Set("X-Submission-Token", "backend-job-token-secret")
+		writer := httptest.NewRecorder()
+		h.ServeHTTP(writer, req)
+		return writer
+	}
+	for _, body := range []string{
+		base + `,"vm_template_sha256":""}`,
+		base + `,"driver_sha256":null}`,
+		base + `,"vm_template_sha256":"","driver_sha256":""}`,
+	} {
+		if writer := call(body); writer.Code != http.StatusBadRequest || checker.calls != 0 {
+			t.Fatalf("broker-pool digest key accepted: %d %s", writer.Code, writer.Body)
+		}
+	}
+	if writer := call(base + `}`); writer.Code != http.StatusAccepted || checker.calls != 1 {
+		t.Fatalf("broker-pool request without digest keys rejected: %d %s", writer.Code, writer.Body)
+	}
+}

@@ -20,8 +20,11 @@ Backend는 EXE를 비공개 저장소에 보관하고 Runtime의
   그룹 쓰기 권한이나 전체 사용자 권한은 허용하지 않는다.
 - 내부·외부 Backend에는 서로 다른 체커 서비스 토큰을 설정하고,
   `checker.backends`에는 Runtime에서 접근 가능한 HTTPS origin을 넣는다.
-  Backend 쪽 `EXE_CHECKERS_JSON`의 서비스 토큰과 버전 해시는 Runtime 설정과
-  일치해야 한다. 이 토큰은 VM 실행기 토큰과 별개다.
+  Backend 쪽 `EXE_CHECKERS_JSON`의 서비스 토큰, `checker_commit_sha`와
+  `config_version`은 Runtime 설정과 일치해야 한다. `broker_pool`은 선택된 VM의
+  이미지·드라이버 해시를 Broker가 제공하지 않으므로 두 해시를 요청과 RESULT에
+  넣지 않는다. 고정 VM 경로의 승인 해시 검사는 유지한다. 이 토큰은 VM 실행기
+  토큰과 별개다.
 - 각 VM의 실행기는 Runtime 클라이언트 인증서를 검증하고 443 인바운드를 Runtime
   송신 주소에만 허용해야 한다. Broker가 READY로 반환한 VM은 동적으로 선택한다.
 
