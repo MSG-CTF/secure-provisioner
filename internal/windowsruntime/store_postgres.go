@@ -18,6 +18,19 @@ const windowsSelect = `SELECT execution_id::text, request_id::text, target_id::t
  FROM runtime_windows_executions`
 
 func (store *PostgresStore) Check(ctx context.Context) error {
+	if err := store.CheckBridge(ctx); err != nil {
+		return err
+	}
+	recoveryRows, err := store.db.QueryContext(ctx, `SELECT execution_id FROM runtime_windows_recovery_events LIMIT 0`)
+	if err != nil {
+		return storageError(ctx)
+	}
+	return recoveryRows.Close()
+}
+
+// CheckBridge verifies only the schema available before this release. The
+// deployment bridge serves queued HTTP work before the primary migrates 010.
+func (store *PostgresStore) CheckBridge(ctx context.Context) error {
 	if store.db == nil {
 		return storageError(ctx)
 	}
@@ -25,7 +38,10 @@ func (store *PostgresStore) Check(ctx context.Context) error {
 	if err != nil {
 		return storageError(ctx)
 	}
-	return rows.Close()
+	if err := rows.Close(); err != nil {
+		return storageError(ctx)
+	}
+	return nil
 }
 
 // The public Record JSON deliberately hides these values. The private envelope

@@ -53,9 +53,41 @@ release 없는 Backend 코드를 적용하기 전에 이 Runtime 버전을 먼�
 - Broker READY는 HTTPS 실행기의 설치·도달 가능성을 증명하지 않는다.
 - 새 VM의 서버 인증서는 Broker 접속정보에 있어야 하고, 실행기는 Runtime 클라이언트
   인증서를 허용해야 한다. mTLS 모드에서는 VM별 정적 Runtime 설정을 추가하지 않는다.
-- `finished` 이후 VM은 `RESET_REQUIRED`다. 자동 이미지 복구와 Backend의
-  `CLEANUP(true)` 통보는 이 변경에 포함되지 않는다. 실제 채점 접수는
+- `finished` 이후 VM은 `RESET_REQUIRED`다. 자동 이미지 복구는 이 변경에
+  포함되지 않는다. 복구 담당자가 아래 API로 READY 전환을 통보하면 Runtime은
+  Backend에 별도 `CLEANUP(true)`를 재시도한다. 실제 채점 접수는
   이미지 복구·비밀값 전달·E2E 검증 후 활성화한다.
 - Backend의 최초 체커 POST 응답이 불명확하고 이후 GET이 404이면 현재
   Backend는 자동 재접수를 하지 않고 작업을 보류한다. 운영자가 Runtime DB와
   Broker 이벤트 이력을 확인해야 한다.
+
+## 이미지 복구 완료 수신 API
+
+복구 담당 프로세스는 선택된 VM을 깨끗한 이미지로 복구하고 Broker가 해당
+`execution_id`에 대해 READY 전환을 승인한 **뒤** Runtime에 통지한다.
+Runtime이 이 POST만으로 VM을 READY로 바꾸지는 않는다. 송신자는 전용
+`PROVISIONER_WINDOWS_RECOVERY_TOKEN_FILE`(또는 `_TOKEN`)을 사용한다.
+다른 Runtime 서비스·Backend checker 토큰과는 다른 값이어야 한다.
+
+```http
+POST /internal/v1/windows-vms/{resource_target_id}/recovery-events
+Authorization: Bearer <Windows recovery token>
+Content-Type: application/json
+
+{"execution_id":"<Runtime execution UUID>","event_id":"<stable event UUID>","vm_state":"READY"}
+```
+
+Runtime은 실행 기록에 저장된 VM UUID가 일치하고 Broker `finished` 응답까지
+저장된 `broker_pool` 실행에만 200을 반환한다. 첫 통지는 DB에 기록하고
+같은 `event_id` 재전송은 `replayed=true`로 응답한다. 다른 이벤트 ID나 VM을
+같은 실행에 연결하면 409, 미등록 실행은 404, Broker 종료가 미확정이면
+409를 반환한다. 네트워크 응답이 유실되면 **같은** `event_id`로 재시도한다.
+
+응답 `data.cleanup_delivery=PENDING`은 Backend의 별도 `CLEANUP(true)`가
+아직 전달되지 않았음을 뜻한다. Runtime worker는 RESULT가 Backend에
+확인된 후 이 이벤트 ID와 복구 시각으로 CLEANUP을 구성해 영속 재시도한다.
+Backend 응답 유실 때는 서비스 인증으로 같은 이벤트 본문에 대한 receipt를
+조회한다. 확인되면 `CONFIRMED`로 기록하며, 아직 없으면 작업 토큰을 갱신해
+같은 CLEANUP을 다시 보낸다. Runtime은
+복구 보고의 진위를 Broker에 다시 조회하지 않으므로 전용 토큰은 실제
+Broker READY 승인 결과를 확인하는 복구 담당 프로세스에만 제공한다.

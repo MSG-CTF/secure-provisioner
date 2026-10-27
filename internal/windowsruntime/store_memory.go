@@ -11,13 +11,15 @@ import (
 const maxStoredPayload = 10 * 1024 * 1024
 
 type MemoryStore struct {
-	mu       sync.Mutex
-	records  map[string]Record
-	requests map[string]string
+	mu             sync.Mutex
+	records        map[string]Record
+	requests       map[string]string
+	recovery       map[string]RecoveryReceipt
+	recoveryLeases map[string]memoryRecoveryLease
 }
 
 func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{records: make(map[string]Record), requests: make(map[string]string)}
+	return &MemoryStore{records: make(map[string]Record), requests: make(map[string]string), recovery: make(map[string]RecoveryReceipt), recoveryLeases: make(map[string]memoryRecoveryLease)}
 }
 
 func validateStoredRecord(record Record) error {

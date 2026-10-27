@@ -18,6 +18,10 @@ import (
 // Each integration test gets a fresh schema on the explicitly supplied test DB.
 // No production connection settings are consulted or modified.
 func postgresStore(t *testing.T) (*win.PostgresStore, *sql.DB) {
+	return postgresStoreThrough(t, 10)
+}
+
+func postgresStoreThrough(t *testing.T, lastMigration int) (*win.PostgresStore, *sql.DB) {
 	t.Helper()
 	dsn := os.Getenv("PROVISIONER_TEST_DATABASE_URL")
 	if dsn == "" {
@@ -44,23 +48,53 @@ func postgresStore(t *testing.T) (*win.PostgresStore, *sql.DB) {
 		}
 		_ = admin.Close()
 	})
-	for _, path := range []string{
-		"../runtimepg/migrations/008_windows_executions.sql",
-		"../runtimepg/migrations/009_windows_checker_phase.sql",
+	for _, migration := range []struct {
+		number int
+		path   string
+	}{
+		{8, "../runtimepg/migrations/008_windows_executions.sql"},
+		{9, "../runtimepg/migrations/009_windows_checker_phase.sql"},
+		{10, "../runtimepg/migrations/010_windows_recovery_events.sql"},
 	} {
-		migration, err := os.ReadFile(path)
+		if migration.number > lastMigration {
+			break
+		}
+		contents, err := os.ReadFile(migration.path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.ExecContext(context.Background(), string(migration)); err != nil {
+		if _, err := db.ExecContext(context.Background(), string(contents)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	store := win.NewPostgresStore(db)
-	if err := store.Check(context.Background()); err != nil {
-		t.Fatal(err)
+	if lastMigration == 10 {
+		if err := store.Check(context.Background()); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return store, db
+}
+
+func TestPostgresStoreBridgeUpgradeFromCheckerSchema(t *testing.T) {
+	store, db := postgresStoreThrough(t, 9)
+	ctx := context.Background()
+	if err := store.CheckBridge(ctx); err != nil {
+		t.Fatalf("API-only bridge could not use the current schema: %v", err)
+	}
+	if err := store.Check(ctx); err == nil {
+		t.Fatal("primary accepted missing recovery outbox")
+	}
+	migration, err := os.ReadFile("../runtimepg/migrations/010_windows_recovery_events.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, string(migration)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Check(ctx); err != nil {
+		t.Fatalf("primary rejected migrated schema: %v", err)
+	}
 }
 
 func TestPostgresStoreIdempotencyAndCopies(t *testing.T) {

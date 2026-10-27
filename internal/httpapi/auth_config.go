@@ -7,6 +7,7 @@ type ServiceAuthConfig struct {
 	PreviousToken        string
 	CheckerToken         string
 	CheckerBackendTokens map[string]string
+	WindowsRecoveryToken string
 	CISmokeToken         string
 	CISmokeTeamID        provisioner.TeamID
 	CISmokeTargetID      string
