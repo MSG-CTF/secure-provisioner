@@ -1,0 +1,5 @@
+# Optional systemd drop-in. Replace paths/user/group to match the installation.
+# Publish a dedicated approved operating policy and dry-run before enabling it.
+[Service]
+ExecStart=
+ExecStart=/usr/bin/python3 /usr/local/libexec/image_prefetch_enroll.py reconcile --policy /var/lib/secure-provisioner/image-prefetch/enrollment.operating.json --registry /etc/secure-provisioner/clusters.json --broker-state /var/lib/secure-provisioner/broker/targets.json --output /var/lib/secure-provisioner/image-prefetch/nodes.operating.json --events-dir /var/lib/secure-provisioner/image-prefetch/events --runtime-user secure-provisioner --apply

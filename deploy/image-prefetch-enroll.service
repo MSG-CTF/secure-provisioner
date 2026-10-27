@@ -11,6 +11,7 @@ UMask=0027
 StateDirectory=secure-provisioner/image-prefetch
 StateDirectoryMode=0750
 # Replace registry path/group with the existing Runtime installation values.
+# Broker-backed policies: review image-prefetch-enroll-broker.conf.example first.
 ExecStart=/usr/bin/python3 /usr/local/libexec/image_prefetch_enroll.py reconcile --policy /var/lib/secure-provisioner/image-prefetch/enrollment.json --registry /etc/secure-provisioner/clusters.json --output /var/lib/secure-provisioner/image-prefetch/nodes.json --runtime-user secure-provisioner --apply
 TimeoutStartSec=5min
 NoNewPrivileges=true

@@ -141,6 +141,57 @@ stderr and credentials are discarded.
 
 ## Trusted VM replacement hook
 
+## Optional admitted Broker inventory and registration outbox
+
+For a target admitted dynamically by Runtime, keep `--registry` pointing to the
+normal static registry and add `--broker-state <PROVISIONER_BROKER_STATE_DIRECTORY>/targets.json`.
+The protected state is bounded to 1 MiB by this helper; oversized inventories fail
+visibly. The registry still owns static policy. A canonical ID present in both
+sources is rejected rather than shadowed.
+
+Add `broker_resource_target_id` to the approved policy slot, alongside the
+canonical Runtime `target_id`. The former identifies the provider/Broker resource;
+the latter is the Node UID used by Backend and readiness. They need not be equal.
+Exactly one enabled admitted entry must match. The helper checks config,
+credential and actual Node UID agreement, architecture, embedded static credentials,
+and server agreement before publication. `--runtime-user` may own this state and
+credentials, but cannot own the operator policy. Temporary credentials are removed
+on success and failure. A state edit during validation aborts publication.
+
+`allow_target_rotation` defaults to false. Explicitly enabling it permits a new
+already-admitted canonical ID only for the same approved resource, node name,
+machine and provider. It cannot approve a replacement VM or resource. Use the
+trusted provisioning receipt for approved machine replacement; changing endpoint,
+CA or credentials still requires normal Runtime client admission/rollout.
+
+Optional `--events-dir` emits immutable version1 `agent.registration` receipts
+after successful `--apply`. `event_id` hashes the version, type and `generation`
+using the helper's sorted, indented JSON plus final newline. Generation contains
+canonical target/resource IDs, node name/UID, machine/provider/boot IDs,
+architecture, namespace and agent digest. `observed_at` is the enrollment check
+time, not cache readiness. Receipts contain no token, kubeconfig or approved image
+list. Duplicate ticks preserve the first receipt; a reboot emits a new generation
+even if nodes.json is unchanged. Output publication and event publication are not
+one filesystem transaction: an event failure returns failure and the next tick
+backfills the missing event without rolling back the valid nodes file. A conflict
+fails visibly. The outbox is bounded to 4096 entries and never deletes pending
+receipts; the consumer/operator must archive acknowledged receipts elsewhere.
+
+Backend integration must deduplicate `event_id`, choose currently authorized
+releases and targets, and submit a **new request_id** for a changed generation.
+An old operation/retry retains its old boot/UID binding. This PR supplies receipts,
+not a Backend consumer, callback, automatic pull, provisioning system or agent
+installer. There is no new HTTP or authentication contract.
+
+Review `deploy/image-prefetch-enroll-broker.conf.example` as an optional systemd
+drop-in and use a dedicated operating policy. Validate without `--apply`, confirm
+the output path agrees with Runtime's existing agent file, then schedule activation
+through the normal rollout. No timer is enabled by installing these examples.
+All approved nodes must pass; do not mix disposable QA nodes into operating policy
+or omit an unhealthy operating node to manufacture successful enrollment.
+
+## Trusted VM replacement hook (continued)
+
 For automatic same-target VM replacement, set `allow_replacement:true` on that
 approved slot in a reviewed candidate and use `publish-policy`. The trusted
 provisioning completion job must produce
