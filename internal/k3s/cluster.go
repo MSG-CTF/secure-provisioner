@@ -6,6 +6,7 @@ import (
 	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
 
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 import metricsclient "k8s.io/metrics/pkg/client/clientset/versioned"
 
@@ -60,6 +61,8 @@ type Cluster struct {
 	Config  ClusterConfig
 	Client  kubernetes.Interface
 	Metrics metricsclient.Interface
+	// Keep resolved credentials in memory for exec; never serialize them.
+	restConfig *rest.Config
 }
 
 func (c Cluster) Supports(policy isolation.ResolvedPolicy) error {
@@ -82,6 +85,20 @@ func (c Cluster) Supports(policy isolation.ResolvedPolicy) error {
 type ClientSet struct {
 	Kubernetes kubernetes.Interface
 	Metrics    metricsclient.Interface
+	restConfig *rest.Config
+}
+
+func cloneRESTConfig(config *rest.Config) *rest.Config {
+	if config == nil {
+		return nil
+	}
+	copy := *config
+	// client-go CopyConfig replaces ExecProvider.Config on its provider pointer.
+	// Detach the provider first so registry readers never mutate shared auth.
+	if config.ExecProvider != nil {
+		copy.ExecProvider = config.ExecProvider.DeepCopy()
+	}
+	return rest.CopyConfig(&copy)
 }
 
 type ClientFactory interface {

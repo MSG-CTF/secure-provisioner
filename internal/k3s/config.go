@@ -231,7 +231,7 @@ func lifecycleClients(config *rest.Config) (ClientSet, error) {
 	if err != nil {
 		return ClientSet{}, err
 	}
-	return ClientSet{Kubernetes: client, Metrics: metrics}, nil
+	return ClientSet{Kubernetes: client, Metrics: metrics, restConfig: config}, nil
 }
 
 func (KubeconfigClientFactory) FromKubeconfig(path string) (ClientSet, error) {
