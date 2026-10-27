@@ -103,6 +103,82 @@ sudoers. The alias/config are trusted installation inputs, never HTTP fields.
 
 ## Pilot and rollout
 
+### Read-only preparation evidence
+
+Install `deploy/image_preparation_evidence.py` beside the reviewed enrollment
+module. It can inspect an existing Backend-originated operation and collect a
+current readiness response. It has no create/retry/pull/activation command.
+Use a root-owned scope JSON such as:
+
+```json
+{
+  "release_id": "REPLACE_WITH_RELEASE_UUID",
+  "request_id": "REPLACE_WITH_BACKEND_REQUEST_ID",
+  "architecture": "AMD64",
+  "target_ids": ["REPLACE_WITH_CANONICAL_RUNTIME_TARGET_UUID"],
+  "images": ["ghcr.io/owner/repository@sha256:REPLACE_WITH_EXACT_DIGEST"],
+  "image_set_id": "sha256:REPLACE_WITH_RUNTIME_IMAGE_SET_HASH"
+}
+```
+
+The image-set hash must match Runtime's architecture plus complete sorted unique
+image list; the CLI validates it locally. `request_id` may be omitted if Backend
+has not supplied it, but release/architecture/image-set/target checks remain
+mandatory. Obtain the accepted `operation_id` from Backend. An ordinary instance
+creation operation is not a preparation operation.
+
+```sh
+python3 /usr/local/libexec/image_preparation_evidence.py collect \
+  --scope /root/preparation-evidence/scope.json \
+  --origin https://runtime.example \
+  --token-file /etc/secure-provisioner/preparation.token \
+  --operation-id BACKEND_ACCEPTED_OPERATION_ID \
+  --output /root/preparation-evidence/result.json
+```
+
+The origin must be verified HTTPS without a URL path, query, fragment or userinfo.
+The manager token is read from a protected file, never a command argument or env
+dump. Keep it mode0600/0640 without other-user access. TLS verification is enabled,
+redirects and environment proxies are disabled, responses are bounded to 1 MiB,
+and failures contain fixed codes only. Only GET operation status and POST readiness
+query are used. Reports copy an explicit field allowlist and omit unrelated data.
+
+For a node cache snapshot, use `snapshot --scope ... --policy ... --registry ...
+--output ...`, with optional `--broker-state` and `--runtime-user` as in enrollment.
+Each snapshot requires exactly one canonical target and one approved policy slot.
+It verifies the current Node and pinned Ready agent, then runs only the fixed
+agent request with `pull:false` and a fixed exact-image CRI `inspecti` through the
+existing agent Pod. It validates machine/UID/boot/architecture, rechecks identity
+after inspection, and reports only selected image evidence. No workload is created.
+The job needs the existing narrowly scoped Pod EXEC permission used by Runtime.
+Enrollment itself still never executes a Pod.
+
+Capture `before.json` before Backend dispatch and `after.json` after its operation,
+then supply `--before ... --after ...` to `collect`. Both must refer to the same
+node generation and image set. Protect these local reports and share only the
+approved fields; they contain infrastructure identity metadata. The repository
+digest, resolved platform manifest and CRI config image ID are separate fields.
+Complete cache content yields `PRESENT_VERIFIED`. A failed inspection is `UNKNOWN`,
+not proof of cache absence. Present content in both snapshots is reported as such;
+it does not prove that no redundant pull occurred. Legacy agents expose no pull
+events/timing, so `pull_telemetry` remains `UNKNOWN` and `pull_elapsed_seconds` null.
+Inspection/collection duration measures only this tool. Capture actual pull events
+and time separately using approved node telemetry before calling a run a cold pull.
+
+Historical operation status and current readiness are separate. The report keeps
+server `observed_at`/`valid_until` exactly and marks expired/future observations
+not currently ready. Runtime readiness is advisory: one ready node among several
+eligible nodes can legitimately set `ready:true`; both counts are retained.
+Missing or partial frozen target coverage is explicitly unverified.
+`operation_target_scope` describes only frozen node results. The API does not
+expose the original request's complete target list, so
+`original_request_target_scope` is always `UNAVAILABLE_IN_API`; compare the original
+Backend request separately. Accepted `NO_ELIGIBLE_NODES` failures remain reportable.
+The command is a single bounded collection, not a polling daemon.
+It does not enable Backend generation-receipt consumption or deliver credentials.
+
+### Preparation rollout
+
 Enable Runtime, then Backend's preparation worker and Scheduler's advisory query.
 Submit the complete approved release containers to `POST /v1/image-preparations`.
 Poll Location until terminal; inspect per-node/per-image classified failures.

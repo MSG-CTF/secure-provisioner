@@ -1,4 +1,5 @@
 import copy
+import base64
 import errno
 from contextlib import redirect_stdout, redirect_stderr
 import io
@@ -44,6 +45,9 @@ def pod(image=IMAGE):
 
 
 class Cluster:
+    def static_config(self, source):
+        return enroll.static_kubeconfig(json.loads(source))
+
     def __init__(self):
         self.node = node()
         self.pods = [pod()]
@@ -538,6 +542,209 @@ class EnrollmentTests(unittest.TestCase):
         link.symlink_to(self.policy)
         with self.assertRaises(enroll.EnrollmentError):
             enroll.reconcile(link, self.registry, self.output, client=self.cluster, apply=True)
+
+
+class BrokerEnrollmentTests(unittest.TestCase):
+    setUp = EnrollmentTests.setUp
+    write = EnrollmentTests.write
+    run_enrollment = EnrollmentTests.run_enrollment
+
+    def broker(self, uid="uid-new"):
+        self.state = self.directory / "targets.json"
+        approved = self.policy_data["nodes"][0]
+        approved.update(target_id=uid, broker_resource_target_id=TARGET)
+        self.write(self.policy, self.policy_data)
+        self.write(self.registry, {"clusters": []})
+        self.state_data = {"version": 1, "targets": {uid: {
+            "config": {"target_id": uid, "broker_resource_target_id": TARGET,
+                "architecture": "amd64", "enabled": True, "kubeconfig_path": "broker://" + TARGET + "/" + uid},
+            "credential": {"schema_version": 1, "resource_target_id": TARGET, "target_id": uid,
+                "server_url": "https://192.0.2.10:6443",
+                "kubeconfig_base64": base64.b64encode(json.dumps(static_kubeconfig()).encode()).decode()},
+            "desired_enabled": True}}}
+        self.write(self.state, self.state_data)
+
+    def test_admitted_broker_target_does_not_need_static_materialization(self):
+        self.broker()
+        result = self.run_enrollment(apply=True, broker_state_path=self.state)
+        self.assertEqual(result["status"], "APPLIED")
+        self.assertEqual(json.loads(self.output.read_text())["nodes"][0]["target_id"], "uid-new")
+        self.assertTrue(self.cluster.queries)
+        for path, _ in self.cluster.queries:
+            self.assertFalse(Path(path).exists(), "temporary credential must be removed")
+
+    def test_canonical_rotation_requires_opt_in_and_keeps_machine_pins(self):
+        self.broker()
+        self.policy_data["nodes"][0]["target_id"] = "uid-old"
+        self.write(self.policy, self.policy_data)
+        before = self.output.read_bytes()
+        with self.assertRaises(enroll.EnrollmentError):
+            self.run_enrollment(apply=True, broker_state_path=self.state)
+        self.assertEqual(self.output.read_bytes(), before)
+        self.policy_data["nodes"][0]["allow_target_rotation"] = True
+        self.write(self.policy, self.policy_data)
+        self.run_enrollment(apply=True, broker_state_path=self.state)
+        self.cluster.node["status"]["nodeInfo"]["machineID"] = "unapproved"
+        with self.assertRaises(enroll.EnrollmentError):
+            self.run_enrollment(apply=True, broker_state_path=self.state)
+
+    def test_invalid_admitted_entries_never_query_or_replace(self):
+        mutations = [lambda e: e["config"].update(enabled=False),
+            lambda e: e.update(desired_enabled=False), lambda e: e["config"].update(architecture="arm64"),
+            lambda e: e["credential"].update(target_id="other"),
+            lambda e: e["credential"].update(resource_target_id="other"),
+            lambda e: e["config"].update(target_id="other"),
+            lambda e: e["config"].update(kubeconfig_path="/tmp/config"),
+            lambda e: e["credential"].update(server_url="http://insecure"),
+            lambda e: e["credential"].update(kubeconfig_base64="!invalid!")]
+        for mutate in mutations:
+            with self.subTest(mutation=mutate):
+                self.broker()
+                mutate(self.state_data["targets"]["uid-new"])
+                self.write(self.state, self.state_data)
+                before = self.output.read_bytes()
+                with self.assertRaises(enroll.EnrollmentError):
+                    self.run_enrollment(apply=True, broker_state_path=self.state)
+                self.assertEqual(self.output.read_bytes(), before)
+        self.assertEqual(self.cluster.queries, [])
+
+    def test_static_collision_and_duplicate_resource_fail_closed(self):
+        self.broker()
+        self.registry_data["clusters"][0]["target_id"] = "uid-new"
+        self.write(self.registry, self.registry_data)
+        with self.assertRaises(enroll.EnrollmentError):
+            self.run_enrollment(broker_state_path=self.state)
+        self.write(self.registry, {"clusters": []})
+        other = copy.deepcopy(self.state_data["targets"]["uid-new"])
+        self.state_data["targets"]["other-uid"] = other
+        self.write(self.state, self.state_data)
+        with self.assertRaises(enroll.EnrollmentError):
+            self.run_enrollment(broker_state_path=self.state)
+        self.assertEqual(self.cluster.queries, [])
+
+    def test_actual_node_uid_must_match_admitted_canonical_target(self):
+        self.broker()
+        self.cluster.node["metadata"]["uid"] = "not-admitted"
+        with self.assertRaises(enroll.EnrollmentError):
+            self.run_enrollment(apply=True, broker_state_path=self.state)
+
+    def test_broker_edit_during_remote_validation_preserves_registration(self):
+        self.broker()
+        query = self.cluster.query
+        def changed_source(path, args):
+            result = query(path, args)
+            self.state_data["targets"]["uid-new"]["desired_enabled"] = False
+            self.write(self.state, self.state_data)
+            return result
+        before = self.output.read_bytes()
+        with patch.object(self.cluster, "query", side_effect=changed_source):
+            with self.assertRaisesRegex(enroll.EnrollmentError, "BROKER_STATE_CHANGED"):
+                self.run_enrollment(apply=True, broker_state_path=self.state)
+        self.assertEqual(self.output.read_bytes(), before)
+        self.assertFalse(Path(self.cluster.queries[0][0]).exists())
+
+    def test_broker_embedded_plugins_and_server_mismatch_never_query(self):
+        for mutation in ("exec", "server"):
+            self.broker()
+            entry = self.state_data["targets"]["uid-new"]
+            if mutation == "exec":
+                config = static_kubeconfig()
+                config["users"][0]["user"]["exec"] = {"command": "must-never-execute"}
+                entry["credential"]["kubeconfig_base64"] = base64.b64encode(json.dumps(config).encode()).decode()
+            else:
+                entry["credential"]["server_url"] = "https://other.example"
+            self.write(self.state, self.state_data)
+            with self.assertRaises(enroll.EnrollmentError):
+                self.run_enrollment(broker_state_path=self.state)
+        self.assertEqual(self.cluster.queries, [])
+
+
+class RegistrationReceiptTests(unittest.TestCase):
+    setUp = EnrollmentTests.setUp
+    write = EnrollmentTests.write
+    run_enrollment = EnrollmentTests.run_enrollment
+
+    def events(self):
+        return self.directory / "events"
+
+    def test_only_successful_apply_emits_deduplicated_generation(self):
+        events = self.events()
+        self.run_enrollment(events_dir=events)
+        self.assertFalse(events.exists())
+        self.run_enrollment(apply=True, events_dir=events)
+        files = list(events.glob("*.json"))
+        self.assertEqual(len(files), 1)
+        original = files[0].read_bytes()
+        event = json.loads(original)
+        self.assertEqual(event["generation"]["boot_id"], "boot-a")
+        self.assertEqual(event["generation"]["target_id"], TARGET)
+        self.assertNotIn("kubeconfig", original.decode())
+        self.run_enrollment(apply=True, events_dir=events)
+        self.assertEqual(files[0].read_bytes(), original)
+        self.cluster.node["status"]["nodeInfo"]["bootID"] = "boot-b"
+        self.assertFalse(self.run_enrollment(apply=True, events_dir=events)["changed"])
+        self.assertEqual(len(list(events.glob("*.json"))), 2)
+
+    def test_failed_validation_or_publication_emits_nothing(self):
+        self.cluster.pods = []
+        with self.assertRaises(enroll.EnrollmentError):
+            self.run_enrollment(apply=True, events_dir=self.events())
+        self.assertFalse(self.events().exists())
+        self.cluster.pods = [pod()]
+        with patch.object(enroll, "atomic_json", side_effect=enroll.EnrollmentError("CONFIG_WRITE_FAILED")):
+            with self.assertRaises(enroll.EnrollmentError):
+                self.run_enrollment(apply=True, events_dir=self.events())
+        self.assertFalse(self.events().exists())
+
+    def test_backfills_after_output_publication_without_touching_output(self):
+        self.run_enrollment(apply=True)
+        before = self.output.stat().st_mtime_ns
+        self.run_enrollment(apply=True, events_dir=self.events())
+        self.assertEqual(self.output.stat().st_mtime_ns, before)
+        self.assertEqual(len(list(self.events().glob("*.json"))), 1)
+
+    @unittest.skipIf(os.name != "posix", "POSIX directory durability")
+    def test_first_outbox_creation_syncs_parent_after_mkdir(self):
+        parent = self.directory.stat()
+        real_fsync = os.fsync
+        synced_parent_after_creation = []
+        def fsync(descriptor):
+            info = os.fstat(descriptor)
+            if self.events().exists() and (info.st_dev, info.st_ino) == (parent.st_dev, parent.st_ino):
+                synced_parent_after_creation.append(True)
+            return real_fsync(descriptor)
+        with patch.object(enroll.os, "fsync", side_effect=fsync):
+            self.run_enrollment(apply=True, events_dir=self.events())
+        self.assertTrue(synced_parent_after_creation, "new outbox directory itself must be durable")
+
+    def test_conflicting_existing_receipt_is_not_overwritten(self):
+        self.run_enrollment(apply=True, events_dir=self.events())
+        event = next(self.events().glob("*.json"))
+        self.write(event, {"conflict": True})
+        before = event.read_bytes()
+        with self.assertRaises(enroll.EnrollmentError):
+            self.run_enrollment(apply=True, events_dir=self.events())
+        self.assertEqual(event.read_bytes(), before)
+
+    @unittest.skipIf(os.name != "posix", "POSIX ancestor no-follow checks")
+    def test_receipt_ancestor_symlink_is_rejected(self):
+        actual = self.directory / "actual"
+        actual.mkdir(mode=0o700)
+        leaf = actual / "leaf"
+        leaf.mkdir(mode=0o700)
+        link = self.directory / "linked"
+        link.symlink_to(actual, target_is_directory=True)
+        with self.assertRaises(enroll.EnrollmentError):
+            self.run_enrollment(apply=True, events_dir=link / "leaf" / "events")
+        self.assertFalse((leaf / "events").exists())
+
+    @unittest.skipIf(os.name != "posix", "POSIX directory permissions")
+    def test_world_writable_or_symlink_receipt_directory_is_rejected(self):
+        self.events().mkdir(mode=0o777)
+        self.events().chmod(0o777)
+        with self.assertRaises(enroll.EnrollmentError):
+            self.run_enrollment(apply=True, events_dir=self.events())
+
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ import base64
 import binascii
 from contextlib import contextmanager
 import copy
+from datetime import datetime, timezone
 import errno
 import hashlib
 import json
@@ -139,7 +140,7 @@ def validate_policy(value):
     required = {"target_id", "node_name", "machine_id", "provider_id", "architecture", "namespace", "agent_image"}
     seen = set()
     for node in nodes:
-        if not isinstance(node, dict) or not required <= node.keys() or node.keys() - required - {"allow_replacement"}:
+        if not isinstance(node, dict) or not required <= node.keys() or node.keys() - required - {"allow_replacement", "broker_resource_target_id", "allow_target_rotation"}:
             raise EnrollmentError("INVALID_POLICY")
         key = (node["target_id"], node["node_name"]) if all(isinstance(node[k], str) for k in ("target_id", "node_name")) else None
         if key is None or key in seen or not identifier(node["target_id"]) or not identifier(node["machine_id"]):
@@ -149,7 +150,10 @@ def validate_policy(value):
                 not isinstance(node["namespace"], str) or len(node["namespace"]) > 63 or "." in node["namespace"] or not DNS.fullmatch(node["namespace"]) or
                 node["architecture"] not in ("AMD64", "ARM64") or
                 not isinstance(node["provider_id"], str) or len(node["provider_id"]) > 512 or any(c in node["provider_id"] for c in "\r\n\0") or
-                type(node.get("allow_replacement", False)) is not bool):
+                type(node.get("allow_replacement", False)) is not bool or
+                type(node.get("allow_target_rotation", False)) is not bool or
+                ("broker_resource_target_id" in node and not identifier(node["broker_resource_target_id"])) or
+                (node.get("allow_target_rotation", False) and "broker_resource_target_id" not in node)):
             raise EnrollmentError("INVALID_POLICY")
         image = node["agent_image"]
         if not isinstance(image, str) or len(image) > 512 or not IMAGE.fullmatch(image) or any(p in ("", ".", "..") for p in image.split("@")[0].split("/")[1:]):
@@ -191,6 +195,66 @@ def registered_targets(registry, policy, *, runtime_uid=None):
         read_bytes(cluster["kubeconfig_path"], credential_owner_uid=runtime_uid)
         selected[node["target_id"]] = Path(cluster["kubeconfig_path"])
     return selected
+
+
+@contextmanager
+def approved_inventory(policy, registry_path, client, *, broker_state_path=None, runtime_uid=None):
+    """Resolve only approved resources; keep embedded credentials private and short lived."""
+    effective = copy.deepcopy(policy)
+    registry = read_json(registry_path)
+    static_policy = {"version": 1, "nodes": [n for n in effective["nodes"] if "broker_resource_target_id" not in n]}
+    targets = registered_targets(registry, static_policy, runtime_uid=runtime_uid)
+    broker_nodes = [n for n in effective["nodes"] if "broker_resource_target_id" in n]
+    state_revision = None
+    if broker_nodes:
+        if broker_state_path is None:
+            raise EnrollmentError("BROKER_STATE_REQUIRED")
+        raw, state_revision = read_bytes(broker_state_path, with_revision=True, credential_owner_uid=runtime_uid)
+        state = decode(raw)
+        if (not isinstance(state, dict) or set(state) != {"version", "targets"} or type(state["version"]) is not int or
+                state["version"] != 1 or not isinstance(state["targets"], dict) or len(state["targets"]) > 1024):
+            raise EnrollmentError("INVALID_BROKER_STATE")
+    with tempfile.TemporaryDirectory(prefix="image-prefetch-broker-") as directory:
+        for index, expected in enumerate(broker_nodes):
+            resource = expected["broker_resource_target_id"]
+            matches = [(uid, entry) for uid, entry in state["targets"].items()
+                if isinstance(entry, dict) and isinstance(entry.get("config"), dict) and
+                entry["config"].get("broker_resource_target_id") == resource]
+            if len(matches) != 1:
+                raise EnrollmentError("BROKER_RESOURCE_AMBIGUOUS_OR_ABSENT")
+            uid, entry = matches[0]
+            config, credential = entry["config"], entry.get("credential")
+            if (not identifier(uid) or not isinstance(credential, dict) or
+                    config.get("target_id") != uid or credential.get("target_id") != uid or
+                    credential.get("resource_target_id") != resource or type(credential.get("schema_version")) is not int or
+                    credential["schema_version"] != 1 or config.get("enabled") is not True or entry.get("desired_enabled") is not True or
+                    not isinstance(config.get("architecture"), str) or config["architecture"].upper() != expected["architecture"] or
+                    config.get("kubeconfig_path") != "broker://" + resource + "/" + uid or
+                    (uid != expected["target_id"] and not expected.get("allow_target_rotation", False))):
+                raise EnrollmentError("BROKER_IDENTITY_OR_PLATFORM_MISMATCH")
+            if any(c["target_id"] in (uid, expected["target_id"]) for c in registry["clusters"]):
+                # Static target policy is authoritative; never silently shadow it.
+                raise EnrollmentError("BROKER_STATIC_TARGET_COLLISION")
+            try:
+                value = credential["kubeconfig_base64"]
+                if not isinstance(value, str) or not value or len(value) > LIMIT:
+                    raise ValueError()
+                frozen = client.static_config(base64.b64decode(value, validate=True))
+            except (KeyError, ValueError, binascii.Error):
+                raise EnrollmentError("INVALID_BROKER_CREDENTIAL") from None
+            server = frozen["clusters"][0]["cluster"]["server"]
+            if server != credential.get("server_url"):
+                raise EnrollmentError("BROKER_SERVER_MISMATCH")
+            snapshot = Path(directory) / (str(index) + ".json")
+            with os.fdopen(os.open(snapshot, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as file:
+                file.write(encoded_json(frozen))
+            expected["target_id"] = uid
+            targets[uid] = snapshot
+        yield effective, targets
+        if state_revision is not None:
+            _, current = read_bytes(broker_state_path, with_revision=True, credential_owner_uid=runtime_uid)
+            if current != state_revision:
+                raise EnrollmentError("BROKER_STATE_CHANGED")
 
 
 def static_kubeconfig(config):
@@ -285,19 +349,23 @@ class KubernetesClient:
         except (OSError, subprocess.TimeoutExpired):
             raise EnrollmentError("KUBERNETES_UNAVAILABLE") from None
 
-    def query(self, kubeconfig, args):
-        source = read_bytes(kubeconfig, credential_owner_uid=self.runtime_uid)
+    def static_config(self, source):
         # config view only parses/converts the bytes supplied on stdin. Never
         # flatten: file references must remain visible so validation can deny them.
         converted = self.json_command([self.binary, "--kubeconfig", "/dev/stdin", "config", "view", "--raw", "-o", "json"], source=source)
-        config = static_kubeconfig(converted)
+        return static_kubeconfig(converted)
+
+    def query(self, kubeconfig, args, *, source=None):
+        command_input = source
+        source = read_bytes(kubeconfig, credential_owner_uid=self.runtime_uid)
+        config = self.static_config(source)
         with tempfile.TemporaryDirectory(prefix="image-prefetch-kubeconfig-") as directory:
             snapshot = Path(directory) / "static.json"
             descriptor = os.open(snapshot, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(descriptor, "wb") as file:
                 file.write(encoded_json(config))
             command = [self.binary, "--kubeconfig", str(snapshot), "--request-timeout=15s", "--insecure-skip-tls-verify=false", *args]
-            return self.json_command(command)
+            return self.json_command(command, source=command_input)
 
 
 def ready(conditions):
@@ -344,10 +412,90 @@ def verify_agent(pods, expected):
         raise EnrollmentError("AGENT_UNAVAILABLE") from None
     if len(candidates) != 1:
         raise EnrollmentError("AGENT_UNAVAILABLE")
+    return candidates[0]
 
 
 def encoded_json(value):
     return (json.dumps(value, sort_keys=True, indent=2) + "\n").encode()
+
+
+def registration_generation(entry, expected, current):
+    return {"target_id": entry["target_id"], "broker_resource_target_id": expected.get("broker_resource_target_id"),
+        "node_uid": entry["node_uid"], "node_name": entry["node_name"], "machine_id": entry["machine_id"],
+        "provider_id": expected["provider_id"], "boot_id": current["status"]["nodeInfo"]["bootID"],
+        "architecture": expected["architecture"], "namespace": entry["namespace"], "agent_image": entry["agent_image"]}
+
+
+def emit_registration_event(directory, generation, *, expected_policy):
+    """Immutable local outbox. A retry repairs a crash after nodes publication."""
+    directory = Path(directory)
+    trusted_parent(directory)
+    def verify_directory(path):
+        if os.name != "posix":
+            if path.is_symlink() or not path.is_dir():
+                raise EnrollmentError("UNTRUSTED_DIRECTORY")
+            return
+        try:
+            descriptor = open_trusted_source(path, None)
+        except OSError:
+            raise EnrollmentError("UNTRUSTED_DIRECTORY") from None
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid not in (0, os.geteuid()) or info.st_mode & 0o022:
+                raise EnrollmentError("UNTRUSTED_DIRECTORY")
+        finally:
+            os.close(descriptor)
+    verify_directory(directory.parent)
+    if directory.is_symlink():
+        raise EnrollmentError("UNTRUSTED_DIRECTORY")
+    try:
+        directory.mkdir(mode=0o700)
+        created = True
+    except FileExistsError:
+        created = False
+    verify_directory(directory)
+    if created and os.name == "posix":
+        parent = os.open(directory.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(parent)
+        finally:
+            os.close(parent)
+    trusted_parent(directory / "receipt")
+    event_id = hashlib.sha256(encoded_json({"version": 1, "type": "agent.registration", "generation": generation})).hexdigest()
+    path = directory / (event_id + ".json")
+    assert_policy_revision(expected_policy)
+    if path.exists() or path.is_symlink():
+        existing = read_json(path)
+        if (not isinstance(existing, dict) or set(existing) != {"version", "type", "event_id", "observed_at", "generation"} or
+                type(existing["version"]) is not int or existing["version"] != 1 or existing["type"] != "agent.registration" or
+                existing["event_id"] != event_id or existing["generation"] != generation or not isinstance(existing["observed_at"], str)):
+            raise EnrollmentError("REGISTRATION_EVENT_CONFLICT")
+        return
+    # Count every directory entry, including unexpected files. Never delete pending events.
+    with os.scandir(directory) as entries:
+        if sum(1 for _ in entries) >= 4096:
+            raise EnrollmentError("REGISTRATION_OUTBOX_FULL")
+    event = {"version": 1, "type": "agent.registration", "event_id": event_id,
+        "observed_at": datetime.now(timezone.utc).isoformat(), "generation": generation}
+    descriptor, temporary = tempfile.mkstemp(prefix=".registration-", dir=directory)
+    try:
+        with os.fdopen(descriptor, "wb") as file:
+            os.chmod(temporary, 0o640)
+            file.write(encoded_json(event))
+            file.flush()
+            os.fsync(file.fileno())
+        assert_policy_revision(expected_policy)
+        os.link(temporary, path)  # create-only: immutable receipts cannot be replaced
+        if os.name == "posix":
+            descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+    except OSError:
+        raise EnrollmentError("REGISTRATION_EVENT_WRITE_FAILED") from None
+    finally:
+        os.unlink(temporary)
 
 
 def assert_policy_revision(expected):
@@ -429,25 +577,30 @@ def enrollment_lock(output):
         os.close(descriptor)
 
 
-def reconcile(policy_path, registry_path, output_path, *, client=None, apply=False, receipt_path=None, runtime_uid=None):
+def reconcile(policy_path, registry_path, output_path, *, client=None, apply=False, receipt_path=None, runtime_uid=None,
+              broker_state_path=None, events_dir=None):
     policy_path, output_path = Path(policy_path), Path(output_path)
-    if policy_path.absolute() == output_path.absolute() or Path(registry_path).absolute() == output_path.absolute():
+    if output_path.absolute() in {Path(p).absolute() for p in (policy_path, registry_path, broker_state_path) if p is not None}:
         raise EnrollmentError("INVALID_OUTPUT_PATH")
     with enrollment_lock(output_path):
         policy_raw, original_revision = read_bytes(policy_path, with_revision=True)
         policy = validate_policy(decode(policy_raw))
         updated = apply_receipt(policy, read_json(receipt_path)) if receipt_path else policy
-        targets = registered_targets(read_json(registry_path), updated, runtime_uid=runtime_uid)
         client = client or KubernetesClient(runtime_uid=runtime_uid)
         nodes = []
-        for expected in updated["nodes"]:
-            kubeconfig = targets[expected["target_id"]]
-            current = client.query(kubeconfig, ["get", "node", expected["node_name"], "-o", "json"])
-            entry = verify_node(current, expected)
-            pods = client.query(kubeconfig, ["get", "pods", "--namespace", expected["namespace"], "--field-selector",
-                "spec.nodeName=" + expected["node_name"], "--selector", "app.kubernetes.io/name=runtime-image-agent", "-o", "json"])
-            verify_agent(pods, expected)
-            nodes.append(entry)
+        generations = []
+        with approved_inventory(updated, registry_path, client, broker_state_path=broker_state_path, runtime_uid=runtime_uid) as (effective, targets):
+            for expected in effective["nodes"]:
+                kubeconfig = targets[expected["target_id"]]
+                current = client.query(kubeconfig, ["get", "node", expected["node_name"], "-o", "json"])
+                entry = verify_node(current, expected)
+                if "broker_resource_target_id" in expected and entry["node_uid"] != expected["target_id"]:
+                    raise EnrollmentError("BROKER_NODE_UID_MISMATCH")
+                pods = client.query(kubeconfig, ["get", "pods", "--namespace", expected["namespace"], "--field-selector",
+                    "spec.nodeName=" + expected["node_name"], "--selector", "app.kubernetes.io/name=runtime-image-agent", "-o", "json"])
+                verify_agent(pods, expected)
+                nodes.append(entry)
+                generations.append(registration_generation(entry, expected, current))
         result = {"nodes": sorted(nodes, key=lambda n: (n["target_id"], n["node_name"]))}
         changed = not output_path.exists() or read_json(output_path) != result
         if apply:
@@ -462,6 +615,9 @@ def reconcile(policy_path, registry_path, output_path, *, client=None, apply=Fal
                 atomic_json(output_path, result, expected_policy=expected_policy)
             else:
                 assert_policy_revision(expected_policy)
+            if events_dir is not None:
+                for generation in generations:
+                    emit_registration_event(events_dir, generation, expected_policy=expected_policy)
         return {"status": "APPLIED" if apply else "DRY_RUN", "nodes": len(nodes), "changed": changed, "replacement": bool(receipt_path)}
 
 
@@ -494,13 +650,15 @@ def main(argv=None):
     parser.add_argument("--kubectl", default="/usr/local/bin/kubectl")
     parser.add_argument("--receipt", type=Path)
     parser.add_argument("--candidate", type=Path)
+    parser.add_argument("--broker-state", type=Path, help="Protected Runtime-admitted targets.json (optional)")
+    parser.add_argument("--events-dir", type=Path, help="Optional durable registration-generation metadata outbox")
     parser.add_argument("--runtime-user", help="Trusted installation user owning registry-selected kubeconfigs (Linux only)")
     parser.add_argument("--apply", action="store_true", help="Publish validated configuration; omitted means dry run")
     args = parser.parse_args(argv)
     if (args.action == "accept-provisioned") != bool(args.receipt):
         parser.error("accept-provisioned requires --receipt; reconcile forbids --receipt")
     if args.action == "publish-policy":
-        if args.candidate is None or args.registry is not None:
+        if args.candidate is None or args.registry is not None or args.broker_state is not None or args.events_dir is not None:
             parser.error("publish-policy requires --candidate and does not use --registry")
     elif args.registry is None or args.candidate is not None:
         parser.error("reconcile and accept-provisioned require --registry and forbid --candidate")
@@ -518,7 +676,8 @@ def main(argv=None):
                 except KeyError:
                     raise EnrollmentError("INVALID_RUNTIME_USER") from None
             result = reconcile(args.policy, args.registry, args.output, client=KubernetesClient(args.kubectl, runtime_uid=runtime_uid),
-                               apply=args.apply, receipt_path=args.receipt, runtime_uid=runtime_uid)
+                               apply=args.apply, receipt_path=args.receipt, runtime_uid=runtime_uid,
+                               broker_state_path=args.broker_state, events_dir=args.events_dir)
         print(json.dumps(result, sort_keys=True))
         return 0
     except EnrollmentError as error:
