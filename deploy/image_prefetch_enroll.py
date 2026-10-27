@@ -577,8 +577,33 @@ def enrollment_lock(output):
         os.close(descriptor)
 
 
+def retained_registrations(previous, managed_targets):
+    """Validate file structure only; retained targets gain no fresh trust evidence."""
+    if not isinstance(previous, dict) or set(previous) != {"nodes"} or not isinstance(previous["nodes"], list) or len(previous["nodes"]) > 256:
+        raise EnrollmentError("INVALID_PREVIOUS_REGISTRATION")
+    required = {"target_id", "node_name", "node_uid", "mode", "namespace", "agent_image"}
+    retained, seen = [], set()
+    for node in previous["nodes"]:
+        if (not isinstance(node, dict) or not required <= node.keys() or node.keys() - required - {"machine_id"} or
+                node["mode"] != "kubernetes" or not identifier(node["target_id"]) or not identifier(node["node_uid"]) or
+                ("machine_id" in node and not identifier(node["machine_id"])) or not isinstance(node["node_name"], str)):
+            raise EnrollmentError("INVALID_PREVIOUS_REGISTRATION")
+        # Reuse the policy's format checks; these placeholders are never published
+        # or used for node verification. The original entry remains byte-for-value.
+        validate_policy({"version": 1, "nodes": [{"target_id": node["target_id"], "node_name": node["node_name"],
+            "machine_id": node.get("machine_id", "legacy-unpinned"), "provider_id": "", "architecture": "AMD64",
+            "namespace": node["namespace"], "agent_image": node["agent_image"]}]})
+        key = (node["target_id"], node["node_name"])
+        if key in seen:
+            raise EnrollmentError("INVALID_PREVIOUS_REGISTRATION")
+        seen.add(key)
+        if node["target_id"] not in managed_targets:
+            retained.append(node)
+    return retained
+
+
 def reconcile(policy_path, registry_path, output_path, *, client=None, apply=False, receipt_path=None, runtime_uid=None,
-              broker_state_path=None, events_dir=None):
+              broker_state_path=None, events_dir=None, preserve_other_targets=False):
     policy_path, output_path = Path(policy_path), Path(output_path)
     if output_path.absolute() in {Path(p).absolute() for p in (policy_path, registry_path, broker_state_path) if p is not None}:
         raise EnrollmentError("INVALID_OUTPUT_PATH")
@@ -601,7 +626,13 @@ def reconcile(policy_path, registry_path, output_path, *, client=None, apply=Fal
                 verify_agent(pods, expected)
                 nodes.append(entry)
                 generations.append(registration_generation(entry, expected, current))
-        result = {"nodes": sorted(nodes, key=lambda n: (n["target_id"], n["node_name"]))}
+        preserved = []
+        if preserve_other_targets and (output_path.exists() or output_path.is_symlink()):
+            managed_targets = {n["target_id"] for n in updated["nodes"]} | {n["target_id"] for n in effective["nodes"]}
+            preserved = retained_registrations(read_json(output_path), managed_targets)
+        if len(nodes) + len(preserved) > 256:
+            raise EnrollmentError("REGISTRATION_TOO_LARGE")
+        result = {"nodes": sorted(nodes + preserved, key=lambda n: (n["target_id"], n["node_name"]))}
         changed = not output_path.exists() or read_json(output_path) != result
         if apply:
             expected_policy = (policy_path, original_revision)
@@ -618,7 +649,10 @@ def reconcile(policy_path, registry_path, output_path, *, client=None, apply=Fal
             if events_dir is not None:
                 for generation in generations:
                     emit_registration_event(events_dir, generation, expected_policy=expected_policy)
-        return {"status": "APPLIED" if apply else "DRY_RUN", "nodes": len(nodes), "changed": changed, "replacement": bool(receipt_path)}
+        summary = {"status": "APPLIED" if apply else "DRY_RUN", "nodes": len(nodes), "changed": changed, "replacement": bool(receipt_path)}
+        if preserve_other_targets:
+            summary["preserved_nodes"] = len(preserved)
+        return summary
 
 
 def publish_policy(policy_path, output_path, candidate_path, *, apply=False):
@@ -652,13 +686,14 @@ def main(argv=None):
     parser.add_argument("--candidate", type=Path)
     parser.add_argument("--broker-state", type=Path, help="Protected Runtime-admitted targets.json (optional)")
     parser.add_argument("--events-dir", type=Path, help="Optional durable registration-generation metadata outbox")
+    parser.add_argument("--preserve-other-targets", action="store_true", help="Retain existing Kubernetes entries outside this policy's target scope without refreshing their evidence")
     parser.add_argument("--runtime-user", help="Trusted installation user owning registry-selected kubeconfigs (Linux only)")
     parser.add_argument("--apply", action="store_true", help="Publish validated configuration; omitted means dry run")
     args = parser.parse_args(argv)
     if (args.action == "accept-provisioned") != bool(args.receipt):
         parser.error("accept-provisioned requires --receipt; reconcile forbids --receipt")
     if args.action == "publish-policy":
-        if args.candidate is None or args.registry is not None or args.broker_state is not None or args.events_dir is not None:
+        if args.candidate is None or args.registry is not None or args.broker_state is not None or args.events_dir is not None or args.preserve_other_targets:
             parser.error("publish-policy requires --candidate and does not use --registry")
     elif args.registry is None or args.candidate is not None:
         parser.error("reconcile and accept-provisioned require --registry and forbid --candidate")
@@ -677,7 +712,7 @@ def main(argv=None):
                     raise EnrollmentError("INVALID_RUNTIME_USER") from None
             result = reconcile(args.policy, args.registry, args.output, client=KubernetesClient(args.kubectl, runtime_uid=runtime_uid),
                                apply=args.apply, receipt_path=args.receipt, runtime_uid=runtime_uid,
-                               broker_state_path=args.broker_state, events_dir=args.events_dir)
+                               broker_state_path=args.broker_state, events_dir=args.events_dir, preserve_other_targets=args.preserve_other_targets)
         print(json.dumps(result, sort_keys=True))
         return 0
     except EnrollmentError as error:

@@ -747,5 +747,69 @@ class RegistrationReceiptTests(unittest.TestCase):
 
 
 
+class ScopedRetentionTests(unittest.TestCase):
+    setUp = EnrollmentTests.setUp
+    write = EnrollmentTests.write
+    run_enrollment = EnrollmentTests.run_enrollment
+    broker = BrokerEnrollmentTests.broker
+
+    def existing(self):
+        other = {"target_id": "unrelated-qa", "node_name": "unreachable-qa", "node_uid": "qa-old-uid",
+            "machine_id": "qa-approved-machine", "mode": "kubernetes", "namespace": "runtime-image-preparation", "agent_image": IMAGE}
+        owned = {**other, "target_id": TARGET, "node_name": "old-managed-node"}
+        self.write(self.output, {"nodes": [other, owned]})
+        return other
+
+    def test_unrelated_entry_is_retained_without_query_or_generation_receipt(self):
+        other = self.existing()
+        events = self.directory / "events"
+        result = self.run_enrollment(apply=True, preserve_other_targets=True, events_dir=events)
+        nodes = json.loads(self.output.read_bytes())["nodes"]
+        self.assertEqual(len(nodes), 2)
+        self.assertIn(other, nodes)
+        self.assertEqual(result["nodes"], 1)
+        self.assertEqual(result["preserved_nodes"], 1)
+        self.assertTrue(all("unreachable-qa" not in args for _, args in self.cluster.queries))
+        receipts = [json.loads(p.read_bytes()) for p in events.glob("*.json")]
+        self.assertEqual([r["generation"]["target_id"] for r in receipts], [TARGET])
+        self.assertFalse(self.run_enrollment(apply=True, preserve_other_targets=True, events_dir=events)["changed"])
+
+    def test_failed_managed_target_never_reuses_old_managed_entry(self):
+        self.existing()
+        before = self.output.read_bytes()
+        self.cluster.pods = []
+        with self.assertRaises(enroll.EnrollmentError):
+            self.run_enrollment(apply=True, preserve_other_targets=True, events_dir=self.directory / "events")
+        self.assertEqual(self.output.read_bytes(), before)
+        self.assertFalse((self.directory / "events").exists())
+
+    def test_unsafe_or_duplicate_previous_entries_fail_closed(self):
+        mutations = [lambda n: n.update(mode="local", command="/bin/sh"), lambda n: n.update(node_uid=""),
+            lambda n: n.update(agent_image="mutable:latest"), lambda n: n.update(namespace="../other"),
+            lambda n: n.update(token="secret")]
+        for mutate in mutations:
+            other = self.existing()
+            mutate(other)
+            self.write(self.output, {"nodes": [other]})
+            before = self.output.read_bytes()
+            with self.assertRaises(enroll.EnrollmentError):
+                self.run_enrollment(apply=True, preserve_other_targets=True)
+            self.assertEqual(self.output.read_bytes(), before)
+        other = self.existing()
+        self.write(self.output, {"nodes": [other, other]})
+        with self.assertRaises(enroll.EnrollmentError):
+            self.run_enrollment(apply=True, preserve_other_targets=True)
+
+    def test_rotation_removes_old_owned_target_without_retaining_stale_entry(self):
+        other = self.existing()
+        self.broker()
+        self.policy_data["nodes"][0].update(target_id=TARGET, allow_target_rotation=True)
+        self.write(self.policy, self.policy_data)
+        self.run_enrollment(apply=True, preserve_other_targets=True, broker_state_path=self.state)
+        result = json.loads(self.output.read_bytes())["nodes"]
+        self.assertIn(other, result)
+        self.assertEqual({n["target_id"] for n in result}, {"unrelated-qa", "uid-new"})
+
+
 if __name__ == "__main__":
     unittest.main()
