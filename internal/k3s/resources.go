@@ -165,6 +165,16 @@ func buildResourceSetForOperation(cluster Cluster, command provisioner.CreateWor
 				Limits:   quantities.DeepCopy(),
 			},
 		}
+		if requirement.ShutdownStrategy == isolation.ShutdownStrategyPythonSIGINTPID1 {
+			podContainer.Lifecycle = &corev1.Lifecycle{
+				PreStop: &corev1.LifecycleHandler{
+					Exec: &corev1.ExecAction{Command: []string{
+						"/usr/local/bin/python3", "-I", "-B", "-c",
+						"import os, signal; os.kill(1, signal.SIGINT)",
+					}},
+				},
+			}
+		}
 		names := make([]string, 0, len(container.Env))
 		for name := range container.Env {
 			names = append(names, name)
@@ -512,6 +522,7 @@ func validWorkloadCommand(
 	hasExposed := false
 	for _, container := range containers {
 		if provisioner.ValidateEnvironment(container.Env, false) != nil ||
+			!isolation.ValidShutdownStrategy(isolation.WorkloadProfile(command.Policy.WorkloadProfileRef.Name), container.ShutdownStrategy) ||
 			!provisioner.ValidSecretReference(container.SecretRef) ||
 			(container.RequiresFlag && container.SecretRef == "") {
 			return false

@@ -33,13 +33,23 @@ type WritablePath struct {
 	SizeMiB int
 }
 
+// ShutdownStrategy selects a fixed, operator-reviewed lifecycle action.
+type ShutdownStrategy string
+
+const ShutdownStrategyPythonSIGINTPID1 ShutdownStrategy = "python_sigint_pid1"
+
+func ValidShutdownStrategy(profile WorkloadProfile, strategy ShutdownStrategy) bool {
+	return strategy == "" || (profile == WorkloadProfileWeb && strategy == ShutdownStrategyPythonSIGINTPID1)
+}
+
 type ContainerRequirement struct {
-	Name          string
-	Ports         []int
-	Expose        bool
-	RunAsUser     int64
-	WritablePaths []WritablePath
-	ExposedPorts  []int `json:",omitempty"`
+	Name             string
+	Ports            []int
+	Expose           bool
+	RunAsUser        int64
+	WritablePaths    []WritablePath
+	ExposedPorts     []int            `json:",omitempty"`
+	ShutdownStrategy ShutdownStrategy `json:",omitempty"`
 }
 
 func (container ContainerRequirement) PublicPorts() []int {

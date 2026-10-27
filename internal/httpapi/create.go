@@ -55,6 +55,7 @@ type RuntimeContainer struct {
 	requiresFlag      bool
 	flagFilePath      string
 	endpointProtocols []provisioner.PortProtocol
+	shutdownStrategy  isolation.ShutdownStrategy
 }
 
 func (container *RuntimeContainer) UnmarshalJSON(data []byte) error {
@@ -400,6 +401,7 @@ func (request CreateWorkloadRequest) normalizedContainers() ([]provisioner.Workl
 			Env: maps.Clone(container.Env), SecretRef: container.SecretRef, RequiresFlag: container.requiresFlag,
 			FlagFilePath:      container.flagFilePath,
 			TCPStartupOnly:    container.tcpStartupOnly,
+			ShutdownStrategy:  container.shutdownStrategy,
 			EndpointProtocols: slices.Clone(container.endpointProtocols),
 		}
 		if container.readinessHTTP != nil {
@@ -516,12 +518,13 @@ func (request CreateWorkloadRequest) toPolicyRequest(containers []provisioner.Wo
 			writablePaths = request.Workload.Containers[index].WritablePaths
 		}
 		requirements[index] = isolation.ContainerRequirement{
-			Name:          container.Name,
-			Ports:         append([]int(nil), container.Ports...),
-			Expose:        container.Expose,
-			ExposedPorts:  append([]int(nil), container.ExposedPorts...),
-			RunAsUser:     runAsUser,
-			WritablePaths: make([]isolation.WritablePath, len(writablePaths)),
+			Name:             container.Name,
+			Ports:            append([]int(nil), container.Ports...),
+			Expose:           container.Expose,
+			ExposedPorts:     append([]int(nil), container.ExposedPorts...),
+			RunAsUser:        runAsUser,
+			WritablePaths:    make([]isolation.WritablePath, len(writablePaths)),
+			ShutdownStrategy: container.ShutdownStrategy,
 		}
 		for pathIndex, writable := range writablePaths {
 			requirements[index].WritablePaths[pathIndex] = isolation.WritablePath{Path: writable.Path, SizeMiB: writable.SizeMiB}
