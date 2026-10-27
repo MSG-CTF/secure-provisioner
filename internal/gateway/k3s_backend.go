@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/MSG-CTF/secure-provisioner/internal/k3s"
 	"github.com/MSG-CTF/secure-provisioner/internal/operations"
@@ -57,6 +58,17 @@ func (b *KubernetesBackend) CreateWorkloadForOperation(ctx context.Context, c pr
 }
 func (b *KubernetesBackend) DeleteWorkload(ctx context.Context, c provisioner.DeleteWorkloadCommand, binding runtimebinding.Binding) error {
 	return b.Delete.DeleteWorkload(ctx, c, binding)
+}
+
+// A removed Gateway route already has a durable cleanup intent. Give the
+// namespace controller time to work without occupying a lifecycle worker for
+// the full deletion timeout. The caller retains the route journal and binding
+// and retries until DeleteWorkload actually confirms namespace absence.
+// Ordinary deletes without a Gateway journal keep their original timeout.
+func (b *KubernetesBackend) DeleteWorkloadStep(ctx context.Context, c provisioner.DeleteWorkloadCommand, binding runtimebinding.Binding) error {
+	stepCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	return b.Delete.DeleteWorkload(stepCtx, c, binding)
 }
 func (b *KubernetesBackend) CleanupFailedCreate(ctx context.Context, c provisioner.CreateWorkloadCommand, cleanup provisioner.CreateCleanup) error {
 	if cleaner, ok := b.Create.(k3s.FailedCreateCleaner); ok {
