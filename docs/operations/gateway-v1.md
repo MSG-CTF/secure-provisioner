@@ -129,6 +129,13 @@ Gateway → 공인 IP:NodePort의 연결, CNI/NAT, HTTP/TCP/SNI를 따로 검증
 
 ### TCP 공개 포트와 평문 연결 지원 준비
 
+일반 공개 TCP용 Gateway 구현은 [별도 배포 번들](../../deploy/gateway/README.md)에
+추가했다. 이 방식은 기존 3필드 PUT을 유지하며 Gateway의 `tcp_public_ports` 설정으로
+**새 TCP 경로만** 평문 공인 포트에 배치한다. HTTP와 기존 TLS TCP 경로는 유지한다.
+이 범위에는 소유 팀 접속 인증을 포함하지 않으므로 Runtime의
+`PROVISIONER_GATEWAY_TCP_TRANSPORT`는 미설정/`legacy`로 둔다. 아래 owner 계약 초안을
+활성화하는 절차와 구분한다. 번들·포트 범위·방화벽은 아직 운영에 적용하지 않았다.
+
 Runtime은 Gateway가 반환하는 TCP `port`와 명시적인 `tls` 값을 사용한다.
 공개 포트를 NodePort나 컨테이너 포트에서 추측하지 않으며, 난수 서브도메인은
 계속 유지한다. HTTP 경로는 기존 HTTPS URL과 TLS 443으로 제한한다.

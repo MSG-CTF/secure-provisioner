@@ -1,5 +1,9 @@
 # Gateway TCP owner extension — draft, disabled by default
 
+The user selected public nc connectivity without owner authentication for the
+current iteration. The [public TCP bundle](../../deploy/gateway/README.md) uses
+the existing three-field request instead; keep this owner draft disabled.
+
 This is a proposed contract for local verification, not the deployed Gateway API.
 The deployed `/v1/routes/{instance_id}` currently rejects additional request fields.
 Do not enable this extension against it until the Gateway administrator approves
