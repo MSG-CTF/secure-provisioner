@@ -142,6 +142,22 @@ func TestBrokerEventPreservesBodyAndMatchesAcknowledgement(t *testing.T) {
 	}
 }
 
+func TestBrokerFinishedReplayAcceptsCurrentReadyVM(t *testing.T) {
+	body := []byte(`{"execution_id":"` + executionID + `","event":"finished","result":"succeeded","exit_code":0}`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"resource_target_id":"`+targetID+`","execution_id":"`+executionID+`","execution_state":"FINISHED","vm_state":"READY","replayed":true}`)
+	}))
+	defer server.Close()
+	broker, err := win.NewBroker(server.URL, "secret-token", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ack, err := broker.Event(context.Background(), targetID, body)
+	if err != nil || !ack.Replayed || ack.ExecutionState != "FINISHED" || ack.VMState != "READY" {
+		t.Fatalf("finished replay after VM reset: ack=%+v err=%v", ack, err)
+	}
+}
+
 func TestBrokerRejectsMismatchedOrMalformedAcknowledgement(t *testing.T) {
 	for name, response := range map[string]string{
 		"wrong target":    `{"resource_target_id":"` + executionID + `","execution_id":"` + executionID + `","execution_state":"RUNNING","vm_state":"RUNNING"}`,

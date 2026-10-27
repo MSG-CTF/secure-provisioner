@@ -16,6 +16,7 @@ type serviceBroker struct {
 	approved       bool
 	startErr       error
 	finishFailures int
+	finishVMState  string
 	events         [][]byte
 }
 
@@ -40,7 +41,11 @@ func (b *serviceBroker) Event(_ context.Context, _ string, body []byte) (EventAc
 		b.finishFailures--
 		return EventAck{}, errors.New("offline")
 	}
-	return EventAck{TargetID: testTarget, ExecutionID: e.ID, ExecutionState: "FINISHED", VMState: "RESET_REQUIRED"}, nil
+	vmState := b.finishVMState
+	if vmState == "" {
+		vmState = "RESET_REQUIRED"
+	}
+	return EventAck{TargetID: testTarget, ExecutionID: e.ID, ExecutionState: "FINISHED", VMState: vmState}, nil
 }
 
 type serviceTransport struct {

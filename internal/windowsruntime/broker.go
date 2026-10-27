@@ -169,11 +169,13 @@ func (broker *HTTPBroker) Event(ctx context.Context, targetID string, body []byt
 	if decodeBrokerJSON(response, &ack, false) != nil || ack.TargetID != targetID || ack.ExecutionID != event.ExecutionID {
 		return EventAck{}, &APIError{Status: http.StatusOK, Code: "BROKER_INVALID_RESPONSE"}
 	}
-	executionState, vmState := "RUNNING", "RUNNING"
+	executionState := "RUNNING"
 	if event.Event == "finished" {
-		executionState, vmState = "FINISHED", "RESET_REQUIRED"
+		executionState = "FINISHED"
 	}
-	if ack.ExecutionState != executionState || ack.VMState != vmState {
+	// VMState reports the VM's current state. A replay of this finished event
+	// can arrive after the VM has been reset or assigned to another execution.
+	if ack.ExecutionState != executionState || ack.VMState == "" || event.Event == "started" && ack.VMState != "RUNNING" {
 		return EventAck{}, &APIError{Status: http.StatusOK, Code: "BROKER_INVALID_RESPONSE"}
 	}
 	return ack, nil

@@ -97,7 +97,7 @@ func TestDirectCheckerFetchesPayloadAndReturnsResult(t *testing.T) {
 	defer backend.Close()
 	clientTransport := backend.Client().Transport.(*http.Transport).Clone()
 	clientTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} // test-only: local Avast TLS interception
-	broker := &poolBroker{items: []Connection{{TargetID: testTarget, Host: "192.0.2.10", Protocol: "rdp", Port: 3389, Username: "msgexec"}}}
+	broker := &poolBroker{serviceBroker: serviceBroker{finishVMState: "READY"}, items: []Connection{{TargetID: testTarget, Host: "192.0.2.10", Protocol: "rdp", Port: 3389, Username: "msgexec"}}}
 	zero := int64(0)
 	started := time.Now().UTC()
 	guest := &serviceTransport{broker: &broker.serviceBroker, outcome: Outcome{Result: "succeeded", ExitCode: &zero, StartedAt: &started, Stdout: "hello"}}

@@ -294,7 +294,7 @@ func (s *Service) ProcessOne(ctx context.Context) error {
 			}
 			return release("BROKER_FINISH_PENDING")
 		}
-		if ack.TargetID != r.TargetID || ack.ExecutionID != r.ID || ack.ExecutionState != "FINISHED" || ack.VMState != "RESET_REQUIRED" {
+		if ack.TargetID != r.TargetID || ack.ExecutionID != r.ID || ack.ExecutionState != "FINISHED" || ack.VMState == "" {
 			return release("BROKER_FINISH_RESPONSE_INVALID")
 		}
 		r.BrokerPending = false
