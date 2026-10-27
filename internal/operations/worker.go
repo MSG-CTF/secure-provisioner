@@ -176,6 +176,27 @@ func (w *Worker) runLeased(ctx context.Context) error {
 }
 
 func (w *Worker) processLeased(ctx context.Context, claimed ClaimedOperation) error {
+	if guard, ok := w.leaseStore.(LeaseExecutionGuard); ok {
+		executed := false
+		err := guard.WithLeaseExecution(ctx, claimed, func(executeCtx context.Context, guarded ClaimedOperation) error {
+			executed = true
+			return w.processLeasedAttempt(executeCtx, guarded)
+		})
+		if errors.Is(err, ErrExecutionBusy) {
+			_ = w.leaseStore.ReleaseLease(claimed, time.Now().UTC())
+			return sleepContext(ctx, w.pollInterval)
+		}
+		if !executed && errors.Is(err, ErrLeaseLost) {
+			// A claim can expire while waiting for a lock connection. No
+			// executor ran, so discard it without stopping the other workers.
+			return nil
+		}
+		return err
+	}
+	return w.processLeasedAttempt(ctx, claimed)
+}
+
+func (w *Worker) processLeasedAttempt(ctx context.Context, claimed ClaimedOperation) error {
 	executeCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	stopRenewal := make(chan struct{})

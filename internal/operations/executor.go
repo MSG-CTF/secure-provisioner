@@ -31,7 +31,7 @@ func executionFailure(operation Operation, err error) Failure {
 	return Failure{
 		CreateCleanup: target,
 		Code:          code,
-		CreateCleanupCompleted: operation.Type == OperationTypeCreate && !operation.CreateLeaseReclaimed &&
+		CreateCleanupCompleted: operation.Type == OperationTypeCreate && createCleanupCanBeConfirmed(operation) &&
 			errors.As(err, &cleanup) && cleanup.CreateCleanupCompleted(),
 	}
 }
@@ -45,8 +45,12 @@ func (f Failure) result(operationType OperationType) OperationResult {
 
 func (f Failure) Result(operation Operation) OperationResult {
 	result := f.result(operation.Type)
-	result.CreateCleanupCompleted = result.CreateCleanupCompleted && !operation.CreateLeaseReclaimed
+	result.CreateCleanupCompleted = result.CreateCleanupCompleted && createCleanupCanBeConfirmed(operation)
 	return result
+}
+
+func createCleanupCanBeConfirmed(operation Operation) bool {
+	return !operation.CreateLeaseReclaimed || operation.CreateCleanupFenced
 }
 
 type RuntimeExecutor interface {
