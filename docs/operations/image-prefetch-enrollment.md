@@ -141,6 +141,25 @@ stderr and credentials are discarded.
 
 ## Optional admitted Broker inventory and registration outbox
 
+For separately owned target scopes sharing one agent file, opt-in
+`--preserve-other-targets` retains existing Kubernetes entries of targets outside
+the policy. The policy owns all entries of its configured and resolved canonical
+target IDs. All its slots must pass live validation; failure never falls back to
+their old entries. Other targets are retained unchanged after protected bounded
+structural validation, without a remote call, receipt or fresh-readiness claim.
+The summary distinguishes validated `nodes` from `preserved_nodes`. Unsupported
+entry modes/fields and duplicate target/name keys fail closed. Default whole-file
+replacement is unchanged. Use this only with explicitly separated ownership;
+removing a target from a scoped policy does not revoke a retained registration.
+Its owning policy/operator must explicitly revoke it. Policy must cover the whole
+managed target, not just a healthy subset of that target's eligible nodes.
+Scoped retention requires pinned targets and rejects any policy with
+`allow_target_rotation:true` before remote calls or publication. The shared output
+does not carry durable ownership history for intermediate canonical IDs. Default
+whole-file reconciliation still supports approved rotation. Repinning a scoped
+policy requires the operator to explicitly retire its former canonical entry;
+removing it from policy alone does not revoke it.
+
 For a target admitted dynamically by Runtime, keep `--registry` pointing to the
 normal static registry and add `--broker-state <PROVISIONER_BROKER_STATE_DIRECTORY>/targets.json`.
 The protected state is bounded to 1 MiB by this helper; oversized inventories fail
