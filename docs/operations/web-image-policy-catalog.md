@@ -32,6 +32,21 @@ CI 토큰은 전용 팀·Target에서 위 세 WEB digest 중 하나의 단일 �
 
 ## 현재 이미지별 판정
 
+### 2026-10-28 원본 active 추가 검증
+
+10월 27일 08:43:24 KST의 active 원본과 관리자 조회를 대조했다. 아래 네 release의 현재 active ID·revision·전체 이미지 집합은 원본과 일치하고 Backend 배포 승인이 유효하다. Cashout과 OSINT의 현재 채점값은 각 원본 소스의 정답과 메모리에서 비교해 일치를 확인했다. 정답과 인증정보는 정책·시험 보고서에 기록하지 않는다.
+
+| 문제 / revision | 정책 | 검증 및 조건 |
+| --- | --- | --- |
+| crypto-nerves / 573 | `create_enabled` | 원본 `web@1f2a6696…` 고정. UID10001, 공개8080, `/tmp`64MiB, `/healthz`:8080. 실제 Backend FLAG 주입·공개 HTTPS 암호 세션·공식 삭제 확인 |
+| misc-cashout / 584 | `create_enabled` | 원본 `web@5ba579e0…` 고정. UID10001, 공개18419, `/tmp`64MiB, `/healthz`:18419. 이미지의 SIGINT 종료 경로를 고정 preStop으로 사용하며 생성·공개 wallet/settlements·종료·재기동·삭제를 확인한 뒤 반영 |
+| web-logout-please / 552 | `create_enabled` | 원본 `service@5e5c1c0e…` 고정. UID10001, 공개8080, 내부 readiness9090, `/tmp`64MiB. 실제 Backend FLAG와 의도된 공개 풀이 흐름·9090 비공개·삭제 확인. 더 최신 발행 이미지로 대체하지 않음 |
+| osint-the-past-has-an-address / 593 | `blocked` | 원본 `web@0a605f7c…`의 제한된 Kubernetes 기동·정답 일치·공개 조회 기능은 통과. 현재 release의 `APP_ENV=development`, `PUBLIC_ORIGIN=auto`는 TLS Gateway 뒤에서 HTTP 숨은 주소를 생성하므로 공개 HTTPS origin과 불일치. 명시적 production HTTPS origin을 앱 시작 전에 연결하고 같은 origin의 숨은 페이지까지 검증해야 함 |
+
+새 항목의 `ci_smoke_enabled`는 모두 false다. 운영 호스트의 기존 27개 항목은 보존하고 위 네 항목만 추가한다. 저장소의 정책 전체를 운영 파일에 덮어쓰지 않는다. 현재 준비 승인도 `create_enabled`를 요구하므로 OSINT를 `blocked`로 유지하면 새 준비와 생성이 함께 거절된다. 이미 검증한 노드 캐시는 삭제하지 않는다. active 포인터, Backend 자동 활성화와 상시 timer를 변경하지 않으며 AFTERIMAGE 보류를 유지한다.
+
+`shutdown_strategy`는 운영자 정책에만 지정할 수 있는 닫힌 선택값이다. 현재 `python_sigint_pid1` 하나만 WEB 프로필에 허용한다. Runtime은 컨테이너의 preStop에 `/usr/local/bin/python3 -I -B -c "import os, signal; os.kill(1, signal.SIGINT)"`를 고정 argv로 생성한다. 외부 요청은 이 값이나 임의 lifecycle·command·args를 지정할 수 없다. 선택값을 큐의 생성 명령과 해시에 보존하고, 요청·해결 정책·실행 명령 간 불일치나 readback 시 hook 변경을 거절한다. 기존에 생략한 이미지에는 hook을 추가하지 않는다. 일반 grace 기간 안의 정상 종료를 위한 설정이며 강제 종료의 정상 처리를 보장하지 않는다. 이 필드를 이해하는 Runtime 바이너리를 먼저 배포해야 한다.
+
 TCP 연결 자체가 문제 세션을 시작하는 이미지에는 운영자 정책의 tcp_startup_only를 사용합니다
 이 값은 PWN 이미지에서만 허용하며 HTTP 준비 확인과 함께 지정하면 거절합니다
 Kubernetes는 시작할 때 공개 포트에 연결하고 첫 성공 이후에는 확인을 멈춥니다

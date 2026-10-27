@@ -56,11 +56,23 @@ func validateResolvedPolicy(
 	}
 
 	approved := make(map[string]isolation.ContainerRequirement, len(policy.Containers))
+	requestedShutdown := make(map[string]isolation.ShutdownStrategy, len(command.PolicyRequest.Containers))
+	for _, requirement := range command.PolicyRequest.Containers {
+		if !isolation.ValidShutdownStrategy(command.PolicyRequest.WorkloadProfile, requirement.ShutdownStrategy) {
+			return nil, false
+		}
+		if _, duplicate := requestedShutdown[requirement.Name]; duplicate {
+			return nil, false
+		}
+		requestedShutdown[requirement.Name] = requirement.ShutdownStrategy
+	}
 	totalWritableMiB := int64(0)
 	totalEphemeralMiB := int64(policy.ResourceLimits.EphemeralStorageMiB)
 	exposedContainers := 0
 	for _, requirement := range policy.Containers {
-		if requirement.RunAsUser <= 0 {
+		if requirement.RunAsUser <= 0 ||
+			!isolation.ValidShutdownStrategy(isolation.WorkloadProfile(policy.WorkloadProfileRef.Name), requirement.ShutdownStrategy) ||
+			requestedShutdown[requirement.Name] != requirement.ShutdownStrategy {
 			return nil, false
 		}
 		if _, duplicate := approved[requirement.Name]; duplicate {
@@ -108,13 +120,19 @@ func validateResolvedPolicy(
 		}
 		approved[requirement.Name] = requirement
 	}
+	for name, strategy := range requestedShutdown {
+		if _, found := approved[name]; strategy != "" && !found {
+			return nil, false
+		}
+	}
 	if policy.WorkloadProfileRef == (isolation.ProfileRef{Name: "PWN", Version: "v1"}) && exposedContainers != 1 {
 		return nil, false
 	}
 
 	for index, container := range containers {
 		requirement, found := approved[container.Name]
-		if !found || !samePorts(container.PublicPorts(), requirement.PublicPorts()) || !samePorts(container.Ports, requirement.Ports) {
+		if !found || container.ShutdownStrategy != requirement.ShutdownStrategy ||
+			!samePorts(container.PublicPorts(), requirement.PublicPorts()) || !samePorts(container.Ports, requirement.Ports) {
 			return nil, false
 		}
 		containerWritableMiB := int64(0)

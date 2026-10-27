@@ -36,14 +36,15 @@ type WorkloadContainer struct {
 	Expose bool
 	// ExposedPorts is used for a partial selection. Omitted legacy payloads keep
 	// their original Expose semantics and serialized spec hashes.
-	ExposedPorts      []int             `json:",omitempty"`
-	ReadinessHTTP     *HTTPReadiness    `json:",omitempty"`
-	TCPStartupOnly    bool              `json:",omitempty"`
-	Env               map[string]string `json:",omitempty"`
-	SecretRef         string            `json:",omitempty"`
-	RequiresFlag      bool              `json:",omitempty"`
-	FlagFilePath      string            `json:",omitempty"`
-	EndpointProtocols []PortProtocol    `json:",omitempty"`
+	ExposedPorts      []int                      `json:",omitempty"`
+	ReadinessHTTP     *HTTPReadiness             `json:",omitempty"`
+	TCPStartupOnly    bool                       `json:",omitempty"`
+	Env               map[string]string          `json:",omitempty"`
+	SecretRef         string                     `json:",omitempty"`
+	RequiresFlag      bool                       `json:",omitempty"`
+	FlagFilePath      string                     `json:",omitempty"`
+	EndpointProtocols []PortProtocol             `json:",omitempty"`
+	ShutdownStrategy  isolation.ShutdownStrategy `json:",omitempty"`
 }
 
 // PortProtocol describes an operator-approved connection hint, independently

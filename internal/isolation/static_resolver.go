@@ -140,6 +140,9 @@ func validateContainers(containers []ContainerRequirement, limits ResourceLimits
 func validateWorkloadProfile(ref ProfileRef, containers []ContainerRequirement) error {
 	exposedContainers := 0
 	for _, container := range containers {
+		if !ValidShutdownStrategy(WorkloadProfile(ref.Name), container.ShutdownStrategy) {
+			return rejected("unsupported shutdown strategy for workload profile")
+		}
 		if len(container.PublicPorts()) > 0 {
 			exposedContainers++
 			if ref == (ProfileRef{Name: "PWN", Version: "v1"}) && len(container.Ports) != 1 {
