@@ -23,6 +23,7 @@ import (
 	"github.com/MSG-CTF/secure-provisioner/internal/runtimeops"
 	"github.com/MSG-CTF/secure-provisioner/internal/runtimepg"
 	"github.com/MSG-CTF/secure-provisioner/internal/vm"
+	"github.com/MSG-CTF/secure-provisioner/internal/windowsruntime"
 )
 
 type appConfig struct {
@@ -32,6 +33,7 @@ type appConfig struct {
 	RegistryPath          string
 	Broker                k3s.BrokerSyncConfig
 	VMTargetsPath         string
+	WindowsConfigPath     string
 	ImagePoliciesPath     string
 	BackendSecretURL      string
 	BackendSecretToken    string
@@ -113,6 +115,7 @@ func loadConfig(getenv func(string) string) (appConfig, error) {
 	}
 	config := appConfig{
 		VMTargetsPath:      strings.TrimSpace(getenv("PROVISIONER_VM_TARGETS")),
+		WindowsConfigPath:  strings.TrimSpace(getenv("PROVISIONER_WINDOWS_CONFIG")),
 		Address:            valueOrDefault(getenv("PROVISIONER_ADDR"), "127.0.0.1:8080"),
 		RegistryPath:       strings.TrimSpace(getenv("PROVISIONER_CLUSTER_REGISTRY")),
 		ImagePoliciesPath:  strings.TrimSpace(getenv("PROVISIONER_IMAGE_POLICIES")),
@@ -151,6 +154,9 @@ func loadConfig(getenv func(string) string) (appConfig, error) {
 		return appConfig{}, err
 	}
 	if config.RuntimeStore, err = loadRuntimeStoreConfig(getenv); err != nil {
+		return appConfig{}, err
+	}
+	if err = validateWindowsSettings(config.WindowsConfigPath, config.RuntimeStore.Mode); err != nil {
 		return appConfig{}, err
 	}
 	config.WorkerConcurrency = config.RuntimeStore.Workers
@@ -309,6 +315,7 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 	var preparationStore imageprep.Store
 	var gatewayJournal gateway.Journal
 	liveGatewayRoutes := false
+	var windowsStore *windowsruntime.PostgresStore
 	readiness := httpapi.ReadinessConfig{StoreMode: config.RuntimeStore.Mode, APIOnly: config.APIOnly}
 	if config.RuntimeStore.Mode == "postgres" {
 		openStore := runtimepg.Open
@@ -330,6 +337,15 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 		if err != nil {
 			_ = database.Close()
 			return nil, err
+		}
+		if config.WindowsConfigPath != "" {
+			windowsStore = database.WindowsExecutions()
+			readiness.CheckDatabase = func(ctx context.Context) error {
+				if err := database.CheckReadiness(ctx); err != nil {
+					return err
+				}
+				return windowsStore.Check(ctx)
+			}
 		}
 	}
 	var create runtimeops.CreateAdapter = createAdapter
@@ -399,6 +415,13 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 		}
 		return nil, err
 	}
+	windows, checker, windowsErr := initializeWindows(config, windowsStore)
+	if windowsErr != nil {
+		if closeStore != nil {
+			_ = closeStore()
+		}
+		return nil, windowsErr
+	}
 	runWorkers := service.Run
 	if config.ImagePreparation.Auth.Enabled {
 		if preparationStore == nil || imagePolicies == nil {
@@ -424,7 +447,11 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 			return errors.Join(first, <-done)
 		}
 	}
-	handler := httpapi.NewHandlerWithVM(service, service, config.ServiceAuth, imagePolicies, readiness, vmPolicy)
+	if windows != nil {
+		priorRun := runWorkers
+		runWorkers = func(ctx context.Context) error { return runCombinedWorkers(ctx, priorRun, windows.Run) }
+	}
+	handler := httpapi.NewHandlerWithWindows(service, service, config.ServiceAuth, imagePolicies, readiness, vmPolicy, windowsUseCase(windows), checkerUseCase(checker))
 	handler = httpapi.WithImagePreparations(handler, preparation, config.ImagePreparation.Auth)
 	app := &application{
 		handler:   handler,
