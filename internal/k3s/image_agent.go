@@ -72,9 +72,16 @@ func KubernetesImageRunner(registry *Registry) func(context.Context, imageprep.A
 		if err != nil {
 			return imageprep.Evidence{}, err
 		}
-		config, err := clientcmd.BuildConfigFromFlags("", cluster.Config.KubeconfigPath)
-		if err != nil {
-			return imageprep.Evidence{}, failure
+		config := cloneRESTConfig(cluster.restConfig)
+		if config == nil {
+			// Broker locations identify inline credentials, never local files.
+			if strings.HasPrefix(cluster.Config.KubeconfigPath, "broker:") {
+				return imageprep.Evidence{}, failure
+			}
+			config, err = clientcmd.BuildConfigFromFlags("", cluster.Config.KubeconfigPath)
+			if err != nil {
+				return imageprep.Evidence{}, failure
+			}
 		}
 		if config.Insecure {
 			return imageprep.Evidence{}, failure
