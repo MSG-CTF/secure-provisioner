@@ -9,6 +9,43 @@ import (
 	"time"
 )
 
+func TestGatewayJournalFencesTransportAndOwnerContract(t *testing.T) {
+	db := openTestDatabase(t)
+	ctx := context.Background()
+	for index, transport := range []gateway.PublicTransport{gateway.TransportLegacy, gateway.TransportPlain} {
+		id := "contract-" + time.Now().Format("150405.000000000")
+		r := gateway.Record{Command: provisioner.CreateWorkloadCommand{InstanceID: id, TargetID: "test-target", TeamID: "00000000-0000-4000-8000-000000000002"}, Result: provisioner.CreateWorkloadResult{NamespaceUID: "ns-contract"}, Destination: gateway.Destination{TargetIP: "8.8.8.8", TargetPort: 31991 + index, Protocol: "tcp", PublicTransport: transport}, ServiceUID: "svc-contract", Phase: gateway.PhaseApplyPending, CreatedAt: time.Now().UTC()}
+		if transport != gateway.TransportLegacy {
+			r.Destination.OwnerTeamID = string(r.Command.TeamID)
+		}
+		t.Cleanup(func() {
+			_, _ = db.db.ExecContext(context.Background(), "DELETE FROM runtime_gateway_routes WHERE instance_id=$1", id)
+		})
+		if err := db.GatewayJournal().WithLock(ctx, id, func(s gateway.Session) error { return s.Save(r) }); err != nil {
+			t.Fatal(err)
+		}
+		for _, alter := range []func(*gateway.Record){
+			func(v *gateway.Record) { v.Destination.PublicTransport = gateway.TransportTLS },
+			func(v *gateway.Record) { v.Destination.OwnerTeamID = "00000000-0000-4000-8000-000000000003" },
+		} {
+			changed := r
+			alter(&changed)
+			err := db.GatewayJournal().WithLock(ctx, id, func(s gateway.Session) error { return s.Save(changed) })
+			if !errors.Is(err, gateway.ErrConflict) {
+				t.Fatalf("contract rewrite accepted: before=%+v after=%+v err=%v", r.Destination, changed.Destination, err)
+			}
+		}
+		r.Phase = gateway.PhaseConflictHold
+		if err := db.GatewayJournal().WithLock(ctx, id, func(s gateway.Session) error { return s.Save(r) }); err != nil {
+			t.Fatal(err)
+		}
+		saved, err := db.GatewayJournal().Get(ctx, id)
+		if err != nil || saved.Destination != r.Destination || saved.Phase != gateway.PhaseConflictHold {
+			t.Fatalf("contract did not survive phase update/readback: %+v %v", saved, err)
+		}
+	}
+}
+
 func TestGatewayJournalCommitsIntentDespiteInterruptedCallbackAndFencesTuple(t *testing.T) {
 	db := openTestDatabase(t)
 	ctx := context.Background()

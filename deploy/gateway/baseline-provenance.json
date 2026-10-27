@@ -1,0 +1,12 @@
+{
+  "observed_date": "2026-10-27",
+  "source": "Authorized inspection of running Gateway source under /opt/msgctf-gateway/gateway",
+  "baseline_sha256": {
+    "__init__.py": "e93cb4c586ddfedc9cbbf09178a5022d2e4266c2543cd10aa0ae13a942346b70",
+    "requirements.txt": "f72e36705d8c72568be86a78ae1d80a3c97e8e409fb9d1de5b18cae2a9af6fc3",
+    "controller.py": "efbe85b2cca71e30ba4bf59366d35368ff7b5e0a2491f1129ce19aac977cf98e",
+    "main.py": "3900becaf030988a4f86a8d48a2550e014a881efe592e61701918c19aeb8176b"
+  },
+  "contains_credentials": false,
+  "contains_live_routes": false
+}

@@ -115,6 +115,7 @@ func (s *gatewaySession) Save(r gateway.Record) error {
 	 AND ('{"ReleaseID":"","Architecture":""}'::jsonb || (runtime_gateway_routes.snapshot->'Command'))
 	     = ('{"ReleaseID":"","Architecture":""}'::jsonb || (EXCLUDED.snapshot->'Command'))
 	 AND runtime_gateway_routes.snapshot->'Result'=EXCLUDED.snapshot->'Result'
+	 AND runtime_gateway_routes.snapshot->'Destination'=EXCLUDED.snapshot->'Destination'
  AND (runtime_gateway_routes.phase=EXCLUDED.phase
  OR (runtime_gateway_routes.phase='APPLY_PENDING' AND EXCLUDED.phase IN ('APPLIED','DELETE_PENDING','CONFLICT_HOLD'))
  OR (runtime_gateway_routes.phase='CONFLICT_HOLD' AND EXCLUDED.phase='DELETE_PENDING')

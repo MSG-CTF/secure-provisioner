@@ -48,6 +48,7 @@ type appConfig struct {
 	GatewayTokenFile      string
 	GatewayTimeout        time.Duration
 	GatewayMaxInflight    int
+	GatewayTCPTransport   gateway.PublicTransport
 }
 
 type application struct {
@@ -158,6 +159,12 @@ func loadConfig(getenv func(string) string) (appConfig, error) {
 	}
 	if config.GatewayMaxInflight, err = positiveIntSetting(getenv, "PROVISIONER_GATEWAY_MAX_INFLIGHT", config.GatewayMaxInflight); err != nil {
 		return appConfig{}, err
+	}
+	if config.GatewayTCPTransport, err = gateway.ParseTCPTransport(getenv("PROVISIONER_GATEWAY_TCP_TRANSPORT")); err != nil {
+		return appConfig{}, fmt.Errorf("PROVISIONER_GATEWAY_TCP_TRANSPORT: %w", err)
+	}
+	if config.GatewayTCPTransport != gateway.TransportLegacy && config.GatewayTokenFile == "" {
+		return appConfig{}, errors.New("Gateway TCP contract draft requires PROVISIONER_GATEWAY_RUNTIME_TOKEN_FILE")
 	}
 	if config.MaxAttempts, err = positiveIntSetting(getenv, "PROVISIONER_MAX_ATTEMPTS", config.MaxAttempts); err != nil {
 		return appConfig{}, err
@@ -359,7 +366,7 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 			_ = closeStore()
 			return nil, clientErr
 		}
-		adapter := gateway.NewAdapter(&gateway.KubernetesBackend{Registry: registry, Create: create, Delete: deleteWorkload}, client, gatewayJournal)
+		adapter := gateway.NewAdapter(&gateway.KubernetesBackend{Registry: registry, Create: create, Delete: deleteWorkload, TCPTransport: config.GatewayTCPTransport}, client, gatewayJournal)
 		create, deleteWorkload = adapter, adapter
 		config.RollbackTimeout = max(config.RollbackTimeout, config.GatewayTimeout+config.DeleteTimeout+10*time.Second)
 	}
