@@ -49,7 +49,10 @@ type Operation struct {
 	Result               OperationResult
 	LastErrorCode        string
 	CreateLeaseReclaimed bool
-	NextRetryAt          time.Time
+	// CreateCleanupFenced is transient and valid only within execution exclusion
+	// covering every prior create attempt, including a reclaimed lease.
+	CreateCleanupFenced bool
+	NextRetryAt         time.Time
 }
 
 func validCreateWorkloadResult(result provisioner.CreateWorkloadResult) bool {
