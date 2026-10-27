@@ -22,6 +22,9 @@ CTF 문제 인스턴스의 K3s 워크로드 생성·삭제와 상태 조회를 �
 
 API 계약은 [런타임 API 명세](docs/api/runtime-operations.md)와
 [OpenAPI](docs/api/secure-provisioner.openapi.yaml)에 정리되어 있습니다.
+
+B안 이미지 사전 다운로드·준비 조회는 [별도 계약 제안](docs/api/image-preparation-b-contract.md)과
+[제안 OpenAPI](docs/api/image-preparation.openapi.yaml)에서 검토합니다. 현재 서버의 지원 기능은 아닙니다.
 [WEB 이미지별 런타임 정책](docs/operations/web-image-policy-catalog.md)은
 `info.yaml`을 수정하지 않고 운영 설정을 고정하는 방법과 현재 이미지별 상태를 설명합니다.
 
