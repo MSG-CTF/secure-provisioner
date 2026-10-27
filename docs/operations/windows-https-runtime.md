@@ -5,6 +5,11 @@ Backend는 EXE를 비공개 저장소에 보관하고 Runtime의
 `POST /v1/checker-submissions`에 메타데이터와 `selection_mode=broker_pool`을
 보낸다. Runtime은 Backend의 `/internal/v1/checker-submissions/{id}/payload`에서
 원본 EXE를 가져온다. Backend가 Broker 또는 VM의 실행기 API를 직접 호출하지 않는다.
+새 `broker_pool` 요청에는 Backend active release가 필요 없으며 `release_id`를 생략한다.
+이전 요청의 유효한 release UUID는 재전송 호환을 위해 허용하지만 VM 선택에는 쓰지 않는다.
+고정 VM 방식에서는 release UUID를 계속 요구한다.
+release 없는 Backend 코드를 적용하기 전에 이 Runtime 버전을 먼저 배포한다.
+이전 Runtime은 새 요청을 400으로 거절하며, Backend는 불명확한 전송을 자동 재실행하지 않는다.
 
 ## 활성화
 

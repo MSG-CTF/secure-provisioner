@@ -113,7 +113,7 @@ func TestDirectCheckerFetchesPayloadAndReturnsResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := CheckerRequest{RequestVersion: 1, SelectionMode: "broker_pool", SubmissionID: testRequest, AssignmentID: "00000000-0000-4000-8000-000000000003", TeamID: "00000000-0000-4000-8000-000000000005", ChallengeID: "00000000-0000-4000-8000-000000000006", ReleaseID: "00000000-0000-4000-8000-000000000007", PayloadSHA256: hex.EncodeToString(digest[:]), TimeoutSeconds: 30, MaxOutputBytes: 65536, CheckerCommitSHA: strings.Repeat("a", 40), ConfigVersion: "test-v1"}
+	request := CheckerRequest{RequestVersion: 1, SelectionMode: "broker_pool", SubmissionID: testRequest, AssignmentID: "00000000-0000-4000-8000-000000000003", TeamID: "00000000-0000-4000-8000-000000000005", ChallengeID: "00000000-0000-4000-8000-000000000006", PayloadSHA256: hex.EncodeToString(digest[:]), TimeoutSeconds: 30, MaxOutputBytes: 65536, CheckerCommitSHA: strings.Repeat("a", 40), ConfigVersion: "test-v1"}
 	record, created, err := checker.Submit(context.Background(), request, "backend-job-token-secret")
 	if err != nil || !created {
 		t.Fatalf("direct submit: %+v %v", record, err)
@@ -200,6 +200,29 @@ func TestCheckerAcceptsBrokerDiscoveredPoolWithoutStaticTargets(t *testing.T) {
 	}
 }
 
+func TestCheckerReleaseIDIsModeScoped(t *testing.T) {
+	service, _, _ := serviceFixture(t, &serviceBroker{}, Outcome{})
+	service.SetPoolAnyTargets()
+	checker, err := NewChecker(service, CheckerConfig{BackendURL: "https://backend.example", Targets: map[string]bool{testTarget: true}, CheckerCommitSHA: strings.Repeat("a", 40), VMTemplateSHA256: strings.Repeat("b", 64), DriverSHA256: strings.Repeat("c", 64), ConfigVersion: "test-v1"}, &http.Client{Timeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256([]byte("MZ fixture"))
+	request := CheckerRequest{RequestVersion: 1, SelectionMode: "broker_pool", SubmissionID: testRequest, AssignmentID: "00000000-0000-4000-8000-000000000003", TeamID: "00000000-0000-4000-8000-000000000005", ChallengeID: "00000000-0000-4000-8000-000000000006", ReleaseID: "not-a-uuid", PayloadSHA256: hex.EncodeToString(digest[:]), TimeoutSeconds: 30, MaxOutputBytes: 65536, CheckerCommitSHA: strings.Repeat("a", 40), ConfigVersion: "test-v1"}
+	if _, _, err := checker.Submit(context.Background(), request, "backend-job-token-secret"); err != ErrInvalidSubmission {
+		t.Fatalf("broker pool accepted a malformed historical release ID: %v", err)
+	}
+	request.SelectionMode = ""
+	request.ReleaseID = ""
+	request.VMID = testTarget
+	request.ReadinessCheckID = "fresh-ready-evidence"
+	request.VMTemplateSHA256 = strings.Repeat("b", 64)
+	request.DriverSHA256 = strings.Repeat("c", 64)
+	if _, _, err := checker.Submit(context.Background(), request, "backend-job-token-secret"); err != ErrInvalidSubmission {
+		t.Fatalf("fixed VM accepted a missing release: %v", err)
+	}
+}
+
 func TestCheckerBrokerPoolRejectsInventedDigestsAndFixedVMRequiresPins(t *testing.T) {
 	service, _, _ := serviceFixture(t, &serviceBroker{}, Outcome{})
 	service.SetPoolAnyTargets()
@@ -212,7 +235,7 @@ func TestCheckerBrokerPoolRejectsInventedDigestsAndFixedVMRequiresPins(t *testin
 		RequestVersion: 1, SelectionMode: "broker_pool", SubmissionID: testRequest,
 		AssignmentID: "00000000-0000-4000-8000-000000000003",
 		TeamID:       "00000000-0000-4000-8000-000000000005", ChallengeID: "00000000-0000-4000-8000-000000000006",
-		ReleaseID: "00000000-0000-4000-8000-000000000007", PayloadSHA256: hex.EncodeToString(digest[:]),
+		PayloadSHA256:  hex.EncodeToString(digest[:]),
 		TimeoutSeconds: 30, MaxOutputBytes: 65536, CheckerCommitSHA: strings.Repeat("a", 40), ConfigVersion: "test-v1",
 	}
 	request.VMTemplateSHA256 = strings.Repeat("b", 64)
@@ -221,6 +244,7 @@ func TestCheckerBrokerPoolRejectsInventedDigestsAndFixedVMRequiresPins(t *testin
 		t.Fatalf("broker-pool accepted unmeasured digests: %v", err)
 	}
 	request.SelectionMode = ""
+	request.ReleaseID = "00000000-0000-4000-8000-000000000007"
 	request.VMID = testTarget
 	request.ReadinessCheckID = "fresh-ready-evidence"
 	request.VMTemplateSHA256 = ""

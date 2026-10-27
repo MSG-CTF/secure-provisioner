@@ -29,7 +29,7 @@ type CheckerRequest struct {
 	AssignmentID     string `json:"assignment_id"`
 	TeamID           string `json:"team_id"`
 	ChallengeID      string `json:"challenge_id"`
-	ReleaseID        string `json:"release_id"`
+	ReleaseID        string `json:"release_id,omitempty"`
 	SelectionMode    string `json:"selection_mode,omitempty"`
 	VMID             string `json:"vm_id"`
 	ReadinessCheckID string `json:"readiness_check_id"`
@@ -115,13 +115,13 @@ func (c *Checker) SubmitForBackend(ctx context.Context, backendID string, reques
 	if !ok {
 		return Record{}, false, ErrInvalidSubmission
 	}
-	if request.RequestVersion != 1 || !ValidID(request.SubmissionID) || !ValidID(request.AssignmentID) || !ValidID(request.TeamID) || !ValidID(request.ChallengeID) || !ValidID(request.ReleaseID) || request.TimeoutSeconds < 10 || request.TimeoutSeconds > 180 || request.MaxOutputBytes != c.service.cfg.OutputLimit || len(request.PayloadSHA256) != 64 || len(token) < 20 || len(token) > 4096 || strings.ContainsAny(token, " \t\r\n\x00") || request.CheckerCommitSHA != c.cfg.CheckerCommitSHA || request.ConfigVersion != c.cfg.ConfigVersion {
+	if request.RequestVersion != 1 || !ValidID(request.SubmissionID) || !ValidID(request.AssignmentID) || !ValidID(request.TeamID) || !ValidID(request.ChallengeID) || (request.ReleaseID != "" && !ValidID(request.ReleaseID)) || request.TimeoutSeconds < 10 || request.TimeoutSeconds > 180 || request.MaxOutputBytes != c.service.cfg.OutputLimit || len(request.PayloadSHA256) != 64 || len(token) < 20 || len(token) > 4096 || strings.ContainsAny(token, " \t\r\n\x00") || request.CheckerCommitSHA != c.cfg.CheckerCommitSHA || request.ConfigVersion != c.cfg.ConfigVersion {
 		return Record{}, false, ErrInvalidSubmission
 	}
 	targetID := request.VMID
 	switch request.SelectionMode {
 	case "":
-		if !ValidID(targetID) || !c.cfg.Targets[targetID] || request.ReadinessCheckID == "" || len(request.ReadinessCheckID) > 200 || strings.ContainsAny(request.ReadinessCheckID, "\r\n\x00") || !checkerSHA64.MatchString(c.cfg.VMTemplateSHA256) || !checkerSHA64.MatchString(c.cfg.DriverSHA256) || request.VMTemplateSHA256 != c.cfg.VMTemplateSHA256 || request.DriverSHA256 != c.cfg.DriverSHA256 {
+		if !ValidID(request.ReleaseID) || !ValidID(targetID) || !c.cfg.Targets[targetID] || request.ReadinessCheckID == "" || len(request.ReadinessCheckID) > 200 || strings.ContainsAny(request.ReadinessCheckID, "\r\n\x00") || !checkerSHA64.MatchString(c.cfg.VMTemplateSHA256) || !checkerSHA64.MatchString(c.cfg.DriverSHA256) || request.VMTemplateSHA256 != c.cfg.VMTemplateSHA256 || request.DriverSHA256 != c.cfg.DriverSHA256 {
 			return Record{}, false, ErrInvalidSubmission
 		}
 	case "broker_pool":
