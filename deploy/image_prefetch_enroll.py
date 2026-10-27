@@ -355,7 +355,8 @@ class KubernetesClient:
         converted = self.json_command([self.binary, "--kubeconfig", "/dev/stdin", "config", "view", "--raw", "-o", "json"], source=source)
         return static_kubeconfig(converted)
 
-    def query(self, kubeconfig, args):
+    def query(self, kubeconfig, args, *, source=None):
+        command_input = source
         source = read_bytes(kubeconfig, credential_owner_uid=self.runtime_uid)
         config = self.static_config(source)
         with tempfile.TemporaryDirectory(prefix="image-prefetch-kubeconfig-") as directory:
@@ -364,7 +365,7 @@ class KubernetesClient:
             with os.fdopen(descriptor, "wb") as file:
                 file.write(encoded_json(config))
             command = [self.binary, "--kubeconfig", str(snapshot), "--request-timeout=15s", "--insecure-skip-tls-verify=false", *args]
-            return self.json_command(command)
+            return self.json_command(command, source=command_input)
 
 
 def ready(conditions):
@@ -411,6 +412,7 @@ def verify_agent(pods, expected):
         raise EnrollmentError("AGENT_UNAVAILABLE") from None
     if len(candidates) != 1:
         raise EnrollmentError("AGENT_UNAVAILABLE")
+    return candidates[0]
 
 
 def encoded_json(value):
@@ -428,9 +430,26 @@ def emit_registration_event(directory, generation, *, expected_policy):
     """Immutable local outbox. A retry repairs a crash after nodes publication."""
     directory = Path(directory)
     trusted_parent(directory)
+    def verify_directory(path):
+        if os.name != "posix":
+            if path.is_symlink() or not path.is_dir():
+                raise EnrollmentError("UNTRUSTED_DIRECTORY")
+            return
+        try:
+            descriptor = open_trusted_source(path, None)
+        except OSError:
+            raise EnrollmentError("UNTRUSTED_DIRECTORY") from None
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid not in (0, os.geteuid()) or info.st_mode & 0o022:
+                raise EnrollmentError("UNTRUSTED_DIRECTORY")
+        finally:
+            os.close(descriptor)
+    verify_directory(directory.parent)
     if directory.is_symlink():
         raise EnrollmentError("UNTRUSTED_DIRECTORY")
     directory.mkdir(mode=0o700, exist_ok=True)
+    verify_directory(directory)
     trusted_parent(directory / "receipt")
     event_id = hashlib.sha256(encoded_json({"version": 1, "type": "agent.registration", "generation": generation})).hexdigest()
     path = directory / (event_id + ".json")

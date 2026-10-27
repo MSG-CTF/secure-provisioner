@@ -712,6 +712,18 @@ class RegistrationReceiptTests(unittest.TestCase):
             self.run_enrollment(apply=True, events_dir=self.events())
         self.assertEqual(event.read_bytes(), before)
 
+    @unittest.skipIf(os.name != "posix", "POSIX ancestor no-follow checks")
+    def test_receipt_ancestor_symlink_is_rejected(self):
+        actual = self.directory / "actual"
+        actual.mkdir(mode=0o700)
+        leaf = actual / "leaf"
+        leaf.mkdir(mode=0o700)
+        link = self.directory / "linked"
+        link.symlink_to(actual, target_is_directory=True)
+        with self.assertRaises(enroll.EnrollmentError):
+            self.run_enrollment(apply=True, events_dir=link / "leaf" / "events")
+        self.assertFalse((leaf / "events").exists())
+
     @unittest.skipIf(os.name != "posix", "POSIX directory permissions")
     def test_world_writable_or_symlink_receipt_directory_is_rejected(self):
         self.events().mkdir(mode=0o777)

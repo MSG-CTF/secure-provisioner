@@ -139,8 +139,6 @@ Its existing kubeconfig grants determine its remote read access. Output includes
 only fixed status/error codes, counts, and changed/replacement booleans; upstream
 stderr and credentials are discarded.
 
-## Trusted VM replacement hook
-
 ## Optional admitted Broker inventory and registration outbox
 
 For a target admitted dynamically by Runtime, keep `--registry` pointing to the
@@ -190,7 +188,7 @@ through the normal rollout. No timer is enabled by installing these examples.
 All approved nodes must pass; do not mix disposable QA nodes into operating policy
 or omit an unhealthy operating node to manufacture successful enrollment.
 
-## Trusted VM replacement hook (continued)
+## Trusted VM replacement hook
 
 For automatic same-target VM replacement, set `allow_replacement:true` on that
 approved slot in a reviewed candidate and use `publish-policy`. The trusted
