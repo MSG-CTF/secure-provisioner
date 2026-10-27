@@ -15,6 +15,8 @@ import (
 )
 
 type API struct {
+	windows         WindowsUseCase
+	checker         CheckerUseCase
 	vmPolicy        func(*CreateWorkloadRequest) error
 	createWorkload  provisioner.CreateWorkloadUseCase
 	runtime         RuntimeUseCase
@@ -41,29 +43,50 @@ func NewHandlerWithRuntimeReadiness(createWorkload provisioner.CreateWorkloadUse
 }
 
 func NewHandlerWithVM(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase, authConfig ServiceAuthConfig, policies *ImagePolicyCatalog, readiness ReadinessConfig, vmPolicy func(*CreateWorkloadRequest) error) http.Handler {
-	return newHandler(createWorkload, runtime, authConfig, policies, &readiness, vmPolicy)
+	return newHandler(createWorkload, runtime, authConfig, policies, &readiness, handlerOptions{VMPolicy: vmPolicy})
 }
 
-func newHandler(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase, authConfig ServiceAuthConfig, policies *ImagePolicyCatalog, readiness *ReadinessConfig, vmPolicies ...func(*CreateWorkloadRequest) error) http.Handler {
+func newHandler(createWorkload provisioner.CreateWorkloadUseCase, runtime RuntimeUseCase, authConfig ServiceAuthConfig, policies *ImagePolicyCatalog, readiness *ReadinessConfig, options ...handlerOptions) http.Handler {
 	api := &API{createWorkload: createWorkload, runtime: runtime, imagePolicies: policies, ciSmokeTeamID: authConfig.CISmokeTeamID, ciSmokeTargetID: authConfig.CISmokeTargetID}
 	if runtime == nil {
 		api.directResolver = isolation.NewStaticResolver()
 	}
-	if len(vmPolicies) > 0 {
-		api.vmPolicy = vmPolicies[0]
+	if len(options) > 0 {
+		api.vmPolicy = options[0].VMPolicy
+		api.windows = options[0].Windows
+		api.checker = options[0].Checker
 	}
 	mux := http.NewServeMux()
 	if readiness != nil {
 		mux.HandleFunc("GET /internal/v1/healthz", readiness.handle)
 	}
 	mux.HandleFunc("POST /internal/v1/instances", api.handleCreateInstance)
+	if api.windows != nil {
+		mux.HandleFunc("GET /internal/v1/windows-vms", api.handleWindowsTargets)
+		mux.HandleFunc("GET /internal/v1/windows-vms/{resource_target_id}/connection", api.handleWindowsConnection)
+		mux.HandleFunc("GET /internal/v1/windows-vms/{resource_target_id}/connection.rdp", api.handleWindowsRDP)
+		mux.HandleFunc(windowsSubmitPattern, api.handleWindowsSubmit)
+		mux.HandleFunc("GET /internal/v1/windows-executions/{execution_id}", api.handleWindowsGet)
+	}
+	if api.checker != nil {
+		mux.HandleFunc("POST /v1/checker-submissions", api.handleCheckerSubmit)
+		mux.HandleFunc("GET /v1/checker-submissions/{submission_id}", api.handleCheckerGet)
+	}
 	if runtime != nil {
 		mux.HandleFunc("GET /internal/v1/instances/{instance_id}/runtime-status", api.handleRuntimeStatus)
 		mux.HandleFunc("DELETE /internal/v1/instances/{instance_id}", api.handleDeleteInstance)
 		mux.HandleFunc("GET /internal/v1/operations/{operation_id}", api.handleGetOperation)
 		mux.HandleFunc("POST /internal/v1/instances/{instance_id}/reconcile_create", api.handleReconcileCreate)
 	}
-	return newServiceAuthenticator(authConfig).wrap(requestSizeLimit(mux))
+	limited := requestSizeLimit(mux)
+	return newServiceAuthenticator(authConfig).wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, pattern := mux.Handler(r)
+		if pattern == windowsSubmitPattern {
+			mux.ServeHTTP(w, r)
+			return
+		}
+		limited.ServeHTTP(w, r)
+	}))
 }
 
 func (api *API) handleCreateInstance(writer http.ResponseWriter, request *http.Request) {

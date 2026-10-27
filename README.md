@@ -22,6 +22,10 @@ CTF 문제 인스턴스의 K3s 워크로드 생성·삭제와 상태 조회를 �
 
 API 계약은 [런타임 API 명세](docs/api/runtime-operations.md)와
 [OpenAPI](docs/api/secure-provisioner.openapi.yaml)에 정리되어 있습니다.
+Windows 11 EXE 제출의 Backend → Runtime → Broker → HTTPS 실행기 경로는
+[Windows HTTPS Runtime 안내](docs/operations/windows-https-runtime.md)에 정리했습니다.
+`PROVISIONER_WINDOWS_CONFIG`로 활성화하며 Broker 실행 승인, EXE 전송,
+결과 수집 및 영속 완료 통보를 제공합니다.
 [WEB 이미지별 런타임 정책](docs/operations/web-image-policy-catalog.md)은
 `info.yaml`을 수정하지 않고 운영 설정을 고정하는 방법과 현재 이미지별 상태를 설명합니다.
 
