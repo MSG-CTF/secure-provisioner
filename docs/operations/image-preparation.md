@@ -167,8 +167,14 @@ and time separately using approved node telemetry before calling a run a cold pu
 
 Historical operation status and current readiness are separate. The report keeps
 server `observed_at`/`valid_until` exactly and marks expired/future observations
-not currently ready. Missing or partial frozen target coverage is explicitly
-unverified. The command is a single bounded collection, not a polling daemon.
+not currently ready. Runtime readiness is advisory: one ready node among several
+eligible nodes can legitimately set `ready:true`; both counts are retained.
+Missing or partial frozen target coverage is explicitly unverified.
+`operation_target_scope` describes only frozen node results. The API does not
+expose the original request's complete target list, so
+`original_request_target_scope` is always `UNAVAILABLE_IN_API`; compare the original
+Backend request separately. Accepted `NO_ELIGIBLE_NODES` failures remain reportable.
+The command is a single bounded collection, not a polling daemon.
 It does not enable Backend generation-receipt consumption or deliver credentials.
 
 ### Preparation rollout

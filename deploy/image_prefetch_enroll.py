@@ -448,8 +448,18 @@ def emit_registration_event(directory, generation, *, expected_policy):
     verify_directory(directory.parent)
     if directory.is_symlink():
         raise EnrollmentError("UNTRUSTED_DIRECTORY")
-    directory.mkdir(mode=0o700, exist_ok=True)
+    try:
+        directory.mkdir(mode=0o700)
+        created = True
+    except FileExistsError:
+        created = False
     verify_directory(directory)
+    if created and os.name == "posix":
+        parent = os.open(directory.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(parent)
+        finally:
+            os.close(parent)
     trusted_parent(directory / "receipt")
     event_id = hashlib.sha256(encoded_json({"version": 1, "type": "agent.registration", "generation": generation})).hexdigest()
     path = directory / (event_id + ".json")

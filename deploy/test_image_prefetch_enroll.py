@@ -703,6 +703,20 @@ class RegistrationReceiptTests(unittest.TestCase):
         self.assertEqual(self.output.stat().st_mtime_ns, before)
         self.assertEqual(len(list(self.events().glob("*.json"))), 1)
 
+    @unittest.skipIf(os.name != "posix", "POSIX directory durability")
+    def test_first_outbox_creation_syncs_parent_after_mkdir(self):
+        parent = self.directory.stat()
+        real_fsync = os.fsync
+        synced_parent_after_creation = []
+        def fsync(descriptor):
+            info = os.fstat(descriptor)
+            if self.events().exists() and (info.st_dev, info.st_ino) == (parent.st_dev, parent.st_ino):
+                synced_parent_after_creation.append(True)
+            return real_fsync(descriptor)
+        with patch.object(enroll.os, "fsync", side_effect=fsync):
+            self.run_enrollment(apply=True, events_dir=self.events())
+        self.assertTrue(synced_parent_after_creation, "new outbox directory itself must be durable")
+
     def test_conflicting_existing_receipt_is_not_overwritten(self):
         self.run_enrollment(apply=True, events_dir=self.events())
         event = next(self.events().glob("*.json"))

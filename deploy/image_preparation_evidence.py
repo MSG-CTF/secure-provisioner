@@ -76,8 +76,8 @@ def safe_id(value):
     return value
 
 
-def failure(value):
-    require(value is None or isinstance(value, str) and (value == "" or value in FAILURES))
+def failure(value, *, operation=False):
+    require(value is None or isinstance(value, str) and (value == "" or value in FAILURES or operation and value == "NO_ELIGIBLE_NODES"))
     return value
 
 
@@ -138,7 +138,7 @@ def checked_operation(raw, scope, operation_id):
     result = {k: raw[k] for k in ("operation_id", "release_id", "architecture", "image_set_id", "status")}
     result["request_id"] = safe_id(raw.get("request_id"))
     if "error_code" in raw:
-        result["error_code"] = failure(raw["error_code"])
+        result["error_code"] = failure(raw["error_code"], operation=True)
     nodes = raw.get("nodes")
     require(isinstance(nodes, list) and len(nodes) <= 256)
     result["nodes"], seen = [], set()
@@ -183,7 +183,7 @@ def checked_readiness(raw, scope):
         require(row["ready_node_count"] <= row["eligible_node_count"])
         observed, valid = timestamp(row.get("observed_at")), timestamp(row.get("valid_until"))
         require((observed is None) == (valid is None) and (valid is None or valid >= observed))
-        require(not row["ready"] or observed is not None and row["ready_node_count"] == row["eligible_node_count"] > 0)
+        require(not row["ready"] or observed is not None and row["ready_node_count"] > 0)
         result.append({k: row[k] for k in ("target_id", "ready", "ready_node_count", "eligible_node_count", "observed_at", "valid_until")})
     return {"architecture": scope["architecture"], "image_set_id": scope["image_set_id"], "targets": result}
 
@@ -227,6 +227,7 @@ def collect(api, scope, operation_id, *, before=None, after=None):
     result = {"version": 1, "collected_at": now.isoformat(), "scope": scope, "operation": operation,
         "operation_target_scope": ("VERIFIED" if set(n["target_id"] for n in operation["nodes"]) == set(scope["target_ids"]) else
             "UNVERIFIED_PARTIAL_TARGETS" if operation["nodes"] else "UNVERIFIED_NO_NODES"),
+        "original_request_target_scope": "UNAVAILABLE_IN_API",
         "readiness": readiness, "current_readiness": {r["target_id"]: bool(r["ready"] and timestamp(r["observed_at"]) <= now < timestamp(r["valid_until"])) for r in readiness["targets"]},
         "pull_telemetry": "UNKNOWN", "pull_elapsed_seconds": None, "cache_classification": "UNKNOWN"}
     for key, raw in (("before_cache", before), ("after_cache", after)):

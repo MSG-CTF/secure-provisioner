@@ -120,6 +120,24 @@ class EvidenceTests(unittest.TestCase):
         self.http.ready["targets"][0]["target_id"] = "other"
         with self.assertRaises(enroll.EnrollmentError): evidence.collect(self.api, scope(), OP)
 
+    def test_runtime_partial_readiness_is_valid_advisory_evidence(self):
+        now = datetime.now(timezone.utc)
+        self.http.ready["targets"][0].update(ready=True, ready_node_count=1, eligible_node_count=2,
+            observed_at=now.isoformat(), valid_until=(now + timedelta(minutes=1)).isoformat())
+        result = evidence.collect(self.api, scope(), OP)
+        self.assertTrue(result["current_readiness"][TARGET])
+        self.assertEqual(result["readiness"]["targets"][0]["eligible_node_count"], 2)
+
+    def test_runtime_no_eligible_nodes_failure_remains_reportable(self):
+        self.http.op.update(status="FAILED", nodes=[], error_code="NO_ELIGIBLE_NODES")
+        result = evidence.collect(self.api, scope(), OP)
+        self.assertEqual(result["operation"]["error_code"], "NO_ELIGIBLE_NODES")
+        self.assertEqual(result["operation_target_scope"], "UNVERIFIED_NO_NODES")
+
+    def test_original_request_target_coverage_is_not_claimed_from_frozen_nodes(self):
+        result = evidence.collect(self.api, scope(), OP)
+        self.assertEqual(result["original_request_target_scope"], "UNAVAILABLE_IN_API")
+
     def test_cached_snapshot_never_claims_measured_cold_pull_or_zero_pull(self):
         snapshot = {"version": 1, "target_id": TARGET, "architecture": "AMD64", "node_uid": "uid-new",
             "machine_id": "machine-a", "boot_id": "boot-a", "observed_at": "2026-10-28T00:00:00Z",

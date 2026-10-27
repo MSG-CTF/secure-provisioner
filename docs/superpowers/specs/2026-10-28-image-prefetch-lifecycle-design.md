@@ -2,8 +2,6 @@
 
 The preparation API and agents already exist. The operating Broker target was enrolled once by hand because Runtime's admitted Broker targets live in protected state, while the enrollment CLI only reads the static registry file. Repeating a manual credential materialization after every change is fragile. The current Backend-led Daily Point test and its existing settings must continue unchanged.
 
-The user asked to prepare follow-up automation now and previously chose autonomous execution. This design records implementation decisions for that authorized work; no additional confirmation loop is needed.
-
 ## Goals and boundaries
 
 - Reuse the Python enrollment CLI and its protected policy, path ownership checks, frozen static credentials and shared output lock.
