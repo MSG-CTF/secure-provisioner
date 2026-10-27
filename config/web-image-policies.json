@@ -414,6 +414,18 @@
       "tcp_startup_only": true
     },
     {
+      "image": "ghcr.io/msg-ctf/challenges/rev-tinyvm/tinyvm@sha256:3d1dff5cfa702f76bbfd8d244f20ea6e465f57a39e1d87576de55910562e31c1",
+      "container": "tinyvm",
+      "isolation_profile": "PWN",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 10001,
+      "ports": [1337],
+      "exposed_ports": [1337],
+      "writable_paths": [{"path": "/tmp", "size_mib": 64}],
+      "tcp_startup_only": true
+    },
+    {
       "image": "ghcr.io/msg-ctf/challenges/crypto-reused-seal/chall@sha256:9a6b14660f113ffc98e8efd81c3c9cfe8cab081b994708688b179ba0ca749878",
       "container": "chall",
       "isolation_profile": "PWN",
