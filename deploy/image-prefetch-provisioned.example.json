@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "target_id": "REPLACE_WITH_EXISTING_PREAPPROVED_RUNTIME_TARGET_ID",
+  "node_name": "replace-with-existing-approved-node-name",
+  "previous_machine_id": "REPLACE_WITH_PREVIOUS_APPROVED_MACHINE_ID",
+  "previous_provider_id": "REPLACE_WITH_PREVIOUS_APPROVED_PROVIDER_ID",
+  "machine_id": "REPLACE_FROM_TRUSTED_REPLACEMENT_PROVISIONING_IDENTITY",
+  "provider_id": "REPLACE_FROM_TRUSTED_REPLACEMENT_PROVIDER_ID"
+}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/google/uuid"
 	"io"
 	"maps"
 	"path"
@@ -138,6 +139,8 @@ type ResourceLimits struct {
 }
 
 type CreateWorkloadRequest struct {
+	ReleaseID        string             `json:"release_id,omitempty"`
+	Architecture     string             `json:"architecture,omitempty"`
 	VMProfile        string             `json:"-"`
 	RequestID        string             `json:"request_id"`
 	InstanceID       string             `json:"instance_id"`
@@ -158,6 +161,19 @@ func (request *CreateWorkloadRequest) UnmarshalJSON(data []byte) error {
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&decoded); err != nil {
 		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if raw, ok := fields["release_id"]; ok {
+		value, err := uuid.Parse(decoded.ReleaseID)
+		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) || err != nil || value == uuid.Nil || value.String() != decoded.ReleaseID {
+			return fmt.Errorf("release_id must be a canonical nonzero UUID")
+		}
+	}
+	if _, ok := fields["architecture"]; ok && decoded.Architecture != "AMD64" && decoded.Architecture != "ARM64" {
+		return fmt.Errorf("architecture must be AMD64 or ARM64")
 	}
 	*request = CreateWorkloadRequest(decoded)
 	return nil
@@ -293,12 +309,14 @@ func (request *CreateWorkloadRequest) Validate() error {
 func (request CreateWorkloadRequest) ToCommand() provisioner.CreateWorkloadCommand {
 	containers, _ := request.normalizedContainers()
 	return provisioner.CreateWorkloadCommand{
-		RequestID:   request.RequestID,
-		InstanceID:  request.InstanceID,
-		TeamID:      request.TeamID,
-		RuntimeType: provisioner.RuntimeType(request.Target.RuntimeType),
-		TargetID:    request.Target.TargetID,
-		Containers:  containers,
+		ReleaseID:    request.ReleaseID,
+		Architecture: request.Architecture,
+		RequestID:    request.RequestID,
+		InstanceID:   request.InstanceID,
+		TeamID:       request.TeamID,
+		RuntimeType:  provisioner.RuntimeType(request.Target.RuntimeType),
+		TargetID:     request.Target.TargetID,
+		Containers:   containers,
 		ResourceLimits: provisioner.ResourceLimits{
 			CPUMillicores:       request.Workload.ResourceLimits.CPUMillicores,
 			MemoryMiB:           request.Workload.ResourceLimits.MemoryMiB,

@@ -1,0 +1,12 @@
+{
+  "architecture": "AMD64",
+  "images": [
+    "ghcr.io/msg-ctf/challenges/example/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "ghcr.io/msg-ctf/challenges/example/db@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  ],
+  "target_ids": [
+    "target-a",
+    "target-b",
+    "unknown-target"
+  ]
+}

@@ -1,0 +1,29 @@
+[Unit]
+Description=Reconcile preapproved Runtime image-agent node identities
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=secure-provisioner
+UMask=0027
+StateDirectory=secure-provisioner/image-prefetch
+StateDirectoryMode=0750
+# Replace registry path/group with the existing Runtime installation values.
+ExecStart=/usr/bin/python3 /usr/local/libexec/image_prefetch_enroll.py reconcile --policy /var/lib/secure-provisioner/image-prefetch/enrollment.json --registry /etc/secure-provisioner/clusters.json --output /var/lib/secure-provisioner/image-prefetch/nodes.json --runtime-user secure-provisioner --apply
+TimeoutStartSec=5min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/secure-provisioner/image-prefetch
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+# Existing Runtime kubeconfigs may be owned by its service user with mode0600.
+# Read/search bypass is needed for that fixed approved input, never write bypass.
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX

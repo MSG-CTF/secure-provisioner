@@ -51,6 +51,8 @@ func TestGatewayJournalCommitsIntentDespiteInterruptedCallbackAndFencesTuple(t *
 	ctx := context.Background()
 	id := "gateway-" + time.Now().Format("150405.000000000")
 	r := gateway.Record{Command: provisioner.CreateWorkloadCommand{InstanceID: id, TargetID: "test-target"}, Result: provisioner.CreateWorkloadResult{NamespaceUID: "ns1", RuntimeWorkloadID: "test/ns/instance"}, Destination: gateway.Destination{TargetIP: "8.8.8.8", TargetPort: 31042, Protocol: "http"}, ServiceUID: "svc1", Phase: gateway.PhaseApplyPending, CreatedAt: time.Now().UTC()}
+	r.Command.ReleaseID = "11111111-1111-4111-8111-111111111111"
+	r.Command.Architecture = "AMD64"
 	interrupted := errors.New("interrupted after intent commit")
 	err := db.GatewayJournal().WithLock(ctx, id, func(s gateway.Session) error {
 		if err := s.Save(r); err != nil {
@@ -64,6 +66,9 @@ func TestGatewayJournalCommitsIntentDespiteInterruptedCallbackAndFencesTuple(t *
 	saved, err := db.GatewayJournal().Get(ctx, id)
 	if err != nil || saved.Destination != r.Destination {
 		t.Fatal(saved, err)
+	}
+	if saved.Command.ReleaseID != r.Command.ReleaseID || saved.Command.Architecture != r.Command.Architecture {
+		t.Fatal("Gateway durable recovery lost release metadata")
 	}
 	err = db.GatewayJournal().WithLock(ctx, id, func(s gateway.Session) error { r.Destination.TargetPort++; return s.Save(r) })
 	if !errors.Is(err, gateway.ErrConflict) {

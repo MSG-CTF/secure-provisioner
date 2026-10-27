@@ -105,11 +105,16 @@ func (s *gatewaySession) Save(r gateway.Record) error {
 	if err != nil {
 		return err
 	}
+	// Old commands predate these optional tracing fields. Defaults go on the
+	// left so persisted nonempty identities win; every other field, including
+	// unknown future fields, remains part of the immutable command comparison.
 	result, err := s.conn.ExecContext(s.ctx, `INSERT INTO runtime_gateway_routes(instance_id,target_id,namespace_uid,service_uid,target_ip,target_port,protocol,phase,snapshot,updated_at)
  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(instance_id) DO UPDATE SET phase=EXCLUDED.phase,snapshot=EXCLUDED.snapshot,updated_at=EXCLUDED.updated_at
  WHERE runtime_gateway_routes.target_id=EXCLUDED.target_id AND runtime_gateway_routes.namespace_uid=EXCLUDED.namespace_uid AND runtime_gateway_routes.service_uid=EXCLUDED.service_uid
  AND runtime_gateway_routes.target_ip=EXCLUDED.target_ip AND runtime_gateway_routes.target_port=EXCLUDED.target_port AND runtime_gateway_routes.protocol=EXCLUDED.protocol
- AND runtime_gateway_routes.snapshot->'Command'=EXCLUDED.snapshot->'Command' AND runtime_gateway_routes.snapshot->'Result'=EXCLUDED.snapshot->'Result'
+	 AND ('{"ReleaseID":"","Architecture":""}'::jsonb || (runtime_gateway_routes.snapshot->'Command'))
+	     = ('{"ReleaseID":"","Architecture":""}'::jsonb || (EXCLUDED.snapshot->'Command'))
+	 AND runtime_gateway_routes.snapshot->'Result'=EXCLUDED.snapshot->'Result'
 	 AND runtime_gateway_routes.snapshot->'Destination'=EXCLUDED.snapshot->'Destination'
  AND (runtime_gateway_routes.phase=EXCLUDED.phase
  OR (runtime_gateway_routes.phase='APPLY_PENDING' AND EXCLUDED.phase IN ('APPLIED','DELETE_PENDING','CONFLICT_HOLD'))

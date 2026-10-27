@@ -10,6 +10,7 @@ import ipaddress
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import stat
 import subprocess
@@ -32,11 +33,16 @@ class FirewallError(Exception):
 
 def validate_config(value):
     keys = {"schema_version", "gateway_ipv4_sources", "gateway_ipv6_sources"}
-    if not isinstance(value, dict) or set(value) != keys:
+    if not isinstance(value, dict) or set(value) not in (keys, keys | {"ingress_interface"}):
         raise FirewallError("configuration must contain exactly the documented keys")
     if type(value["schema_version"]) is not int or value["schema_version"] != 1:
         raise FirewallError("unsupported schema_version")
     result = {"schema_version": 1}
+    if "ingress_interface" in value:
+        interface = value["ingress_interface"]
+        if not isinstance(interface, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,14}", interface):
+            raise FirewallError("ingress_interface must be one literal Linux interface name")
+        result["ingress_interface"] = interface
     for family in (4, 6):
         key = f"gateway_ipv{family}_sources"
         sources = value[key]
@@ -121,6 +127,13 @@ def operation_lock():
 
 
 class KernelBackend:
+    def validate_ingress_interface(self, interface):
+        # A typo must not install a guard that matches no external traffic.
+        # Explicitly limit this mode to the single-NIC nodes it was designed for.
+        hardware = sorted(path.name for path in Path("/sys/class/net").iterdir() if (path / "device").exists())
+        if hardware != [interface]:
+            raise FirewallError("ingress_interface must identify the node's sole hardware NIC")
+
     def _run(self, family, args):
         binary = BINARIES[family]
         # resolve() permits the root-managed alternatives symlinks used by Debian.
@@ -184,10 +197,12 @@ class Engine:
                 for source in self.config[f"gateway_ipv{family}_sources"]] + [
                     ["-m", "comment", "--comment", DENY_TAG, "-j", "DROP"]]
 
-    def jump_rule(self, family):
-        return ["-p", "tcp", "-m", "tcp", "--dport", "30000:32767", "-m", "addrtype", "--dst-type", "LOCAL", "-m", "comment", "--comment", JUMP_TAG, "-j", CHAIN[family]]
+    def jump_rule(self, family, scoped=True):
+        interface = self.config.get("ingress_interface") if scoped else None
+        prefix = ["-i", interface] if interface else []
+        return prefix + ["-p", "tcp", "-m", "tcp", "--dport", "30000:32767", "-m", "addrtype", "--dst-type", "LOCAL", "-m", "comment", "--comment", JUMP_TAG, "-j", CHAIN[family]]
 
-    def inspect(self, family):
+    def inspect(self, family, allow_legacy=False):
         table = parse_table(self.backend.read(family))
         chain = CHAIN[family]
         if CHAIN[6 if family == 4 else 4] in table:
@@ -196,24 +211,37 @@ class Engine:
         if present and [canonical_rule(rule) for rule in table[chain]] != self.chain_rules(family):
             raise FirewallError(f"IPv{family}: unexpected owned chain contents; refusing modification")
         references = []
+        scoped = self.jump_rule(family)
+        legacy = self.jump_rule(family, scoped=False)
+        def approved_reference(owner, index, rule):
+            if owner != "PREROUTING":
+                return False
+            if rule == scoped and index == 0:
+                return True
+            return bool(allow_legacy and self.config.get("ingress_interface") and rule == legacy and
+                        (index == 0 or (index == 1 and table["PREROUTING"][0] == scoped)))
         for owner, rules in table.items():
             for index, rule in enumerate(rules):
                 for flag in ("-j", "-g"):
                     if flag in rule and rule.index(flag) + 1 < len(rule) and rule[rule.index(flag) + 1] in CHAIN.values():
-                        if owner != "PREROUTING" or rule != self.jump_rule(family) or index != 0:
+                        if not approved_reference(owner, index, rule):
                             raise FirewallError(f"IPv{family}: unexpected owned-chain reference or PREROUTING order")
-                        references.append((owner, index))
+                        references.append((owner, index, rule))
                 for position, token in enumerate(rule[:-1]):
                     if token == "--comment" and rule[position + 1] in OWN_TAGS:
-                        if not ((owner == chain and canonical_rule(rule) in self.chain_rules(family)) or (owner == "PREROUTING" and rule == self.jump_rule(family) and index == 0)):
+                        if not ((owner == chain and canonical_rule(rule) in self.chain_rules(family)) or approved_reference(owner, index, rule)):
                             raise FirewallError(f"IPv{family}: unexpected owned rule marker")
-        if len(references) > 1 or (references and not present):
+        migration_pair = bool(allow_legacy and self.config.get("ingress_interface") and
+                              references == [("PREROUTING", 0, scoped), ("PREROUTING", 1, legacy)])
+        if (len(references) > 1 and not migration_pair) or (references and not present):
             raise FirewallError(f"IPv{family}: inconsistent owned-chain attachment")
-        return present, bool(references)
+        return present, any(rule == scoped for _, _, rule in references)
 
-    def preflight(self):
+    def preflight(self, allow_legacy=False):
         # Both families are checked before the first mutation, including remove.
-        return {family: self.inspect(family) for family in (4, 6)}
+        if self.config.get("ingress_interface"):
+            self.backend.validate_ingress_interface(self.config["ingress_interface"])
+        return {family: self.inspect(family, allow_legacy=allow_legacy) for family in (4, 6)}
 
     def verify(self):
         states = self.preflight()
@@ -221,7 +249,7 @@ class Engine:
             raise FirewallError("both IPv4 and IPv6 guards must be populated and attached first in raw PREROUTING")
 
     def apply(self):
-        states = self.preflight()
+        states = self.preflight(allow_legacy=True)
         for family in (4, 6):
             present, attached = states[family]
             if not present:
@@ -233,6 +261,13 @@ class Engine:
                     raise FirewallError(f"IPv{family}: new chain failed pre-attachment verification")
             if not attached:
                 self.backend.mutate(family, ["-I", "PREROUTING", "1", *self.jump_rule(family)])
+            if self.config.get("ingress_interface"):
+                legacy = self.jump_rule(family, scoped=False)
+                if legacy in parse_table(self.backend.read(family))["PREROUTING"]:
+                    # Exact-rule removal cannot overwrite an unrelated rule if
+                    # another controller inserts a rule between our reads.
+                    # The complete scoped guard is already attached first.
+                    self.backend.mutate(family, ["-D", "PREROUTING", *legacy])
         self.verify()
 
     def remove(self, confirmed=False):

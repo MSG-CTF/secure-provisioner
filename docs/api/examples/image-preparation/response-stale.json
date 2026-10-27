@@ -1,0 +1,14 @@
+{
+  "image_set_id": "sha256:a96c344635195e2a40715531e3d420180ab28ce838ab88130364ad51bbb7c4c1",
+  "architecture": "AMD64",
+  "targets": [
+    {
+      "target_id": "target-b",
+      "ready": false,
+      "ready_node_count": 0,
+      "eligible_node_count": 2,
+      "observed_at": "2026-10-24T00:00:00Z",
+      "valid_until": "2026-10-24T00:01:00Z"
+    }
+  ]
+}

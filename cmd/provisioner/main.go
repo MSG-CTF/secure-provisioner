@@ -15,6 +15,7 @@ import (
 
 	"github.com/MSG-CTF/secure-provisioner/internal/gateway"
 	"github.com/MSG-CTF/secure-provisioner/internal/httpapi"
+	"github.com/MSG-CTF/secure-provisioner/internal/imageprep"
 	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
 	"github.com/MSG-CTF/secure-provisioner/internal/k3s"
 	"github.com/MSG-CTF/secure-provisioner/internal/operations"
@@ -25,6 +26,7 @@ import (
 )
 
 type appConfig struct {
+	ImagePreparation      imagePreparationConfig
 	APIOnly               bool
 	Address               string
 	RegistryPath          string
@@ -143,6 +145,9 @@ func loadConfig(getenv func(string) string) (appConfig, error) {
 		return appConfig{}, err
 	}
 	if config.ServiceAuth, err = loadServiceAuthConfig(getenv); err != nil {
+		return appConfig{}, err
+	}
+	if config.ImagePreparation, err = loadImagePreparationConfig(getenv, config.ServiceAuth); err != nil {
 		return appConfig{}, err
 	}
 	if config.RuntimeStore, err = loadRuntimeStoreConfig(getenv); err != nil {
@@ -268,7 +273,11 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 	// Assigned once below, before workers or HTTP handlers can run. The closure
 	// also protects queued K3s commands when the local catalog predates VM scopes.
 	var vmRoute *vm.Router
+	var preparation *imageprep.Service
 	createAdapter, err := k3s.NewAdapter(registry, k3s.AdapterConfig{
+		ReadyImageNodes: func(ctx context.Context, target, arch string, images []string) []string {
+			return preparation.ReadyNodes(ctx, target, arch, images)
+		},
 		ReadyTimeout:       config.ReadyTimeout,
 		PollInterval:       config.PollInterval,
 		RollbackTimeout:    config.RollbackTimeout,
@@ -297,6 +306,7 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 	var operationStore operations.Store = operations.NewMemoryStore(nil)
 	var deleteCoordinator runtimeops.DeleteCoordinator
 	var closeStore func() error
+	var preparationStore imageprep.Store
 	var gatewayJournal gateway.Journal
 	liveGatewayRoutes := false
 	readiness := httpapi.ReadinessConfig{StoreMode: config.RuntimeStore.Mode, APIOnly: config.APIOnly}
@@ -314,6 +324,7 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 		deleteCoordinator = database.DeleteCoordinator()
 		closeStore = database.Close
 		readiness.CheckDatabase = database.CheckReadiness
+		preparationStore = database.ImagePreparations()
 		gatewayJournal = database.GatewayJournal()
 		liveGatewayRoutes, err = database.GatewayJournal().HasLiveRoutes(context.Background())
 		if err != nil {
@@ -388,9 +399,36 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 		}
 		return nil, err
 	}
+	runWorkers := service.Run
+	if config.ImagePreparation.Auth.Enabled {
+		if preparationStore == nil || imagePolicies == nil {
+			if closeStore != nil {
+				_ = closeStore()
+			}
+			return nil, errors.New("image preparation requires PostgreSQL and an approved image policy catalog")
+		}
+		transport, parseErr := imageprep.NewFileTransport(config.ImagePreparation.NodesPath, k3s.KubernetesImageRunner(registry))
+		if parseErr != nil {
+			_ = closeStore()
+			return nil, parseErr
+		}
+		preparation = imageprep.NewService(preparationStore, k3s.ImageInventory{Registry: registry}, imagePolicies, transport, config.ImagePreparation.Worker)
+		runWorkers = func(ctx context.Context) error {
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			done := make(chan error, 2)
+			go func() { done <- service.Run(ctx) }()
+			go func() { done <- preparation.Run(ctx) }()
+			first := <-done
+			cancel()
+			return errors.Join(first, <-done)
+		}
+	}
+	handler := httpapi.NewHandlerWithVM(service, service, config.ServiceAuth, imagePolicies, readiness, vmPolicy)
+	handler = httpapi.WithImagePreparations(handler, preparation, config.ImagePreparation.Auth)
 	app := &application{
-		handler:   httpapi.NewHandlerWithVM(service, service, config.ServiceAuth, imagePolicies, readiness, vmPolicy),
-		runWorker: service.Run,
+		handler:   handler,
+		runWorker: runWorkers,
 		close:     closeStore,
 	}
 	if broker != nil {
