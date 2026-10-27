@@ -239,7 +239,13 @@ func (a *Adapter) remove(ctx context.Context, s Session, r Record) error {
 	}
 	binding := recoveryBinding(r)
 	command := provisioner.DeleteWorkloadCommand{RequestID: r.Command.RequestID, InstanceID: r.Command.InstanceID, TeamID: r.Command.TeamID, TargetID: r.Command.TargetID, RuntimeType: r.Command.RuntimeType, RuntimeWorkloadID: r.Result.RuntimeWorkloadID}
-	if err := a.backend.DeleteWorkload(ctx, command, binding); err != nil {
+	deleteWorkload := a.backend.DeleteWorkload
+	if stepper, ok := a.backend.(interface {
+		DeleteWorkloadStep(context.Context, provisioner.DeleteWorkloadCommand, runtimebinding.Binding) error
+	}); ok {
+		deleteWorkload = stepper.DeleteWorkloadStep
+	}
+	if err := deleteWorkload(ctx, command, binding); err != nil {
 		return hold("GATEWAY_WORKLOAD_DELETE_PENDING", err)
 	}
 	r.Phase = PhaseDeleted

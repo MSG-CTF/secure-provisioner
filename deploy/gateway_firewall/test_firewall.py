@@ -34,6 +34,10 @@ class RawKernel:
         lines += [shlex.join(["-A", chain] + rule) for chain, rules in table.items() for rule in rules]
         return "\n".join(lines) + "\n"
 
+    def validate_ingress_interface(self, interface):
+        if interface != "ens4":
+            raise fw.FirewallError("the fixture has one hardware NIC, ens4")
+
     def mutate(self, family, args):
         if self.fail_on and self.fail_on(family, args):
             raise fw.FirewallError("simulated kernel failure")
@@ -63,9 +67,11 @@ class RawKernel:
             raise AssertionError(args)
         self.mutations.append((family, tuple(args), copy.deepcopy(self.tables)))
 
-    def verdict(self, family, source, port, protocol="tcp", destination_local=True):
+    def verdict(self, family, source, port, protocol="tcp", destination_local=True, interface="ens4"):
         def traverse(chain):
             for rule in self.tables[family][chain]:
+                if "-i" in rule and rule[rule.index("-i") + 1] != interface:
+                    continue
                 if "-p" in rule and rule[rule.index("-p") + 1] != protocol:
                     continue
                 if "--dst-type" in rule and rule[rule.index("--dst-type") + 1] == "LOCAL" and not destination_local:
@@ -232,6 +238,75 @@ class EnforcementTests(unittest.TestCase):
             self.engine.apply()
         self.assertEqual(self.kernel.verdict(4, "8.8.8.8", 31854), "DROP")
         self.assertFalse(any(args[0] in ("-F", "-D", "-X") for _, args, _ in self.kernel.mutations))
+
+
+class ScopedIngressTests(unittest.TestCase):
+    def test_snat_reply_to_local_nodeport_number_bypasses_external_guard(self):
+        kernel = RawKernel()
+        fw.Engine(config(ingress_interface="ens4"), kernel).apply()
+        for family, gateway, pod, stranger in ((4, "34.172.6.196", "10.42.0.72", "8.8.8.8"), (6, "2606:4700::1", "fd00::72", "2606:4700::2")):
+            for port in (30000, 30725, 31696, 32767):
+                self.assertEqual(kernel.verdict(family, pod, port, destination_local=True, interface="cni0"), "ACCEPT")
+                self.assertEqual(kernel.verdict(family, stranger, port, interface="ens4"), "DROP")
+        self.assertEqual(kernel.verdict(4, "34.172.6.196", 31696, interface="ens4"), "ACCEPT")
+
+    def test_legacy_migration_keeps_external_protection_at_every_mutation(self):
+        kernel = RawKernel()
+        fw.Engine(config(), kernel).apply()
+        kernel.mutations.clear()
+        engine = fw.Engine(config(ingress_interface="ens4"), kernel)
+        with self.assertRaises(fw.FirewallError):
+            engine.verify()
+        engine.apply()
+        for _, _, snapshot in kernel.mutations:
+            point = RawKernel()
+            point.tables = snapshot
+            for family, outsider in ((4, "8.8.8.8"), (6, "2606:4700::2")):
+                self.assertEqual(point.verdict(family, outsider, 31696), "DROP")
+        engine.verify()
+        self.assertEqual(kernel.verdict(4, "10.42.0.72", 31696, interface="cni0"), "ACCEPT")
+        before = copy.deepcopy(kernel.tables)
+        kernel.mutations.clear()
+        engine.apply()
+        self.assertEqual(kernel.mutations, [])
+        self.assertEqual(kernel.tables, before)
+
+    def test_interrupted_legacy_removal_recovers_without_opening_external_ports(self):
+        kernel = RawKernel()
+        fw.Engine(config(), kernel).apply()
+        engine = fw.Engine(config(ingress_interface="ens4"), kernel)
+        kernel.fail_on = lambda family, args: family == 4 and args[0] == "-D"
+        with self.assertRaises(fw.FirewallError):
+            engine.apply()
+        self.assertEqual(kernel.verdict(4, "8.8.8.8", 31696), "DROP")
+        kernel.fail_on = None
+        engine.apply()
+        engine.verify()
+        self.assertEqual(kernel.verdict(4, "10.42.0.72", 31696, interface="cni0"), "ACCEPT")
+
+    def test_wrong_or_nonphysical_interface_fails_before_any_mutation(self):
+        for interface in ("lo", "cni0", "veth123", "ens5"):
+            kernel = RawKernel()
+            fw.Engine(config(), kernel).apply()
+            kernel.mutations.clear()
+            with self.assertRaises(fw.FirewallError):
+                fw.Engine(config(ingress_interface=interface), kernel).apply()
+            self.assertEqual(kernel.mutations, [])
+            self.assertEqual(kernel.verdict(4, "8.8.8.8", 31696), "DROP")
+
+    def test_interface_globs_and_shell_syntax_are_not_accepted(self):
+        for interface in ("", "*", "ens+", "ens4;id", " ens4", "--jump", True, [], "a" * 16):
+            with self.subTest(interface=interface), self.assertRaises(fw.FirewallError):
+                config(ingress_interface=interface)
+
+    def test_tampered_legacy_guard_is_not_migrated(self):
+        kernel = RawKernel()
+        fw.Engine(config(), kernel).apply()
+        kernel.tables[6][CHAIN6].append(["-j", "ACCEPT"])
+        kernel.mutations.clear()
+        with self.assertRaises(fw.FirewallError):
+            fw.Engine(config(ingress_interface="ens4"), kernel).apply()
+        self.assertEqual(kernel.mutations, [])
 
 
 if __name__ == "__main__":
