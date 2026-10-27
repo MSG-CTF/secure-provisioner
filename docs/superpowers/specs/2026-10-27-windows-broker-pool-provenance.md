@@ -16,5 +16,5 @@ and already recorded events keep their prior schema. No Broker API change is
 needed for this canary. Future per-VM image evidence should come from Broker
 or guest attestation and be recorded as measured data, not static config.
 
-The callback route returning HTML 404, token delivery, and cleanup signalling
-are separate integration tasks and are not changed here.
+Callback authentication, token delivery, and cleanup signalling are separate
+integration tasks and are not changed here.
