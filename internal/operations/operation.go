@@ -203,6 +203,7 @@ func copyContainerRequirements(containers []isolation.ContainerRequirement) []is
 		copied[index].Ports = slices.Clone(container.Ports)
 		copied[index].ExposedPorts = slices.Clone(container.ExposedPorts)
 		copied[index].WritablePaths = slices.Clone(container.WritablePaths)
+		copied[index].ServiceAliases = slices.Clone(container.ServiceAliases)
 	}
 	return copied
 }

@@ -1,0 +1,342 @@
+{
+  "schema_version": 1,
+  "managed_repositories": [
+    "ghcr.io/msg-ctf/challenges/web-afterimage/bot",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/case-vault",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/core",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/exporter",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/indexer",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/inventory-metadata",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/portal",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/bot-k3s",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/case-vault-k3s",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/core-k3s",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/exporter-k3s",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/indexer-k3s",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/inventory-metadata-k3s",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/portal-k3s",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/indexer-runner-k3s"
+  ],
+  "vm_required_repositories": [
+    "ghcr.io/msg-ctf/challenges/web-afterimage/bot",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/case-vault",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/core",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/exporter",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/indexer",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/inventory-metadata",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/portal"
+  ],
+  "network_required_repositories": [
+    "ghcr.io/msg-ctf/challenges/web-afterimage/bot-k3s",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/case-vault-k3s",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/core-k3s",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/exporter-k3s",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/indexer-k3s",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/inventory-metadata-k3s",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/portal-k3s",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/indexer-runner-k3s"
+  ],
+  "images": [
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web-afterimage/bot-k3s@sha256:fc7bb881a81520734ab8accddf7330a2ea076c9de5d10fd15e8545459dfc53dd",
+      "container": "bot-k3s",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "run_as_user": 10001,
+      "ports": [
+        4000
+      ],
+      "exposed_ports": [],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 192
+        }
+      ],
+      "service_aliases": [
+        "bot"
+      ],
+      "readiness_http": {
+        "path": "/health",
+        "port": 4000
+      }
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web-afterimage/case-vault-k3s@sha256:1a6d12e2556a77482cb1fc01ca9ff353c605f9aef32a9e46bcdcbd6ce86b5d64",
+      "container": "case-vault-k3s",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "run_as_user": 10001,
+      "ports": [
+        4400
+      ],
+      "exposed_ports": [],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 32
+        }
+      ],
+      "service_aliases": [
+        "case-vault"
+      ],
+      "requires_flag": true,
+      "readiness_http": {
+        "path": "/health",
+        "port": 4400
+      }
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web-afterimage/core-k3s@sha256:0d093170b77e07b6a3218edfb81afb33ad6273fb2150ec1c06a20a6819de0dac",
+      "container": "core-k3s",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "run_as_user": 10001,
+      "ports": [
+        3000
+      ],
+      "exposed_ports": [],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 32
+        }
+      ],
+      "service_aliases": [
+        "core"
+      ],
+      "readiness_http": {
+        "path": "/health",
+        "port": 3000
+      }
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web-afterimage/exporter-k3s@sha256:1bf22ef74db64b48506b85ccbf82c487616e24267950526161f69e10ce1694d1",
+      "container": "exporter-k3s",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "run_as_user": 10001,
+      "ports": [
+        4100
+      ],
+      "exposed_ports": [],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 32
+        }
+      ],
+      "service_aliases": [
+        "exporter"
+      ],
+      "readiness_http": {
+        "path": "/health",
+        "port": 4100
+      }
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web-afterimage/indexer-k3s@sha256:d7c22ca62a3d56a6c13ade023377b603a1c00e401c12fd15f4dce0c14019c20e",
+      "container": "indexer-k3s",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "run_as_user": 10001,
+      "ports": [
+        4300
+      ],
+      "exposed_ports": [],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 32
+        }
+      ],
+      "service_aliases": [
+        "indexer"
+      ],
+      "readiness_http": {
+        "path": "/health",
+        "port": 4300
+      }
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web-afterimage/inventory-metadata-k3s@sha256:90ebdbf90e1730ca658e02e7e6cdc76e500698042ee83fb46c8583d7e307c127",
+      "container": "inventory-metadata-k3s",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "run_as_user": 10001,
+      "ports": [
+        4200
+      ],
+      "exposed_ports": [],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 32
+        }
+      ],
+      "service_aliases": [
+        "inventory-metadata"
+      ],
+      "readiness_http": {
+        "path": "/health",
+        "port": 4200
+      }
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web-afterimage/portal-k3s@sha256:f912506f8915479537d20cebe786af192adb6737696233fde855f2a8e1e72283",
+      "container": "portal-k3s",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "run_as_user": 10001,
+      "ports": [
+        8080
+      ],
+      "exposed_ports": [
+        8080
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 32
+        }
+      ],
+      "service_aliases": [
+        "portal"
+      ],
+      "shutdown_strategy": "python_sigint_pid1"
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web-afterimage/indexer-runner-k3s@sha256:a54a39a5b6ac26737f41f3528d8629485bffdfbfc5e8bf11f9939a214b4e0589",
+      "container": "indexer-runner-k3s",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "run_as_user": 10001,
+      "ports": [
+        4310
+      ],
+      "exposed_ports": [],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 32
+        },
+        {
+          "path": "/var/spool/m13",
+          "size_mib": 1
+        }
+      ],
+      "service_aliases": [
+        "indexer-runner"
+      ],
+      "readiness_http": {
+        "path": "/health",
+        "port": 4310
+      }
+    }
+  ],
+  "workload_networks": [
+    {
+      "id": "afterimage-k3s-v1",
+      "mode": "PEER_GROUPS_V1",
+      "isolation_profile": "WEB",
+      "containers": [
+        {
+          "name": "bot-k3s",
+          "image": "ghcr.io/msg-ctf/challenges/web-afterimage/bot-k3s@sha256:fc7bb881a81520734ab8accddf7330a2ea076c9de5d10fd15e8545459dfc53dd",
+          "ports": [
+            4000
+          ]
+        },
+        {
+          "name": "case-vault-k3s",
+          "image": "ghcr.io/msg-ctf/challenges/web-afterimage/case-vault-k3s@sha256:1a6d12e2556a77482cb1fc01ca9ff353c605f9aef32a9e46bcdcbd6ce86b5d64",
+          "ports": [
+            4400
+          ]
+        },
+        {
+          "name": "core-k3s",
+          "image": "ghcr.io/msg-ctf/challenges/web-afterimage/core-k3s@sha256:0d093170b77e07b6a3218edfb81afb33ad6273fb2150ec1c06a20a6819de0dac",
+          "ports": [
+            3000
+          ]
+        },
+        {
+          "name": "exporter-k3s",
+          "image": "ghcr.io/msg-ctf/challenges/web-afterimage/exporter-k3s@sha256:1bf22ef74db64b48506b85ccbf82c487616e24267950526161f69e10ce1694d1",
+          "ports": [
+            4100
+          ]
+        },
+        {
+          "name": "indexer-k3s",
+          "image": "ghcr.io/msg-ctf/challenges/web-afterimage/indexer-k3s@sha256:d7c22ca62a3d56a6c13ade023377b603a1c00e401c12fd15f4dce0c14019c20e",
+          "ports": [
+            4300
+          ]
+        },
+        {
+          "name": "inventory-metadata-k3s",
+          "image": "ghcr.io/msg-ctf/challenges/web-afterimage/inventory-metadata-k3s@sha256:90ebdbf90e1730ca658e02e7e6cdc76e500698042ee83fb46c8583d7e307c127",
+          "ports": [
+            4200
+          ]
+        },
+        {
+          "name": "portal-k3s",
+          "image": "ghcr.io/msg-ctf/challenges/web-afterimage/portal-k3s@sha256:f912506f8915479537d20cebe786af192adb6737696233fde855f2a8e1e72283",
+          "ports": [
+            8080
+          ]
+        },
+        {
+          "name": "indexer-runner-k3s",
+          "image": "ghcr.io/msg-ctf/challenges/web-afterimage/indexer-runner-k3s@sha256:a54a39a5b6ac26737f41f3528d8629485bffdfbfc5e8bf11f9939a214b4e0589",
+          "ports": [
+            4310
+          ]
+        }
+      ],
+      "peer_groups": [
+        {
+          "name": "appnet",
+          "members": [
+            "portal-k3s",
+            "core-k3s",
+            "bot-k3s"
+          ]
+        },
+        {
+          "name": "exportnet",
+          "members": [
+            "portal-k3s",
+            "exporter-k3s",
+            "inventory-metadata-k3s"
+          ]
+        },
+        {
+          "name": "cartridgenet",
+          "members": [
+            "portal-k3s",
+            "indexer-k3s"
+          ]
+        },
+        {
+          "name": "vaultnet",
+          "members": [
+            "core-k3s",
+            "case-vault-k3s"
+          ]
+        },
+        {
+          "name": "runner-control",
+          "members": [
+            "indexer-k3s",
+            "indexer-runner-k3s"
+          ]
+        }
+      ],
+      "egress": []
+    }
+  ]
+}

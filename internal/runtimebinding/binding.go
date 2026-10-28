@@ -102,6 +102,7 @@ func copyBinding(binding Binding) Binding {
 			if requirement.WritablePaths != nil {
 				copied.ContainerRequirements[index].WritablePaths = append([]isolation.WritablePath{}, requirement.WritablePaths...)
 			}
+			if requirement.ServiceAliases != nil { copied.ContainerRequirements[index].ServiceAliases = append([]string{}, requirement.ServiceAliases...) }
 		}
 	}
 	if binding.InternalConnections != nil {
