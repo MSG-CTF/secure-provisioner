@@ -15,7 +15,25 @@ import (
 
 type poolBroker struct {
 	serviceBroker
-	items []Connection
+	items          []Connection
+	eventTargetIDs []string
+}
+
+type poolCaptureTransport struct {
+	broker   *serviceBroker
+	calls    int
+	targetID string
+	host     string
+}
+
+func (t *poolCaptureTransport) Execute(_ context.Context, connection Connection, _ Job) Outcome {
+	if !t.broker.approved {
+		panic("execution before Broker approval")
+	}
+	t.calls++
+	t.targetID = connection.TargetID
+	t.host = connection.Host
+	return Outcome{Result: "failed"}
 }
 
 type resumableTestTransport struct{ resumes int }
@@ -141,6 +159,24 @@ func (b *poolBroker) List(context.Context, int, string) (VMPage, error) {
 	return VMPage{Items: b.items}, nil
 }
 
+func (b *poolBroker) Connection(_ context.Context, targetID string) (Connection, error) {
+	for _, item := range b.items {
+		if item.TargetID == targetID {
+			return item, nil
+		}
+	}
+	return Connection{}, ErrNotFound
+}
+
+func (b *poolBroker) Event(ctx context.Context, targetID string, body []byte) (EventAck, error) {
+	b.eventTargetIDs = append(b.eventTargetIDs, targetID)
+	ack, err := b.serviceBroker.Event(ctx, targetID, body)
+	if err == nil {
+		ack.TargetID = targetID
+	}
+	return ack, err
+}
+
 func TestDirectCheckerQueuesWithoutVMAndBindsWhenReady(t *testing.T) {
 	broker := &poolBroker{}
 	store := NewMemoryStore()
@@ -188,6 +224,46 @@ func TestDirectCheckerQueuesWithoutVMAndBindsWhenReady(t *testing.T) {
 	replay, created, err := service.QueueChecker(context.Background(), testRequest, UnboundTargetID, checker, 30*time.Second)
 	if err != nil || created || replay.ID != record.ID {
 		t.Fatalf("replay after bind: %+v created=%v err=%v", replay, created, err)
+	}
+}
+
+func TestBrokerPoolUsesNextReadyVMWhenFirstIsLocallyReserved(t *testing.T) {
+	const secondTarget = "00000000-0000-4000-8000-000000000012"
+	broker := &poolBroker{items: []Connection{
+		{TargetID: testTarget, Host: "192.0.2.10", Protocol: "rdp", Port: 3389, Username: "msgexec"},
+		{TargetID: secondTarget, Host: "192.0.2.11", Protocol: "rdp", Port: 3389, Username: "msgexec"},
+	}}
+	store := NewMemoryStore()
+	_, _, err := store.Submit(context.Background(), Record{
+		ID: "00000000-0000-4000-8000-000000000011", RequestID: "00000000-0000-4000-8000-000000000010",
+		TargetID: testTarget, Fingerprint: "previous execution", Phase: "BLOCKED",
+		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	guest := &poolCaptureTransport{broker: &broker.serviceBroker}
+	service, err := NewService(DefaultServiceConfig(), store, broker, guest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.SetPoolAnyTargets()
+	record, _, err := service.Submit(context.Background(), testRequest, UnboundTargetID, []byte("MZ benign"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ProcessOne(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := store.Get(context.Background(), record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed.TargetID != secondTarget || guest.targetID != secondTarget || guest.host != "192.0.2.11" || guest.calls != 1 {
+		t.Fatalf("second READY VM was not used: target=%s guest_target=%s guest_host=%s calls=%d", completed.TargetID, guest.targetID, guest.host, guest.calls)
+	}
+	if len(broker.eventTargetIDs) != 2 || broker.eventTargetIDs[0] != secondTarget || broker.eventTargetIDs[1] != secondTarget {
+		t.Fatalf("Broker events went to wrong VM: %+v", broker.eventTargetIDs)
 	}
 }
 

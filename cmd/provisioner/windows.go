@@ -53,7 +53,11 @@ func initializeWindows(config appConfig, store *windowsruntime.PostgresStore) (*
 	}
 	checkCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err = store.Check(checkCtx); err != nil {
+	checkSchema := store.Check
+	if config.APIOnly {
+		checkSchema = store.CheckBridge
+	}
+	if err = checkSchema(checkCtx); err != nil {
 		return nil, nil, errors.New("Windows execution schema unavailable")
 	}
 	token, err := cfg.ReadBrokerToken()

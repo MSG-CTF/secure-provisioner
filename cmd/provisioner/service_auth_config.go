@@ -50,6 +50,13 @@ func loadServiceAuthConfig(getenv func(string) string) (httpapi.ServiceAuthConfi
 	if internalChecker != "" && (internalChecker == externalChecker || internalChecker == current || internalChecker == previous || externalChecker == current || externalChecker == previous) {
 		return httpapi.ServiceAuthConfig{}, errors.New("checker backend service tokens must be distinct from each other and full service tokens")
 	}
+	recovery, err := readServiceTokenSetting(getenv, "PROVISIONER_WINDOWS_RECOVERY_TOKEN", "PROVISIONER_WINDOWS_RECOVERY_TOKEN_FILE", false)
+	if err != nil {
+		return httpapi.ServiceAuthConfig{}, err
+	}
+	if recovery != "" && (recovery == current || recovery == previous || recovery == checker || recovery == internalChecker || recovery == externalChecker) {
+		return httpapi.ServiceAuthConfig{}, errors.New("Windows recovery token must differ from service and checker tokens")
+	}
 	ciSmoke, err := readServiceTokenSetting(getenv, "PROVISIONER_CI_SMOKE_TOKEN", "PROVISIONER_CI_SMOKE_TOKEN_FILE", false)
 	if err != nil {
 		return httpapi.ServiceAuthConfig{}, err
@@ -57,7 +64,7 @@ func loadServiceAuthConfig(getenv func(string) string) (httpapi.ServiceAuthConfi
 	ciTeamID := getenv("PROVISIONER_CI_SMOKE_TEAM_ID")
 	ciTargetID := getenv("PROVISIONER_CI_SMOKE_TARGET_ID")
 	if ciSmoke != "" {
-		if ciSmoke == current || ciSmoke == previous || ciSmoke == checker || ciSmoke == internalChecker || ciSmoke == externalChecker {
+		if ciSmoke == current || ciSmoke == previous || ciSmoke == checker || ciSmoke == internalChecker || ciSmoke == externalChecker || ciSmoke == recovery {
 			return httpapi.ServiceAuthConfig{}, errors.New("CI smoke token must differ from full service tokens")
 		}
 		if !provisioner.TeamID(ciTeamID).Valid() || ciTargetID == "" || ciTargetID != strings.TrimSpace(ciTargetID) {
@@ -70,7 +77,7 @@ func loadServiceAuthConfig(getenv func(string) string) (httpapi.ServiceAuthConfi
 	if internalChecker != "" {
 		checkerBackendTokens = map[string]string{"internal": internalChecker, "external": externalChecker}
 	}
-	return httpapi.ServiceAuthConfig{CurrentToken: current, PreviousToken: previous, CheckerToken: checker, CheckerBackendTokens: checkerBackendTokens, CISmokeToken: ciSmoke, CISmokeTeamID: provisioner.TeamID(ciTeamID), CISmokeTargetID: ciTargetID}, nil
+	return httpapi.ServiceAuthConfig{CurrentToken: current, PreviousToken: previous, CheckerToken: checker, CheckerBackendTokens: checkerBackendTokens, WindowsRecoveryToken: recovery, CISmokeToken: ciSmoke, CISmokeTeamID: provisioner.TeamID(ciTeamID), CISmokeTargetID: ciTargetID}, nil
 }
 
 func readServiceTokenSetting(getenv func(string) string, valueKey, fileKey string, required bool) (string, error) {
