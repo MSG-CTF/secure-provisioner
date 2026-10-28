@@ -178,7 +178,10 @@ func (c *ImagePolicyCatalog) Validate(r imageprep.Request) error {
 	if c == nil {
 		return imageprep.ErrPolicy
 	}
-	request := CreateWorkloadRequest{IsolationProfile: r.IsolationProfile}
+	// Preparation validates Kubernetes images before a placement is chosen.
+	// Origin policies must receive the same runtime context as real creates.
+	request := CreateWorkloadRequest{IsolationProfile: r.IsolationProfile,
+		Target: RuntimeTarget{RuntimeType: RuntimeTypeKubernetes}}
 	for _, container := range r.Containers {
 		if !c.Approved(container.Image) {
 			return imageprep.ErrPolicy
