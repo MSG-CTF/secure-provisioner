@@ -167,4 +167,3 @@ the Pod and binds that environment value itself. Caller-provided values are
 rejected. The final published HTTPS route must match the bound origin; a mismatch
 triggers normal owned-route and workload cleanup. Application production mode
 and any other execution settings remain part of the approved release.
-
