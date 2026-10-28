@@ -80,6 +80,20 @@ class ErrorDetail(ApiSchema):
     message: str
 
 
+class RouteOriginResponse(ApiSchema):
+    instance_id: str
+    hostname: str
+    port: int = Field(strict=True, ge=443, le=443)
+    tls: bool = Field(strict=True)
+    url: str
+
+    @model_validator(mode="after")
+    def consistent_origin(self):
+        if not self.tls or self.url != f"https://{self.hostname}":
+            raise ValueError("The origin requires its exact HTTPS URL and TLS.")
+        return self
+
+
 class ErrorResponse(ApiSchema):
     error: ErrorDetail
 
@@ -137,7 +151,7 @@ ERRORS = {status: {"model": ErrorResponse} for status in (400, 401, 404, 409, 42
 
 def create_app() -> FastAPI:
     app = FastAPI(
-        title="MSGCTF Gateway Management API", version="1.1.0",
+        title="MSGCTF Gateway Management API", version="1.2.0",
         docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan,
         servers=[{"url": "https://gate.msgctf.kr"}],
         dependencies=[Security(require_runtime)],
@@ -189,6 +203,14 @@ def create_app() -> FastAPI:
         status, result = controller({"operation": "put", "instance_id": instance_id, **body.model_dump()})
         response.status_code = status
         return RouteResponse.model_validate(result)
+
+    @app.get(
+        "/v1/routes/{instance_id}/origin", response_model=RouteOriginResponse,
+        responses=ERRORS, summary="Resolve a stable HTTPS origin without publishing an upstream",
+    )
+    def get_origin(instance_id: InstanceId) -> RouteOriginResponse:
+        _, result = controller({"operation": "origin", "instance_id": instance_id})
+        return RouteOriginResponse.model_validate(result)
 
     @app.get(
         "/v1/routes/{instance_id}", response_model=RouteResponse,

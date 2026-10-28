@@ -51,6 +51,7 @@ type ImagePolicy struct {
 	ReadinessHTTP    *provisioner.HTTPReadiness `json:"readiness_http,omitempty"`
 	TCPStartupOnly   bool                       `json:"tcp_startup_only,omitempty"`
 	ShutdownStrategy isolation.ShutdownStrategy `json:"shutdown_strategy,omitempty"`
+	PublicOriginEnv  string                     `json:"public_origin_env,omitempty"`
 }
 
 func (catalog *ImagePolicyCatalog) RequiredFlagImages() []string {
@@ -257,6 +258,9 @@ func (catalog *ImagePolicyCatalog) AllowsCISmoke(image string) bool {
 }
 
 func validateImagePolicyRequirements(policy ImagePolicy) error {
+	if policy.PublicOriginEnv != "" && (policy.PublicOriginEnv != "PUBLIC_ORIGIN" || policy.IsolationProfile != "WEB" || len(policy.ExposedPorts) != 1) {
+		return errors.New("public_origin_env requires PUBLIC_ORIGIN on a single-endpoint WEB image")
+	}
 	if !isolation.ValidShutdownStrategy(isolation.WorkloadProfile(policy.IsolationProfile), policy.ShutdownStrategy) {
 		return errors.New("unsupported shutdown strategy for image profile")
 	}
@@ -395,6 +399,15 @@ func (catalog *ImagePolicyCatalog) Apply(request *CreateWorkloadRequest) error {
 	}
 	for index, policy := range selected {
 		container := &request.Workload.Containers[index]
+		if policy.PublicOriginEnv != "" {
+			if request.Target.RuntimeType != RuntimeTypeKubernetes {
+				return fmt.Errorf("%w: public origin requires a Kubernetes Gateway workload", ErrImagePolicyRejected)
+			}
+			if _, supplied := container.Env[policy.PublicOriginEnv]; supplied {
+				return fmt.Errorf("%w: public origin is controlled by Runtime", ErrImagePolicyRejected)
+			}
+		}
+		container.publicOriginEnv = policy.PublicOriginEnv
 		container.requiresFlag = policy.RequiresFlag
 		container.flagFilePath = policy.FlagFilePath
 		container.tcpStartupOnly = policy.TCPStartupOnly

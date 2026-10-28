@@ -63,6 +63,43 @@ class ControllerTests(unittest.TestCase):
                 self.assertEqual(route['url'], 'https://' + route['hostname'] if protocol == 'http' else None)
                 self.assertEqual(self.put(protocol, protocol, 31042 + index), (200, route))
 
+    def test_origin_is_stable_without_publishing_and_matches_later_http_route(self):
+        request = {'operation': 'origin', 'instance_id': 'future-http'}
+        status, origin = c.dispatch(request)
+        self.assertEqual(status, 200)
+        self.assertFalse(c.REGISTRY.exists())
+        self.assertEqual(c.dispatch(request)[1], origin)
+        self.assertEqual((c.STATE / 'hostname.key').stat().st_mode & 0o777, 0o600)
+        self.assertEqual((c.STATE / 'hostname.key').stat().st_size, 32)
+        route = self.put('future-http', 'http')[1]
+        self.assertEqual(route['url'], origin['url'])
+        self.assertEqual(c.dispatch(request)[1], origin)
+        other = c.dispatch({'operation': 'origin', 'instance_id': 'another-http'})[1]
+        self.assertNotEqual(other['hostname'], origin['hostname'])
+
+    def test_origin_preserves_existing_legacy_hostname_and_rejects_deleted_id(self):
+        self.put('retained-http', 'http')
+        routes, deleted = c.parse_registry(c.REGISTRY.read_text(), 'gate.msgctf.kr', '8.8.4.4')
+        routes['retained-http']['hostname'] = '1' * 32 + '.gate.msgctf.kr'
+        c.REGISTRY.write_text(c.render(routes, deleted))
+        self.assertEqual(c.dispatch({'operation': 'origin', 'instance_id': 'retained-http'})[1]['hostname'], routes['retained-http']['hostname'])
+        c.dispatch({'operation': 'delete', 'instance_id': 'retained-http'})
+        with self.assertRaises(c.ControllerError) as raised:
+            c.dispatch({'operation': 'origin', 'instance_id': 'retained-http'})
+        self.assertEqual(raised.exception.code, 'INSTANCE_DELETED')
+
+    def test_origin_rejects_tcp_route_and_unsafe_hostname_key(self):
+        self.put('tcp-origin')
+        with self.assertRaises(c.ControllerError) as raised:
+            c.dispatch({'operation': 'origin', 'instance_id': 'tcp-origin'})
+        self.assertEqual(raised.exception.code, 'ORIGIN_NOT_HTTP')
+        c.dispatch({'operation': 'origin', 'instance_id': 'first-http'})
+        key = c.STATE / 'hostname.key'
+        key.chmod(0o644)
+        with self.assertRaises(c.ControllerError) as raised:
+            c.dispatch({'operation': 'origin', 'instance_id': 'second-http'})
+        self.assertEqual(raised.exception.code, 'HOSTNAME_KEY_INVALID')
+
     def test_retry_uses_only_same_approved_target_and_reads_legacy_registry(self):
         self.put('retained', 'http')
         routes, deleted = c.parse_registry(c.REGISTRY.read_text(), 'gate.msgctf.kr', '8.8.4.4')

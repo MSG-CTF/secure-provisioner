@@ -143,6 +143,10 @@ func (c *Client) Delete(ctx context.Context, id string) error {
 	return c.call(ctx, http.MethodDelete, id, nil, nil)
 }
 func (c *Client) call(ctx context.Context, method, id string, body any, result any) error {
+	return c.callRoute(ctx, method, id, "", body, result)
+}
+
+func (c *Client) callRoute(ctx context.Context, method, id, suffix string, body any, result any) error {
 	if !validID.MatchString(id) {
 		return &APIError{Code: "GATEWAY_INVALID_INSTANCE_ID", Permanent: true}
 	}
@@ -165,7 +169,7 @@ func (c *Client) call(ctx context.Context, method, id string, body any, result a
 			return &APIError{Code: "GATEWAY_INVALID_REQUEST", Permanent: true}
 		}
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.base+"/v1/routes/"+url.PathEscape(id), bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, method, c.base+"/v1/routes/"+url.PathEscape(id)+suffix, bytes.NewReader(payload))
 	if err != nil {
 		return &APIError{Code: "GATEWAY_REQUEST_FAILED"}
 	}
@@ -181,7 +185,7 @@ func (c *Client) call(ctx context.Context, method, id string, body any, result a
 	if method == http.MethodDelete && response.StatusCode == 204 {
 		return nil
 	}
-	if method == http.MethodPut && (response.StatusCode == 200 || response.StatusCode == 201) {
+	if (method == http.MethodPut && (response.StatusCode == 200 || response.StatusCode == 201)) || (method == http.MethodGet && response.StatusCode == 200) {
 		raw, err := io.ReadAll(io.LimitReader(response.Body, 16385))
 		if err != nil || len(raw) > 16384 || json.Unmarshal(raw, result) != nil {
 			return &APIError{Code: "GATEWAY_INVALID_RESPONSE"}

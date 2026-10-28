@@ -56,6 +56,7 @@ type RuntimeContainer struct {
 	flagFilePath      string
 	endpointProtocols []provisioner.PortProtocol
 	shutdownStrategy  isolation.ShutdownStrategy
+	publicOriginEnv   string
 }
 
 func (container *RuntimeContainer) UnmarshalJSON(data []byte) error {
@@ -403,6 +404,7 @@ func (request CreateWorkloadRequest) normalizedContainers() ([]provisioner.Workl
 			TCPStartupOnly:    container.tcpStartupOnly,
 			ShutdownStrategy:  container.shutdownStrategy,
 			EndpointProtocols: slices.Clone(container.endpointProtocols),
+			PublicOriginEnv:   container.publicOriginEnv,
 		}
 		if container.readinessHTTP != nil {
 			readiness := *container.readinessHTTP

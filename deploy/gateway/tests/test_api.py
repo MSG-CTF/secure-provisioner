@@ -17,7 +17,12 @@ class APITests(unittest.TestCase):
         p = patch.dict(os.environ, {'RUNTIME_API_TOKEN': 'synthetic-runtime-token-for-local-tests-only'})
         p.start()
         self.addCleanup(p.stop)
-        p = patch.object(api, 'controller', c.dispatch)
+        def controller(request):
+            try:
+                return c.dispatch(request)
+            except c.ControllerError as error:
+                raise api.GatewayError(error.status, error.code, str(error)) from error
+        p = patch.object(api, 'controller', controller)
         p.start()
         self.addCleanup(p.stop)
         client = TestClient(api.create_app(), raise_server_exceptions=False)
@@ -44,6 +49,18 @@ class APITests(unittest.TestCase):
             response = client.put('/v1/routes/sample', headers=headers, json={'target_ip': '8.8.8.8', 'target_port': 31042, 'protocol': 'tcp'})
             self.assertEqual(response.status_code, 401)
             self.assertFalse(c.REGISTRY.exists())
+
+    def test_origin_api_requires_authentication_and_does_not_publish_a_route(self):
+        client = self.client()
+        for headers in ({}, {'Authorization': 'Bearer wrong'}):
+            self.assertEqual(client.get('/v1/routes/future/origin', headers=headers).status_code, 401)
+        headers = {'Authorization': 'Bearer synthetic-runtime-token-for-local-tests-only'}
+        origin = client.get('/v1/routes/future/origin', headers=headers)
+        self.assertEqual(origin.status_code, 200)
+        self.assertFalse(c.REGISTRY.exists())
+        self.assertEqual(client.get('/v1/routes/future', headers=headers).status_code, 404)
+        route = client.put('/v1/routes/future', headers=headers, json={'target_ip':'8.8.8.8','target_port':31042,'protocol':'http'})
+        self.assertEqual(route.json()['url'], origin.json()['url'])
 
     def test_http_response_model_rejects_plaintext_or_non_443_metadata(self):
         from pydantic import ValidationError

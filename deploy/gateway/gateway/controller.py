@@ -4,11 +4,13 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from ipaddress import IPv6Address, ip_address
 import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
 import re
 import secrets
+import stat
 import socket
 import subprocess
 import sys
@@ -410,12 +412,43 @@ def public_route(route: dict) -> dict:
     }
 
 
+def instance_hostname(instance_id: str, domain: str) -> str:
+    """Predict only new hostnames using a durable, root-only independent key."""
+    key_path = STATE / "hostname.key"
+    if not key_path.exists():
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=STATE, prefix=".hostname-key-", delete=False) as handle:
+                temporary = Path(handle.name)
+                os.fchmod(handle.fileno(), 0o600)
+                handle.write(secrets.token_bytes(32))
+                handle.flush()
+                os.fsync(handle.fileno())
+            try:
+                os.link(temporary, key_path, follow_symlinks=False)
+            except FileExistsError:
+                pass
+            sync_directory(STATE)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+    try:
+        with os.fdopen(os.open(key_path, os.O_RDONLY | os.O_NOFOLLOW), "rb") as handle:
+            metadata = os.fstat(handle.fileno())
+            key = handle.read(33)
+    except OSError as error:
+        raise ControllerError(503, "HOSTNAME_KEY_INVALID", "The managed hostname key is unavailable.") from error
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid() or metadata.st_mode & 0o077 or len(key) != 32:
+        raise ControllerError(503, "HOSTNAME_KEY_INVALID", "The managed hostname key is unavailable.")
+    return hmac.new(key, instance_id.encode("ascii"), hashlib.sha256).hexdigest()[:32] + "." + domain
+
+
 def dispatch(request: dict) -> tuple[int, dict | None]:
     operation = request.get("operation")
     fields = {"operation"} if operation == "reconcile" else {"operation", "instance_id"}
     if operation == "put":
         fields |= {"target_ip", "target_port", "protocol"}
-    if operation not in {"put", "get", "delete", "reconcile"} or set(request) != fields:
+    if operation not in {"put", "get", "origin", "delete", "reconcile"} or set(request) != fields:
         raise ControllerError(400, "INVALID_REQUEST", "Invalid controller request.")
     instance_id = request.get("instance_id", "")
     if operation != "reconcile" and (
@@ -447,6 +480,13 @@ def dispatch(request: dict) -> tuple[int, dict | None]:
                 reload_nginx()
                 confirm_tcp_listeners(registry_public_ports(previous), set())
             return 200, None
+        if operation == "origin":
+            if instance_id in deleted:
+                raise ControllerError(409, "INSTANCE_DELETED", "This instance ID was deleted; use a new deployment ID.")
+            if existing is not None and existing["protocol"] != "http":
+                raise ControllerError(409, "ORIGIN_NOT_HTTP", "A TCP route has no HTTP origin.")
+            hostname = existing["hostname"] if existing is not None else instance_hostname(instance_id, domain)
+            return 200, {"instance_id": instance_id, "hostname": hostname, "port": 443, "tls": True, "url": f"https://{hostname}"}
         if operation == "get":
             if existing is None:
                 raise ControllerError(404, "ROUTE_NOT_FOUND", "The instance has no registered route.")
@@ -464,7 +504,9 @@ def dispatch(request: dict) -> tuple[int, dict | None]:
             ):
                 raise ControllerError(409, "TARGET_IN_USE", "This VM port is already registered to another instance.")
             hostnames = {route["hostname"] for route in routes.values()}
-            hostname = f"{secrets.token_hex(16)}.{domain}"
+            hostname = instance_hostname(instance_id, domain) if target["protocol"] == "http" else f"{secrets.token_hex(16)}.{domain}"
+            if target["protocol"] == "http" and hostname in hostnames:
+                raise ControllerError(503, "HOSTNAME_CONFLICT", "The managed hostname is already registered.")
             while hostname in hostnames:
                 hostname = f"{secrets.token_hex(16)}.{domain}"
             existing = {

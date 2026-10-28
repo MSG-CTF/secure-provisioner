@@ -45,6 +45,8 @@ type WorkloadContainer struct {
 	FlagFilePath      string                     `json:",omitempty"`
 	EndpointProtocols []PortProtocol             `json:",omitempty"`
 	ShutdownStrategy  isolation.ShutdownStrategy `json:",omitempty"`
+	// PublicOriginEnv is populated only by the operator image policy, never the request.
+	PublicOriginEnv string `json:"public_origin_env,omitempty"`
 }
 
 // PortProtocol describes an operator-approved connection hint, independently
