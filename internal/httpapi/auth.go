@@ -12,10 +12,12 @@ type serviceAuthenticator struct {
 	currentDigest  [sha256.Size]byte
 	previousDigest [sha256.Size]byte
 	checkerDigests map[string][sha256.Size]byte
+	recoveryDigest [sha256.Size]byte
 	ciSmokeDigest  [sha256.Size]byte
 	hasCurrent     bool
 	hasPrevious    bool
 	hasCISmoke     bool
+	hasRecovery    bool
 }
 
 type ciSmokeContextKey struct{}
@@ -28,6 +30,7 @@ const (
 	serviceRoleFull
 	serviceRoleCISmoke
 	serviceRoleChecker
+	serviceRoleRecovery
 )
 
 func newServiceAuthenticator(config ServiceAuthConfig) serviceAuthenticator {
@@ -49,6 +52,10 @@ func newServiceAuthenticator(config ServiceAuthConfig) serviceAuthenticator {
 			authenticator.checkerDigests[backendID] = sha256.Sum256([]byte(token))
 		}
 	}
+	if config.WindowsRecoveryToken != "" {
+		authenticator.recoveryDigest = sha256.Sum256([]byte(config.WindowsRecoveryToken))
+		authenticator.hasRecovery = true
+	}
 	if config.CISmokeToken != "" && config.CISmokeTeamID.Valid() && config.CISmokeTargetID != "" {
 		authenticator.ciSmokeDigest = sha256.Sum256([]byte(config.CISmokeToken))
 		authenticator.hasCISmoke = true
@@ -60,7 +67,8 @@ func (authenticator serviceAuthenticator) wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		role, backendID := authenticator.authenticate(request)
 		checkerRoute := request.URL.Path == "/v1/checker-submissions" || strings.HasPrefix(request.URL.Path, "/v1/checker-submissions/")
-		if role == serviceRoleNone || checkerRoute && role != serviceRoleChecker || !checkerRoute && role == serviceRoleChecker {
+		recoveryRoute := request.Method == http.MethodPost && strings.HasPrefix(request.URL.Path, "/internal/v1/windows-vms/") && strings.HasSuffix(request.URL.Path, "/recovery-events")
+		if role == serviceRoleNone || checkerRoute && role != serviceRoleChecker || !checkerRoute && role == serviceRoleChecker || recoveryRoute && role != serviceRoleRecovery || !recoveryRoute && role == serviceRoleRecovery {
 			writer.Header().Set("WWW-Authenticate", `Bearer realm="secure-provisioner"`)
 			writeAPIError(writer, http.StatusUnauthorized, "UNAUTHENTICATED", "service authentication failed")
 			return
@@ -88,6 +96,7 @@ func (authenticator serviceAuthenticator) authenticate(request *http.Request) (s
 	currentMatch := subtle.ConstantTimeCompare(digest[:], authenticator.currentDigest[:])
 	previousMatch := subtle.ConstantTimeCompare(digest[:], authenticator.previousDigest[:])
 	ciSmokeMatch := subtle.ConstantTimeCompare(digest[:], authenticator.ciSmokeDigest[:])
+	recoveryMatch := subtle.ConstantTimeCompare(digest[:], authenticator.recoveryDigest[:])
 	if !authenticator.hasCurrent {
 		return serviceRoleNone, ""
 	}
@@ -101,6 +110,9 @@ func (authenticator serviceAuthenticator) authenticate(request *http.Request) (s
 	}
 	if authenticator.hasCISmoke && ciSmokeMatch == 1 {
 		return serviceRoleCISmoke, ""
+	}
+	if authenticator.hasRecovery && recoveryMatch == 1 {
+		return serviceRoleRecovery, ""
 	}
 	return serviceRoleNone, ""
 }

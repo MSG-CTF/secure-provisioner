@@ -340,11 +340,15 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 		}
 		if config.WindowsConfigPath != "" {
 			windowsStore = database.WindowsExecutions()
+			checkWindowsSchema := windowsStore.Check
+			if config.APIOnly {
+				checkWindowsSchema = windowsStore.CheckBridge
+			}
 			readiness.CheckDatabase = func(ctx context.Context) error {
 				if err := database.CheckReadiness(ctx); err != nil {
 					return err
 				}
-				return windowsStore.Check(ctx)
+				return checkWindowsSchema(ctx)
 			}
 		}
 	}

@@ -131,6 +131,22 @@ func (s *Service) GetByRequest(ctx context.Context, requestID string) (Record, e
 // recovery replays only the executor's idempotent PUT for the same ID.
 func (s *Service) Run(ctx context.Context) error {
 	var wg sync.WaitGroup
+	if _, ok := s.store.(recoveryDeliveryStore); ok && s.checkerHTTPClient != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ctx.Err() == nil {
+				_ = s.ProcessRecoveryOne(ctx)
+				timer := time.NewTimer(s.cfg.PollInterval)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return
+				case <-timer.C:
+				}
+			}
+		}()
+	}
 	for i := 0; i < s.cfg.Concurrency; i++ {
 		wg.Add(1)
 		go func() {

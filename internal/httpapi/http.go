@@ -67,6 +67,9 @@ func newHandler(createWorkload provisioner.CreateWorkloadUseCase, runtime Runtim
 		mux.HandleFunc("GET /internal/v1/windows-vms/{resource_target_id}/connection.rdp", api.handleWindowsRDP)
 		mux.HandleFunc(windowsSubmitPattern, api.handleWindowsSubmit)
 		mux.HandleFunc("GET /internal/v1/windows-executions/{execution_id}", api.handleWindowsGet)
+		if _, ok := api.windows.(windowsRecoveryUseCase); ok {
+			mux.HandleFunc("POST /internal/v1/windows-vms/{resource_target_id}/recovery-events", api.handleWindowsRecovery)
+		}
 	}
 	if api.checker != nil {
 		mux.HandleFunc("POST /v1/checker-submissions", api.handleCheckerSubmit)
