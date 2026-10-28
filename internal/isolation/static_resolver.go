@@ -84,7 +84,9 @@ func resolveWorkloadProfile(ref ProfileRef) (string, EndpointProtocol, ExposureR
 }
 
 func validateContainers(containers []ContainerRequirement, limits ResourceLimits) error {
-	if err := ValidateServiceAliases(containers); err != nil { return err }
+	if err := ValidateServiceAliases(containers); err != nil {
+		return err
+	}
 	if len(containers) == 0 {
 		return rejected("at least one container is required")
 	}

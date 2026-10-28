@@ -48,7 +48,7 @@ type ContainerRequirement struct {
 	Expose           bool
 	RunAsUser        int64
 	WritablePaths    []WritablePath
-	ServiceAliases   []string `json:",omitempty"`
+	ServiceAliases   []string         `json:",omitempty"`
 	ExposedPorts     []int            `json:",omitempty"`
 	ShutdownStrategy ShutdownStrategy `json:",omitempty"`
 }

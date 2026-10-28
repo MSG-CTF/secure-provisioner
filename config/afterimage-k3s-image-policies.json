@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "managed_repositories": [
     "ghcr.io/msg-ctf/challenges/web-afterimage/bot",
     "ghcr.io/msg-ctf/challenges/web-afterimage/case-vault",

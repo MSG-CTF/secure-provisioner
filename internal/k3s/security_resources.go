@@ -25,7 +25,9 @@ func validateResolvedPolicy(
 	containers []provisioner.WorkloadContainer,
 ) (map[string]isolation.ContainerRequirement, bool) {
 	policy := command.Policy
-	if isolation.ValidateServiceAliases(policy.Containers) != nil { return nil, false }
+	if isolation.ValidateServiceAliases(policy.Containers) != nil {
+		return nil, false
+	}
 	if !supportedIsolationRef(policy.IsolationRef) ||
 		!canonicalExecutionPolicy(policy) ||
 		policy.OutboundMode != isolation.OutboundNone ||
@@ -231,7 +233,9 @@ func buildRuntimeResourceQuota(
 ) *corev1.ResourceQuota {
 	totals := resourceList(resolvedResourceLimits(policy.ResourceLimits))
 	serviceCount := containerCount
-	for _, container := range policy.Containers { serviceCount += len(container.ServiceAliases) }
+	for _, container := range policy.Containers {
+		serviceCount += len(container.ServiceAliases)
+	}
 	return &corev1.ResourceQuota{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      runtimeResourceControlsName,
