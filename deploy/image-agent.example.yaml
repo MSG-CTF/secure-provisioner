@@ -76,14 +76,16 @@ spec:
             requests: {cpu: 10m, memory: 32Mi}
             limits: {cpu: "1", memory: 256Mi}
           volumeMounts:
-            - {name: cri, mountPath: /run/k3s/containerd/containerd.sock}
+            # The container runtime replaces its socket during recovery. A file
+            # bind mount would keep the old inode and refuse every new request.
+            - {name: cri, mountPath: /run/k3s/containerd}
             - {name: k3s, mountPath: /host-bin/k3s, readOnly: true}
             - {name: k3s-data, mountPath: /var/lib/rancher/k3s/data, readOnly: true}
             - {name: machine-id, mountPath: /host-identity/machine-id, readOnly: true}
             - {name: boot-id, mountPath: /host-identity/boot-id, readOnly: true}
       volumes:
         - name: cri
-          hostPath: {path: /run/k3s/containerd/containerd.sock, type: Socket}
+          hostPath: {path: /run/k3s/containerd, type: Directory}
         - name: k3s
           hostPath: {path: /usr/local/bin/k3s, type: File}
         - name: k3s-data

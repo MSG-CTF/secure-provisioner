@@ -59,6 +59,15 @@ gets the K3s socket and binary. It needs the installed K3s data directory for th
 version's applets, plus read-only machine ID and boot ID. It receives no registry
 passwords; CRI pulls use the node daemon's existing registry configuration.
 
+Mount the containing `/run/k3s/containerd` directory at the same path in the
+agent, as shown in the manifest. The runtime recreates `containerd.sock` during
+recovery. A bind mount of that socket file keeps its previous inode and can
+return `connection refused` while host CRI commands succeed. A directory mount
+resolves the current socket on each request. Existing installations using a
+socket file mount need a DaemonSet rollout after updating both the hostPath and
+volumeMount. Confirm a real inspect-only preparation returns complete evidence
+after recovery; Pod Ready alone does not establish CRI connectivity.
+
 After operator approval, label only enrolled nodes
 `msgctf.io/image-preparation-agent=true`, apply the reviewed manifest, and wait for
 the DaemonSet to be ready. Set each node's trusted entry to `mode: kubernetes`, the
