@@ -12,19 +12,45 @@ import (
 )
 
 type checkerUseCaseStub struct {
-	calls      int
-	backendIDs []string
+	calls         int
+	backendIDs    []string
+	queueState    string
+	queuePosition *int
 }
 
 func (s *checkerUseCaseStub) SubmitForBackend(_ context.Context, backendID string, request windowsruntime.CheckerRequest, token string) (windowsruntime.Record, bool, error) {
 	s.calls++
 	s.backendIDs = append(s.backendIDs, backendID)
-	return windowsruntime.Record{ID: "00000000-0000-4000-8000-000000000004", RequestID: request.SubmissionID, Checker: &windowsruntime.CheckerJob{BackendID: backendID, AssignmentID: request.AssignmentID, Request: &request}}, true, nil
+	return windowsruntime.Record{QueueState: s.queueState, QueuePosition: s.queuePosition, ID: "00000000-0000-4000-8000-000000000004", RequestID: request.SubmissionID, Checker: &windowsruntime.CheckerJob{BackendID: backendID, AssignmentID: request.AssignmentID, Request: &request}}, true, nil
 }
 func (s *checkerUseCaseStub) GetForBackend(_ context.Context, backendID, submissionID string) (windowsruntime.Record, error) {
 	s.calls++
 	s.backendIDs = append(s.backendIDs, backendID)
-	return windowsruntime.Record{ID: "00000000-0000-4000-8000-000000000004", RequestID: submissionID, Checker: &windowsruntime.CheckerJob{BackendID: backendID, AssignmentID: "00000000-0000-4000-8000-000000000003", Request: &windowsruntime.CheckerRequest{SubmissionID: submissionID}}}, nil
+	return windowsruntime.Record{QueueState: s.queueState, QueuePosition: s.queuePosition, ID: "00000000-0000-4000-8000-000000000004", RequestID: submissionID, Checker: &windowsruntime.CheckerJob{BackendID: backendID, AssignmentID: "00000000-0000-4000-8000-000000000003", Request: &windowsruntime.CheckerRequest{SubmissionID: submissionID}}}, nil
+}
+
+func TestCheckerHTTPQueueResponseContainsOnlyAcknowledgementAndQueueFields(t *testing.T) {
+	position := 3
+	checker := &checkerUseCaseStub{queueState: "QUEUED", queuePosition: &position}
+	token := strings.Repeat("K", 43)
+	h := NewHandlerWithWindows(&recordingCreateUseCase{}, nil, ServiceAuthConfig{CurrentToken: testCurrentServiceToken, CheckerToken: token}, nil, ReadinessConfig{}, nil, &windowsUseCaseStub{}, checker)
+	req := httptest.NewRequest(http.MethodGet, "/v1/checker-submissions/00000000-0000-4000-8000-000000000002", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-Submission-Token", "backend-job-token-secret")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	var response struct {
+		Data map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != 200 || len(response.Data) != 5 || response.Data["queue_state"] != "QUEUED" || response.Data["queue_position"] != float64(3) {
+		t.Fatalf("invalid queue envelope: %d %s", w.Code, w.Body)
+	}
+	if strings.Contains(w.Body.String(), "job-token") || strings.Contains(w.Body.String(), "team_id") {
+		t.Fatalf("private metadata in queue response: %s", w.Body)
+	}
 }
 
 func TestCheckerHTTPBindsBackendIdentityToServiceToken(t *testing.T) {

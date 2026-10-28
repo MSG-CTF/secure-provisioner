@@ -333,9 +333,9 @@ func (store *PostgresStore) BindTarget(ctx context.Context, id, owner, targetID 
 		return false, storageError(ctx)
 	}
 	defer tx.Rollback()
-	var currentTarget, phase, currentOwner string
-	var leaseUntil time.Time
-	err = tx.QueryRowContext(ctx, `SELECT target_id::text,phase,lease_owner,lease_until FROM runtime_windows_executions WHERE execution_id=$1 FOR UPDATE`, id).Scan(&currentTarget, &phase, &currentOwner, &leaseUntil)
+	var currentTarget, phase, currentOwner, mode string
+	var leaseUntil, createdAt time.Time
+	err = tx.QueryRowContext(ctx, `SELECT target_id::text,phase,lease_owner,lease_until,created_at,COALESCE(record_json#>>'{checker,request,selection_mode}','') FROM runtime_windows_executions WHERE execution_id=$1 FOR UPDATE`, id).Scan(&currentTarget, &phase, &currentOwner, &leaseUntil, &createdAt, &mode)
 	if err != nil {
 		return false, ErrLeaseLost
 	}
@@ -348,6 +348,18 @@ func (store *PostgresStore) BindTarget(ctx context.Context, id, owner, targetID 
 	}
 	if !locked {
 		return false, nil
+	}
+	if mode == "broker_pool" {
+		var ahead bool
+		if err = tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM runtime_windows_executions
+ WHERE target_id=$1 AND phase='QUEUED'
+ AND record_json#>>'{checker,request,selection_mode}'='broker_pool'
+ AND (created_at,execution_id)<($2::timestamptz,$3::uuid))`, UnboundTargetID, createdAt, id).Scan(&ahead); err != nil {
+			return false, storageError(ctx)
+		}
+		if ahead {
+			return false, nil
+		}
 	}
 	var occupied bool
 	if err = tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM runtime_windows_executions WHERE target_id=$1 AND execution_id<>$2 AND

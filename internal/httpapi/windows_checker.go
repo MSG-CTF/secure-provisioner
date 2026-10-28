@@ -23,9 +23,11 @@ type checkerResponse struct {
 	Data checkerJobData `json:"data"`
 }
 type checkerJobData struct {
-	SubmissionID string `json:"submission_id"`
-	AssignmentID string `json:"assignment_id"`
-	CheckerJobID string `json:"checker_job_id"`
+	SubmissionID  string `json:"submission_id"`
+	AssignmentID  string `json:"assignment_id"`
+	CheckerJobID  string `json:"checker_job_id"`
+	QueueState    string `json:"queue_state,omitempty"`
+	QueuePosition *int   `json:"queue_position,omitempty"`
 }
 
 func checkerToken(r *http.Request) (string, bool) {
@@ -94,7 +96,7 @@ func (api *API) handleCheckerSubmit(w http.ResponseWriter, r *http.Request) {
 	if created {
 		status = 202
 	}
-	writeJSON(w, status, checkerResponse{Code: "SUCCESS", Data: checkerJobData{SubmissionID: request.SubmissionID, AssignmentID: record.Checker.AssignmentID, CheckerJobID: record.ID}})
+	writeJSON(w, status, checkerResponse{Code: "SUCCESS", Data: checkerJobData{SubmissionID: request.SubmissionID, AssignmentID: record.Checker.AssignmentID, CheckerJobID: record.ID, QueueState: record.QueueState, QueuePosition: record.QueuePosition}})
 }
 
 func (api *API) handleCheckerGet(w http.ResponseWriter, r *http.Request) {
@@ -125,5 +127,5 @@ func (api *API) handleCheckerGet(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, 503, "CHECKER_UNAVAILABLE", "checker job record was invalid")
 		return
 	}
-	writeJSON(w, 200, checkerResponse{Code: "SUCCESS", Data: checkerJobData{SubmissionID: id, AssignmentID: record.Checker.AssignmentID, CheckerJobID: record.ID}})
+	writeJSON(w, 200, checkerResponse{Code: "SUCCESS", Data: checkerJobData{SubmissionID: id, AssignmentID: record.Checker.AssignmentID, CheckerJobID: record.ID, QueueState: record.QueueState, QueuePosition: record.QueuePosition}})
 }

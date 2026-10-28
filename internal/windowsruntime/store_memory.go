@@ -199,6 +199,13 @@ func (store *MemoryStore) BindTarget(ctx context.Context, id, owner, targetID st
 	if !ok || record.Owner != owner || !record.LeaseUntil.After(now) || record.Phase != "QUEUED" || record.TargetID != UnboundTargetID {
 		return false, ErrLeaseLost
 	}
+	if current, pooled := pendingTeam(record); pooled {
+		for _, other := range store.records {
+			if ahead, queued := pendingTeam(other); queued && other.Phase == "QUEUED" && (ahead.createdAt.Before(current.createdAt) || ahead.createdAt.Equal(current.createdAt) && ahead.id < current.id) {
+				return false, nil
+			}
+		}
+	}
 	for otherID, other := range store.records {
 		if otherID != id && other.TargetID == targetID && (occupiesVM(other, now) || other.Phase == "QUEUED" || other.Phase == "FETCH_PENDING") {
 			return false, nil
