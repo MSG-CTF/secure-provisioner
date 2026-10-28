@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -36,12 +37,15 @@ func (i *testInventory) Enabled(string, string) bool                           {
 func (i *testInventory) Nodes(context.Context, string, string) ([]Node, error) { return i.nodes, nil }
 
 type testRunner struct {
+	mu     sync.Mutex
 	calls  int
 	fail   string
 	absent bool
 }
 
 func (r *testRunner) Run(_ context.Context, n Node, image string, pull bool) (Evidence, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.calls++
 	if r.fail != "" {
 		return Evidence{}, Failure{Code: r.fail}

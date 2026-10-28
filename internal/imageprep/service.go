@@ -214,12 +214,70 @@ func (s *Service) Observe(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Keep one observer per target so its node locks do not contend with other
+	// image sets from this pass. Independent targets share bounded workers.
+	byTarget := map[string][]Query{}
+	order := []string{}
+	for _, q := range queries {
+		for _, target := range q.TargetIDs {
+			if _, exists := byTarget[target]; !exists {
+				order = append(order, target)
+			}
+			one := q
+			one.TargetIDs = []string{target}
+			byTarget[target] = append(byTarget[target], one)
+		}
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	jobs := make(chan string)
+	errors := make(chan error, 1)
+	var workers sync.WaitGroup
+	for range min(max(s.Config.Concurrency, 1), 8) {
+		workers.Go(func() {
+			for target := range jobs {
+				if err := s.observeQueries(ctx, byTarget[target]); err != nil {
+					select {
+					case errors <- err:
+					default:
+					}
+					cancel()
+					return
+				}
+			}
+		})
+	}
+dispatch:
+	for _, target := range order {
+		select {
+		case jobs <- target:
+		case <-ctx.Done():
+			break dispatch
+		}
+	}
+	close(jobs)
+	workers.Wait()
+	select {
+	case err := <-errors:
+		return err
+	default:
+		return ctx.Err()
+	}
+}
+
+func (s *Service) observeQueries(ctx context.Context, queries []Query) error {
 	for _, q := range queries {
 		for _, target := range q.TargetIDs {
 			started := s.Now()
 			obs := Observation{TargetID: target, ImageSetID: ImageSetID(q.Architecture, q.Images), Architecture: q.Architecture, Images: q.Images, ObservedAt: started, ValidUntil: started.Add(s.Config.TTL), Nodes: []NodeObservation{}}
 			if s.Policy != nil {
 				obs.PolicyRevision = s.Policy.Revision()
+			}
+			if !s.Inventory.Enabled(target, q.Architecture) {
+				if err := s.Store.PutObservation(ctx, obs); err != nil {
+					return err
+				}
+				continue
 			}
 			nodes, err := s.collectNodes(ctx, target, q.Architecture)
 			if err != nil {
