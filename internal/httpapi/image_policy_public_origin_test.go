@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/MSG-CTF/secure-provisioner/internal/imageprep"
 )
 
 func TestPublicOriginIsAnOperatorOwnedImagePolicy(t *testing.T) {
@@ -13,6 +15,22 @@ func TestPublicOriginIsAnOperatorOwnedImagePolicy(t *testing.T) {
 		if (err == nil) != (name == "PUBLIC_ORIGIN") {
 			t.Fatalf("field=%s err=%v", name, err)
 		}
+	}
+}
+
+func TestPublicOriginPolicyAllowsImagePreparation(t *testing.T) {
+	raw := strings.Replace(testImagePolicies, `"status": "create_enabled",`, `"status": "create_enabled", "public_origin_env":"PUBLIC_ORIGIN",`, 1)
+	catalog, err := ParseImagePolicies([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := imageprep.Request{IsolationProfile: "WEB", Containers: []imageprep.Container{{Name: "web", Image: gradePolicyImage, Ports: []int{8080}}}}
+	if err := catalog.Validate(request); err != nil {
+		t.Fatalf("approved Gateway image cannot be prepared: %v", err)
+	}
+	request.Containers[0].Ports = []int{9090}
+	if err := catalog.Validate(request); err == nil {
+		t.Fatal("preparation bypassed approved ports")
 	}
 }
 
