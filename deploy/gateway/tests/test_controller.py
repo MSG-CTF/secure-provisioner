@@ -63,6 +63,24 @@ class ControllerTests(unittest.TestCase):
                 self.assertEqual(route['url'], 'https://' + route['hostname'] if protocol == 'http' else None)
                 self.assertEqual(self.put(protocol, protocol, 31042 + index), (200, route))
 
+    def test_retry_uses_only_same_approved_target_and_reads_legacy_registry(self):
+        self.put('retained', 'http')
+        routes, deleted = c.parse_registry(c.REGISTRY.read_text(), 'gate.msgctf.kr', '8.8.4.4')
+        deleted.add('retired-id')
+        legacy = c.render_legacy(routes, deleted)
+        self.assertEqual(c.parse_registry(legacy, 'gate.msgctf.kr', '8.8.4.4'), (routes, deleted))
+        rendered = c.render(routes, deleted)
+        self.assertEqual(c.parse_registry(rendered, 'gate.msgctf.kr', '8.8.4.4'), (routes, deleted))
+        self.assertEqual(rendered.count('    server 8.8.8.8:31042 max_fails=0'), 6)
+        self.assertIn('proxy_next_upstream_tries 6;', rendered)
+        self.assertIn('proxy_next_upstream_timeout 6s;', rendered)
+        self.assertIn('proxy_connect_timeout 1s;', rendered)
+        self.assertEqual(c.parse_registry(c.render_previous_retry(routes, deleted), 'gate.msgctf.kr', '8.8.4.4'), (routes, deleted))
+        tampered = rendered.replace('server 8.8.8.8:31042 max_fails=0 backup;',
+                                    'server 1.1.1.1:31042 max_fails=0 backup;')
+        with self.assertRaises(ValueError):
+            c.parse_registry(tampered, 'gate.msgctf.kr', '8.8.4.4')
+
     def test_tcp_pool_returns_persistent_plaintext_port_and_http_stays_https(self):
         self.enable_pool()
         _, web = self.put('web', 'http')
