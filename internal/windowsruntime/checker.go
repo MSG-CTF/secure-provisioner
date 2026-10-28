@@ -135,7 +135,11 @@ func (c *Checker) SubmitForBackend(ctx context.Context, backendID string, reques
 	if _, err := hex.DecodeString(request.PayloadSHA256); err != nil || strings.ToLower(request.PayloadSHA256) != request.PayloadSHA256 {
 		return Record{}, false, ErrInvalidSubmission
 	}
-	return c.service.QueueChecker(ctx, checkerRequestID(backendID, request.SubmissionID), targetID, CheckerJob{BackendID: backendID, AssignmentID: request.AssignmentID, PayloadSHA256: request.PayloadSHA256, BackendURL: backendURL, JobToken: token, Request: &request}, time.Duration(request.TimeoutSeconds)*time.Second)
+	record, created, err := c.service.QueueChecker(ctx, checkerRequestID(backendID, request.SubmissionID), targetID, CheckerJob{BackendID: backendID, AssignmentID: request.AssignmentID, PayloadSHA256: request.PayloadSHA256, BackendURL: backendURL, JobToken: token, Request: &request}, time.Duration(request.TimeoutSeconds)*time.Second)
+	if err != nil {
+		return Record{}, false, err
+	}
+	return c.service.withQueueState(ctx, record), created, nil
 }
 
 func (s *Service) fetchCheckerPayload(ctx context.Context, record Record) ([]byte, error) {
@@ -185,12 +189,21 @@ func (c *Checker) GetForBackend(ctx context.Context, backendID, submissionID str
 	if _, ok := c.cfg.Backends[backendID]; !ok {
 		return Record{}, ErrNotFound
 	}
-	record, err := c.service.GetByRequest(ctx, checkerRequestID(backendID, submissionID))
+	var record Record
+	var err error
+	requestID := checkerRequestID(backendID, submissionID)
+	if metadata, ok := c.service.store.(interface {
+		GetMetadataByRequest(context.Context, string) (Record, error)
+	}); ok {
+		record, err = metadata.GetMetadataByRequest(ctx, requestID)
+	} else {
+		record, err = c.service.GetByRequest(ctx, requestID)
+	}
 	if err != nil {
 		return Record{}, err
 	}
 	if record.Checker == nil || !sameCheckerBackend(record.Checker.BackendID, backendID) || record.Checker.Request == nil || record.Checker.Request.SubmissionID != submissionID {
 		return Record{}, ErrNotFound
 	}
-	return record, nil
+	return c.service.withQueueState(ctx, record), nil
 }

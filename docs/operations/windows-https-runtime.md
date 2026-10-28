@@ -35,6 +35,19 @@ release 없는 Backend 코드를 적용하기 전에 이 Runtime 버전을 먼�
 
 ## 실행 순서
 
+Windows 팀별 대기열은 Backend에서 팀당 대기 또는 실행 중 한 건으로 접수를 제한한다
+총 실행 횟수 제한은 없으며 완료한 팀의 새 요청은 기존 대기 요청 뒤에 놓인다
+Runtime은 파일 준비가 끝난 QUEUED 요청을 접수 순서대로 VM에 배정한다
+뒤의 워커가 먼저 VM을 조회해도 BindTarget에서 앞선 준비 요청을 확인하므로 추월하지 않는다
+파일 조회 중인 FETCH_PENDING 요청은 다른 팀의 준비된 실행까지 막지 않는다
+요청과 대기 순서는 기존 PostgreSQL 기록에 남으며 추가 마이그레이션은 없다
+
+체커 POST 및 GET 응답의 선택 필드 queue_state는 QUEUED, PREPARING, RUNNING 중 하나다
+QUEUED일 때 queue_position은 같은 VM 풀에서 대기 중인 팀의 순번이다
+내부와 외부 Backend의 같은 팀 ID는 별도 팀으로 계산하며 다른 팀 식별자는 반환하지 않는다
+조회 실패 시 순번을 추정하지 않으며 VM 배정 뒤에는 queue_position을 생략한다
+Backend는 5초 간격으로 확인하고 15초가 지난 순번을 현재 순번으로 표시하지 않는다
+
 1. Runtime은 Broker의 `GET /v1/runtime/windows-vms`에서 READY 목록을 조회하고
    VM 하나를 고른다. 목록은 예약이 아니다.
 2. Runtime은 선택한 VM의 최신 접속정보를 조회하고 같은 `execution_id`로

@@ -68,6 +68,8 @@ type CheckerJob struct {
 }
 
 type Record struct {
+	QueueState       string        `json:"-"`
+	QueuePosition    *int          `json:"-"`
 	ID               string        `json:"execution_id"`
 	RequestID        string        `json:"request_id"`
 	TargetID         string        `json:"resource_target_id"`
