@@ -62,6 +62,9 @@ func (a *Adapter) CreateWorkload(ctx context.Context, c provisioner.CreateWorklo
 	return a.CreateWorkloadForOperation(ctx, c, "")
 }
 func (a *Adapter) CreateWorkloadForOperation(ctx context.Context, c provisioner.CreateWorkloadCommand, op string) (result provisioner.CreateWorkloadResult, err error) {
+	if c, err = a.bindPublicOrigin(ctx, c); err != nil {
+		return result, err
+	}
 	_, lookupErr := a.journal.Get(ctx, c.InstanceID)
 	if errors.Is(lookupErr, ErrNotFound) && !a.backend.Enabled(c.TargetID) {
 		return a.backend.CreateWorkloadForOperation(ctx, c, op)
@@ -134,6 +137,12 @@ func (a *Adapter) CreateWorkloadForOperation(ctx context.Context, c provisioner.
 					return provisioner.WithCreateCleanupCompleted(operations.NewExecutionError(apiErr.Code, false, nil))
 				}
 				return hold(errorCode(putErr), putErr)
+			}
+			if !publicOriginMatches(c, route) {
+				if cleanupErr := a.remove(ctx, s, record); cleanupErr != nil {
+					return provisioner.WithCreateCleanupPending(cleanupErr, provisioner.CreateCleanup{RuntimeWorkloadID: record.Result.RuntimeWorkloadID, NamespaceUID: record.Result.NamespaceUID, FailureCode: "GATEWAY_ORIGIN_MISMATCH"})
+				}
+				return provisioner.WithCreateCleanupCompleted(operations.NewExecutionError("GATEWAY_ORIGIN_MISMATCH", false, nil))
 			}
 			record.Route = route
 			record.Phase = PhaseApplied

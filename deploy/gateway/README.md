@@ -148,3 +148,23 @@ tests cover two and five consecutive blackholed sockets, exactly six attempts
 on connection refusal, termination after six seconds under a permanent blackhole, and no command replay
 after an established connection resets. These tests model a connection failure;
 they do not establish the historical cause of packet loss on a live network.
+# HTTPS origin binding
+
+Authenticated Runtime callers can read `GET /v1/routes/{instance_id}/origin`
+before creating an HTTP workload. This returns the stable HTTPS origin without
+publishing an upstream or opening a participant route. A later HTTP PUT returns
+the same hostname. Existing route hostnames are retained, and deleted IDs and
+existing TCP routes cannot obtain a new HTTP origin.
+
+New HTTP hostnames use an independent root-only key at
+`/var/lib/msgctf-gateway/hostname.key`. Back up this key with Gateway configuration;
+never publish it or replace it during a deployment. Missing keys are created by
+atomic publication, and unsafe ownership, permissions or symlinks fail closed.
+
+An operator image policy can set `public_origin_env` to `PUBLIC_ORIGIN` for a
+single-endpoint WEB image. Runtime resolves the Gateway origin before creating
+the Pod and binds that environment value itself. Caller-provided values are
+rejected. The final published HTTPS route must match the bound origin; a mismatch
+triggers normal owned-route and workload cleanup. Application production mode
+and any other execution settings remain part of the approved release.
+
