@@ -26,14 +26,8 @@ func main() {
 	command := request.ToCommand()
 	command.Policy, err = isolation.NewStaticResolver().Resolve(command.PolicyRequest)
 	must(err)
-	// Secret resolution is deliberately absent. Dummy values exist only in this
-	// in-memory plan; no Backend secret endpoint is called.
-	for i := range command.Containers {
-		command.Containers[i].SecretRef = ""
-		if command.Containers[i].RequiresFlag {
-			command.Containers[i].Env = map[string]string{"FLAG": "dryrun-sentinel"}
-		}
-	}
+	// Keep only synthetic UUID references. Secret resolution belongs to the
+	// live adapter, not this offline renderer; no Backend endpoint is called.
 	cluster := k3s.Cluster{Config: k3s.ClusterConfig{TargetID: command.TargetID, Architecture: "AMD64", ExposureMode: k3s.ExposureModeNodePort, PublicGateway: "https://gateway.example.invalid", SecurityCapabilities: k3s.SecurityCapabilities{NetworkPolicyEnforced: true, SupplementalGroupsPolicyStrict: true, PodPIDLimitEnforced: true, NetworkPolicyProvider: "kube-router", DNSNamespace: "kube-system", DNSPodSelector: map[string]string{"k8s-app": "kube-dns"}, RuntimeClasses: []string{"gvisor"}}}}
 	resources, err := k3s.BuildResourceSet(cluster, command)
 	must(err)
