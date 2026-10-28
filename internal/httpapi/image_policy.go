@@ -52,6 +52,7 @@ type ImagePolicy struct {
 	TCPStartupOnly   bool                       `json:"tcp_startup_only,omitempty"`
 	ShutdownStrategy isolation.ShutdownStrategy `json:"shutdown_strategy,omitempty"`
 	PublicOriginEnv  string                     `json:"public_origin_env,omitempty"`
+	ServiceAliases   []string                   `json:"service_aliases,omitempty"`
 }
 
 func (catalog *ImagePolicyCatalog) RequiredFlagImages() []string {
@@ -157,6 +158,11 @@ func ParseImagePolicies(contents []byte) (*ImagePolicyCatalog, error) {
 		catalog.vmRequired[repository] = struct{}{}
 	}
 	for _, policy := range config.Images {
+		if len(policy.ServiceAliases) > 0 {
+			if policy.IsolationProfile != "WEB" || isolation.ValidateServiceAliases([]isolation.ContainerRequirement{{Name: policy.Container, ServiceAliases: policy.ServiceAliases}}) != nil {
+				return nil, errors.New("invalid trusted service alias policy")
+			}
+		}
 		if !validImmutableImageReference(policy.Image) {
 			return nil, fmt.Errorf("image policy requires an immutable image: %q", policy.Image)
 		}
@@ -416,6 +422,7 @@ func (catalog *ImagePolicyCatalog) Apply(request *CreateWorkloadRequest) error {
 		container.Expose = false
 		container.ExposedPorts = slices.Clone(policy.ExposedPorts)
 		container.WritablePaths = slices.Clone(policy.WritablePaths)
+		container.serviceAliases = slices.Clone(policy.ServiceAliases)
 		if policy.ReadinessHTTP != nil {
 			readiness := *policy.ReadinessHTTP
 			container.readinessHTTP = &readiness

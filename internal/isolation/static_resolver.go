@@ -84,6 +84,9 @@ func resolveWorkloadProfile(ref ProfileRef) (string, EndpointProtocol, ExposureR
 }
 
 func validateContainers(containers []ContainerRequirement, limits ResourceLimits) error {
+	if err := ValidateServiceAliases(containers); err != nil {
+		return err
+	}
 	if len(containers) == 0 {
 		return rejected("at least one container is required")
 	}
@@ -195,6 +198,7 @@ func cloneContainerRequirements(containers []ContainerRequirement) []ContainerRe
 			cloned[index].ExposedPorts = append([]int{}, container.ExposedPorts...)
 		}
 		cloned[index].WritablePaths = append([]WritablePath(nil), container.WritablePaths...)
+		cloned[index].ServiceAliases = append([]string(nil), container.ServiceAliases...)
 	}
 	return cloned
 }

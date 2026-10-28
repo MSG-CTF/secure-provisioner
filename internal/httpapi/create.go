@@ -57,6 +57,7 @@ type RuntimeContainer struct {
 	endpointProtocols []provisioner.PortProtocol
 	shutdownStrategy  isolation.ShutdownStrategy
 	publicOriginEnv   string
+	serviceAliases    []string
 }
 
 func (container *RuntimeContainer) UnmarshalJSON(data []byte) error {
@@ -527,6 +528,9 @@ func (request CreateWorkloadRequest) toPolicyRequest(containers []provisioner.Wo
 			RunAsUser:        runAsUser,
 			WritablePaths:    make([]isolation.WritablePath, len(writablePaths)),
 			ShutdownStrategy: container.ShutdownStrategy,
+		}
+		if len(request.Workload.Containers) > 0 {
+			requirements[index].ServiceAliases = slices.Clone(request.Workload.Containers[index].serviceAliases)
 		}
 		for pathIndex, writable := range writablePaths {
 			requirements[index].WritablePaths[pathIndex] = isolation.WritablePath{Path: writable.Path, SizeMiB: writable.SizeMiB}
