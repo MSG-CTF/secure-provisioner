@@ -14,6 +14,7 @@ func TestResolverRejectsUnsupportedShutdownStrategyOrProfile(t *testing.T) {
 	}{
 		{isolation.WorkloadProfileWeb, "arbitrary_exec"},
 		{isolation.WorkloadProfilePwn, "python_sigint_pid1"},
+		{isolation.WorkloadProfilePwn, "python_sigint_child"},
 	} {
 		t.Run(string(test.profile)+"/"+test.strategy, func(t *testing.T) {
 			request := validRequest()
