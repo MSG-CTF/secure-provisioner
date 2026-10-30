@@ -21,6 +21,10 @@ const terminatingContentDeletesPerStep = 2
 
 const terminatingContentPreparationBudget = 250 * time.Millisecond
 
+// Preserve the controller's five-second admission propagation window and
+// allow for the API deletion timestamp's one-second precision.
+const terminatingContentAdmissionGrace = 6 * time.Second
+
 // prepareTerminatingNamespaceContent only touches an already terminating,
 // identity-checked namespace with no Pods. Namespace admission therefore fences
 // new Pods before isolation controls or credentials can be removed. The normal
@@ -41,6 +45,9 @@ func prepareTerminatingNamespaceContent(ctx context.Context, client kubernetes.I
 		return err
 	}
 	if namespace.DeletionTimestamp == nil {
+		return nil
+	}
+	if time.Since(namespace.DeletionTimestamp.Time) < terminatingContentAdmissionGrace {
 		return nil
 	}
 	pods, err := client.CoreV1().Pods(binding.Namespace).List(ctx, metav1.ListOptions{})

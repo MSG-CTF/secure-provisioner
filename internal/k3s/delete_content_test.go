@@ -22,7 +22,7 @@ import (
 
 func terminatingContentFixture() (runtimebinding.Binding, *corev1.Namespace, []runtime.Object) {
 	binding, namespace := deleteFixture()
-	now := metav1.Now()
+	now := metav1.NewTime(time.Now().Add(-time.Minute))
 	namespace.DeletionTimestamp = &now
 	namespace.Spec.Finalizers = []corev1.FinalizerName{"kubernetes"}
 	metadata := func(name string) metav1.ObjectMeta {
@@ -40,6 +40,19 @@ func terminatingContentFixture() (runtimebinding.Binding, *corev1.Namespace, []r
 		objects = append(objects, &networkingv1.NetworkPolicy{ObjectMeta: metadata(fmt.Sprintf("policy-%d", i))})
 	}
 	return binding, namespace, objects
+}
+
+func TestContentPreparationKeepsNamespaceAdmissionPropagationWindow(t *testing.T) {
+	binding, namespace, objects := terminatingContentFixture()
+	now := metav1.Now()
+	namespace.DeletionTimestamp = &now
+	client := fake.NewSimpleClientset(objects...)
+	if err := prepareTerminatingNamespaceContent(context.Background(), client, namespace, binding); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.Actions()) != 0 {
+		t.Fatal("preparation queried or mutated content during admission propagation")
+	}
 }
 
 func TestTerminatingContentIsBoundedAndNeverCompletesBeforeNamespaceAbsence(t *testing.T) {

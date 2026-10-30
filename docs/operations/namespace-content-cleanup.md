@@ -4,7 +4,8 @@
 NetworkPolicy·Secret·ServiceAccount·LimitRange·ResourceQuota는 Namespace
 컨트롤러에 맡겼습니다 이번 변경은 그 남은 자원도 조금씩 먼저 정리합니다
 
-Namespace가 종료 중이고 Pod가 하나도 없을 때만 실행합니다 Namespace와
+Namespace가 종료 중이고 종료 표시 후 6초가 지났으며 Pod가 하나도 없을
+때만 실행합니다 Namespace와
 자원의 UID·팀 소유권을 확인하고, 자원 삭제에도 UID와 resourceVersion을
 지정합니다 다른 팀 자원이나 finalizer가 붙은 자원은 기존 컨트롤러에 맡깁니다
 
@@ -14,7 +15,8 @@ Namespace가 종료 중이고 Pod가 하나도 없을 때만 실행합니다 Nam
 것을 확인하기 전에는 삭제 완료로 처리하지 않습니다
 
 Kubernetes 1.36.4의 Namespace 컨트롤러에는 API 서버들이 종료 상태를
-확인할 시간을 주는 5초 대기가 있습니다 이 대기는 변경하지 않습니다
+확인할 시간을 주는 5초 대기가 있습니다 API 시각의 초 단위 정밀도까지
+감안해 이 준비 작업은 6초 뒤부터 허용합니다 이 대기는 줄이지 않습니다
 [Namespace 컨트롤러 구현](https://github.com/kubernetes/kubernetes/blob/v1.36.4/pkg/controller/namespace/namespace_controller.go)
 
 격리 CI는 임시 K3s에 합성 자원을 만든 Namespace 12개를 실제 API로
