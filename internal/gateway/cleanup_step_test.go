@@ -80,6 +80,51 @@ type pendingStepBackend struct {
 	done  bool
 }
 
+type quiesceWaitBackend struct {
+	fakeBackend
+	waitErr error
+}
+
+func (b *quiesceWaitBackend) Quiesce(context.Context, Record) error {
+	b.quiesces++
+	return b.waitErr
+}
+
+func TestRestartAfterRouteDeletionWaitsForPodsWithoutRepeatingRouteDelete(t *testing.T) {
+	for _, normal := range []bool{true, false} {
+		t.Run(map[bool]string{true: "terminating pods", false: "API fault"}[normal], func(t *testing.T) {
+			r := Record{Command: provisioner.CreateWorkloadCommand{InstanceID: "quiesce-instance", TargetID: "target", TeamID: "team", RuntimeType: provisioner.RuntimeTypeKubernetes}, Result: provisioner.CreateWorkloadResult{NamespaceUID: "namespace-uid", RuntimeWorkloadID: "target/namespace/workload"}, Phase: PhaseDeletePending}
+			journal := &memoryJournal{records: map[string]Record{r.Command.InstanceID: r}}
+			backend := &quiesceWaitBackend{waitErr: errors.New("namespace API unavailable")}
+			if normal {
+				backend.waitErr = operations.NewProgressPendingError("GATEWAY_WORKLOAD_STOP_PENDING", nil)
+			}
+			remote := &fakeRoutes{}
+			command := provisioner.DeleteWorkloadCommand{InstanceID: r.Command.InstanceID}
+			for attempt := 0; attempt < 2; attempt++ {
+				adapter := NewAdapter(backend, remote, journal)
+				err := adapter.DeleteWorkload(context.Background(), command, recoveryBinding(r))
+				var pending *operations.ProgressPendingError
+				if err == nil || errors.As(err, &pending) != normal {
+					t.Fatalf("pending classification changed across restart: %v", err)
+				}
+				current, _ := journal.Get(context.Background(), r.Command.InstanceID)
+				if current.Phase != PhaseRouteDeleted || backend.deletes != 0 || remote.deletes != 1 {
+					t.Fatal("namespace deleted before pod termination or route deletion repeated")
+				}
+			}
+			backend.waitErr = nil
+			if err := NewAdapter(backend, remote, journal).DeleteWorkload(context.Background(), command, recoveryBinding(r)); err != nil {
+				t.Fatal(err)
+			}
+			current, _ := journal.Get(context.Background(), r.Command.InstanceID)
+			if current.Phase != PhaseDeleted || backend.deletes != 1 || remote.deletes != 1 {
+				t.Fatal("completed quiesce did not continue the existing cleanup")
+			}
+		})
+	}
+}
+
 func (b *pendingStepBackend) DeleteWorkloadStep(context.Context, provisioner.DeleteWorkloadCommand, runtimebinding.Binding) error {
 	b.steps++
 	if !b.done {
