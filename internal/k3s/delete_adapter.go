@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/MSG-CTF/secure-provisioner/internal/operations"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 	"github.com/MSG-CTF/secure-provisioner/internal/runtimebinding"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -79,7 +80,10 @@ func (a *DeleteAdapter) DeleteWorkload(ctx context.Context, command provisioner.
 			break
 		}
 
-		propagation := metav1.DeletePropagationForeground
+		// Namespace finalization already waits for namespaced resources. A second
+		// foreground GC finalizer only adds another controller's observation delay.
+		// Keep the namespace's finalizers and wait for confirmed absence below.
+		propagation := metav1.DeletePropagationBackground
 		uid := namespace.UID
 		resourceVersion := namespace.ResourceVersion
 		err = cluster.Client.CoreV1().Namespaces().Delete(ctx, binding.Namespace, metav1.DeleteOptions{
@@ -132,9 +136,12 @@ func (a *DeleteAdapter) DeleteWorkload(ctx context.Context, command provisioner.
 		}
 		select {
 		case <-ctx.Done():
+			if ctx.Err() == context.DeadlineExceeded {
+				return operations.NewProgressPendingError("NAMESPACE_DELETE_PENDING", ctx.Err())
+			}
 			return operationCancelledError(ctx.Err())
 		case <-waitCtx.Done():
-			return newRuntimeError("NAMESPACE_DELETE_TIMEOUT", true, waitCtx.Err())
+			return operations.NewProgressPendingError("NAMESPACE_DELETE_PENDING", waitCtx.Err())
 		case <-ticker.C:
 		}
 	}

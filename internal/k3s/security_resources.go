@@ -57,20 +57,27 @@ func validateResolvedPolicy(
 
 	approved := make(map[string]isolation.ContainerRequirement, len(policy.Containers))
 	requestedShutdown := make(map[string]isolation.ShutdownStrategy, len(command.PolicyRequest.Containers))
+	requestedGrace := make(map[string]int64, len(command.PolicyRequest.Containers))
 	for _, requirement := range command.PolicyRequest.Containers {
 		if !isolation.ValidShutdownStrategy(command.PolicyRequest.WorkloadProfile, requirement.ShutdownStrategy) {
+			return nil, false
+		}
+		if !isolation.ValidTerminationGracePeriod(requirement.TerminationGracePeriodSeconds) {
 			return nil, false
 		}
 		if _, duplicate := requestedShutdown[requirement.Name]; duplicate {
 			return nil, false
 		}
 		requestedShutdown[requirement.Name] = requirement.ShutdownStrategy
+		requestedGrace[requirement.Name] = requirement.TerminationGracePeriodSeconds
 	}
 	totalWritableMiB := int64(0)
 	totalEphemeralMiB := int64(policy.ResourceLimits.EphemeralStorageMiB)
 	exposedContainers := 0
 	for _, requirement := range policy.Containers {
 		if requirement.RunAsUser <= 0 ||
+			!isolation.ValidTerminationGracePeriod(requirement.TerminationGracePeriodSeconds) ||
+			requestedGrace[requirement.Name] != requirement.TerminationGracePeriodSeconds ||
 			!isolation.ValidShutdownStrategy(isolation.WorkloadProfile(policy.WorkloadProfileRef.Name), requirement.ShutdownStrategy) ||
 			requestedShutdown[requirement.Name] != requirement.ShutdownStrategy {
 			return nil, false
@@ -121,7 +128,7 @@ func validateResolvedPolicy(
 		approved[requirement.Name] = requirement
 	}
 	for name, strategy := range requestedShutdown {
-		if _, found := approved[name]; strategy != "" && !found {
+		if _, found := approved[name]; (strategy != "" || requestedGrace[name] != 0) && !found {
 			return nil, false
 		}
 	}
@@ -132,6 +139,7 @@ func validateResolvedPolicy(
 	for index, container := range containers {
 		requirement, found := approved[container.Name]
 		if !found || container.ShutdownStrategy != requirement.ShutdownStrategy ||
+			container.TerminationGracePeriodSeconds != requirement.TerminationGracePeriodSeconds ||
 			!samePorts(container.PublicPorts(), requirement.PublicPorts()) || !samePorts(container.Ports, requirement.Ports) {
 			return nil, false
 		}

@@ -42,14 +42,18 @@ func ValidShutdownStrategy(profile WorkloadProfile, strategy ShutdownStrategy) b
 	return strategy == "" || (profile == WorkloadProfileWeb && strategy == ShutdownStrategyPythonSIGINTPID1)
 }
 
+// Zero preserves the Kubernetes default for existing durable commands.
+func ValidTerminationGracePeriod(seconds int64) bool { return seconds >= 0 && seconds <= 300 }
+
 type ContainerRequirement struct {
-	Name             string
-	Ports            []int
-	Expose           bool
-	RunAsUser        int64
-	WritablePaths    []WritablePath
-	ExposedPorts     []int            `json:",omitempty"`
-	ShutdownStrategy ShutdownStrategy `json:",omitempty"`
+	Name                          string
+	Ports                         []int
+	Expose                        bool
+	RunAsUser                     int64
+	WritablePaths                 []WritablePath
+	ExposedPorts                  []int            `json:",omitempty"`
+	ShutdownStrategy              ShutdownStrategy `json:",omitempty"`
+	TerminationGracePeriodSeconds int64            `json:",omitempty"`
 }
 
 func (container ContainerRequirement) PublicPorts() []int {

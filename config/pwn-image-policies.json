@@ -40,6 +40,7 @@
     },
     {
       "image": "ghcr.io/msg-ctf/challenges/pwn-note/service@sha256:c449da75a6a3eb0560b1d43034771749338897219afc560104da5c9b6c6a5471",
+      "termination_grace_period_seconds": 5,
       "container": "service",
       "isolation_profile": "PWN",
       "status": "create_enabled",
@@ -103,6 +104,7 @@
     },
     {
       "image": "ghcr.io/msg-ctf/challenges/pwn-note/service@sha256:3c1dcb4478d82564ad298b1cddee770f5d786a6d1052b1f842a538f91439868e",
+      "termination_grace_period_seconds": 5,
       "container": "service",
       "isolation_profile": "PWN",
       "status": "create_enabled",

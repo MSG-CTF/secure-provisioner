@@ -87,6 +87,7 @@
     },
     {
       "image": "ghcr.io/msg-ctf/challenges/web-daily-point/web@sha256:98c98088662fd5ff538ae9e163fb4a68ad73580e0f4f703624b0650d4a2b499a",
+      "termination_grace_period_seconds": 5,
       "container": "web",
       "isolation_profile": "WEB",
       "status": "create_enabled",
@@ -205,6 +206,7 @@
     },
     {
       "image": "ghcr.io/msg-ctf/challenges/web-daily-point/web@sha256:6640cad2d5e9c83cc6ba6bb86f38ccd7ce6317a9eaeab715e2dea74773994489",
+      "termination_grace_period_seconds": 5,
       "container": "web",
       "isolation_profile": "WEB",
       "status": "create_enabled",
@@ -234,6 +236,7 @@
     },
     {
       "image": "ghcr.io/msg-ctf/challenges/web-daily-point/web@sha256:fc7c762ba95b154c2b00154ed89aedd1ba5f86020408a5300d06a9f8d92a4816",
+      "termination_grace_period_seconds": 5,
       "container": "web",
       "isolation_profile": "WEB",
       "status": "create_enabled",
