@@ -29,6 +29,12 @@ type ResourceLimits struct {
 	EphemeralStorageMiB int
 }
 
+// StartupCPUProfile is an exact-image operator approval, not a client-selected limit.
+type StartupCPUProfile struct {
+	Steady int
+	Peak   int
+}
+
 type WorkloadContainer struct {
 	Name   string
 	Image  string
@@ -77,23 +83,25 @@ type CreateWorkloadCommand struct {
 	Architecture string
 	// RequestFingerprint identifies the caller input before server-owned policy
 	// overrides. Legacy snapshots decode this field to an empty string.
-	RequestFingerprint string
-	RequestID          string
-	InstanceID         string
-	TeamID             TeamID
-	RuntimeType        RuntimeType
-	TargetID           string
-	Containers         []WorkloadContainer
-	ResourceLimits     ResourceLimits
-	PolicyRequest      isolation.Request
-	Policy             isolation.ResolvedPolicy
+	RequestFingerprint  string
+	RequestID           string
+	InstanceID          string
+	TeamID              TeamID
+	RuntimeType         RuntimeType
+	TargetID            string
+	Containers          []WorkloadContainer
+	ResourceLimits      ResourceLimits
+	SteadyCPUMillicores int `json:",omitempty"`
+	PolicyRequest       isolation.Request
+	Policy              isolation.ResolvedPolicy
 }
 
 type CreateWorkloadResult struct {
-	RuntimeWorkloadID string
-	NamespaceUID      string
-	ServiceURL        string
-	Endpoints         []WorkloadEndpoint
+	SteadyCPUMillicores int `json:",omitempty"`
+	RuntimeWorkloadID   string
+	NamespaceUID        string
+	ServiceURL          string
+	Endpoints           []WorkloadEndpoint
 }
 
 type WorkloadEndpoint struct {

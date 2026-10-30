@@ -801,6 +801,10 @@ components:
             $ref: "#/components/schemas/RuntimeContainer"
         healthcheck:
           $ref: "#/components/schemas/RuntimeHTTPHealthcheck"
+        steady_cpu_millicores:
+          type: integer
+          minimum: 1
+          description: Optional approved steady CPU below peak CPU, for one WEB Kubernetes container. Restored and observed before CREATE succeeds or Gateway publication.
         resource_limits:
           $ref: "#/components/schemas/ResourceLimits"
     RuntimeHTTPHealthcheck:
@@ -999,6 +1003,10 @@ components:
         - service_url
         - endpoints
       properties:
+        steady_cpu_millicores:
+          type: integer
+          minimum: 1
+          description: Only present for startup CPU after the kubelet confirms restoration.
         runtime_workload_id:
           type: string
         service_url:
