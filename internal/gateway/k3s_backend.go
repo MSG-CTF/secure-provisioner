@@ -70,7 +70,8 @@ func (b *KubernetesBackend) DeleteWorkloadStep(ctx context.Context, c provisione
 	stepCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	err := b.Delete.DeleteWorkload(stepCtx, c, binding)
-	if errors.Is(err, context.DeadlineExceeded) && stepCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil {
+	var pending *operations.ProgressPendingError
+	if errors.As(err, &pending) && ctx.Err() == nil {
 		return operations.NewProgressPendingError("GATEWAY_WORKLOAD_DELETE_PENDING", err)
 	}
 	return err

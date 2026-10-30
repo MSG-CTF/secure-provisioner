@@ -21,7 +21,7 @@ func (f cleanupDeleteFunc) DeleteWorkload(ctx context.Context, _ provisioner.Del
 func TestGatewayCleanupStepYieldsWorkerWithoutReportingCleanupComplete(t *testing.T) {
 	backend := &KubernetesBackend{Delete: cleanupDeleteFunc(func(ctx context.Context) error {
 		<-ctx.Done()
-		return ctx.Err()
+		return operations.NewProgressPendingError("NAMESPACE_DELETE_PENDING", ctx.Err())
 	})}
 	started := time.Now()
 	err := backend.DeleteWorkloadStep(context.Background(), provisioner.DeleteWorkloadCommand{}, runtimebinding.Binding{})
@@ -41,6 +41,18 @@ func TestCleanupStepDoesNotClassifyRemoteFaultAsNormalProgress(t *testing.T) {
 	var pending *operations.ProgressPendingError
 	if !errors.Is(err, failure) || errors.As(err, &pending) {
 		t.Fatal("remote fault became a fast progress retry")
+	}
+}
+
+func TestCleanupStepDoesNotClassifyStalledAPIAsNormalProgress(t *testing.T) {
+	backend := &KubernetesBackend{Delete: cleanupDeleteFunc(func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})}
+	err := backend.DeleteWorkloadStep(context.Background(), provisioner.DeleteWorkloadCommand{}, runtimebinding.Binding{})
+	var pending *operations.ProgressPendingError
+	if !errors.Is(err, context.DeadlineExceeded) || errors.As(err, &pending) {
+		t.Fatal("stalled API became a fast progress retry")
 	}
 }
 

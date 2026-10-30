@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/MSG-CTF/secure-provisioner/internal/operations"
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 	"github.com/MSG-CTF/secure-provisioner/internal/runtimebinding"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -135,9 +136,12 @@ func (a *DeleteAdapter) DeleteWorkload(ctx context.Context, command provisioner.
 		}
 		select {
 		case <-ctx.Done():
+			if ctx.Err() == context.DeadlineExceeded {
+				return operations.NewProgressPendingError("NAMESPACE_DELETE_PENDING", ctx.Err())
+			}
 			return operationCancelledError(ctx.Err())
 		case <-waitCtx.Done():
-			return newRuntimeError("NAMESPACE_DELETE_TIMEOUT", true, waitCtx.Err())
+			return operations.NewProgressPendingError("NAMESPACE_DELETE_PENDING", waitCtx.Err())
 		case <-ticker.C:
 		}
 	}
