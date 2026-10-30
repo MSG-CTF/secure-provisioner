@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -23,12 +25,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-// This test refuses non-loopback clusters. It exercises actual Kubernetes
-// resource deletion, not a deployed Scheduler/Broker or challenge application.
-func TestIsolatedNamespaceContentCleanup(t *testing.T) {
+func isolatedCleanupConfig(t *testing.T) *rest.Config {
+	t.Helper()
 	path := os.Getenv("PROVISIONER_TEST_CLEANUP_KUBECONFIG")
 	if path == "" {
 		t.Skip("set an isolated loopback K3s kubeconfig to run this test")
@@ -42,6 +44,19 @@ func TestIsolatedNamespaceContentCleanup(t *testing.T) {
 		t.Fatal("cleanup test refuses non-loopback Kubernetes endpoints")
 	}
 	config.QPS, config.Burst = 20, 40
+	return config
+}
+
+type cleanupRoundTripper func(*http.Request) (*http.Response, error)
+
+func (roundTrip cleanupRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	return roundTrip(request)
+}
+
+// This test refuses non-loopback clusters. It exercises actual Kubernetes
+// resource deletion, not a deployed Scheduler/Broker or challenge application.
+func TestIsolatedNamespaceContentCleanup(t *testing.T) {
+	config := isolatedCleanupConfig(t)
 	client, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		t.Fatal(err)
@@ -100,6 +115,32 @@ func TestIsolatedNamespaceContentCleanup(t *testing.T) {
 	// Seeding is test setup, not lifecycle traffic. Start the adapter's normal
 	// 20 QPS / 40 burst client after setup, and apply the production Gateway's
 	// eight-callback admission limit to each two-second cleanup step.
+	var requestMu sync.Mutex
+	requests := map[string]int{}
+	childDeletes := 0
+	config.WrapTransport = func(transport http.RoundTripper) http.RoundTripper {
+		return cleanupRoundTripper(func(request *http.Request) (*http.Response, error) {
+			response, err := transport.RoundTrip(request)
+			parts := strings.Split(strings.Trim(request.URL.Path, "/"), "/")
+			for i, part := range parts {
+				if part != "namespaces" {
+					continue
+				}
+				resource := "namespaces"
+				if i+2 < len(parts) {
+					resource = parts[i+2]
+				}
+				requestMu.Lock()
+				requests[request.Method+" "+resource]++
+				if request.Method == http.MethodDelete && resource != "namespaces" && err == nil && response.StatusCode >= 200 && response.StatusCode < 300 {
+					childDeletes++
+				}
+				requestMu.Unlock()
+				break
+			}
+			return response, err
+		})
+	}
 	clients, err := lifecycleClients(config)
 	if err != nil {
 		t.Fatal(err)
@@ -152,6 +193,7 @@ func TestIsolatedNamespaceContentCleanup(t *testing.T) {
 	if len(seconds) != 12 {
 		t.Fatalf("completed %d/12 isolated cleanups", len(seconds))
 	}
-	result, _ := json.Marshal(map[string]any{"namespaces": len(seconds), "delete_seconds": seconds, "cluster": "isolated loopback K3s", "production_test": false})
+	result, _ := json.Marshal(map[string]any{"namespaces": len(seconds), "delete_seconds": seconds, "cluster": "isolated loopback K3s", "production_test": false,
+		"api_requests": requests, "successful_preparation_deletes": childDeletes})
 	t.Log("ISOLATED_NAMESPACE_CLEANUP=" + string(result))
 }

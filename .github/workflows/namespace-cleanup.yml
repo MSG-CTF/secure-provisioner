@@ -47,7 +47,7 @@ jobs:
         run: |
           set -o pipefail
           PROVISIONER_TEST_CLEANUP_KUBECONFIG="$RUNNER_TEMP/cleanup-kubeconfig" \
-            go test -p 1 ./internal/k3s -run '^TestIsolatedNamespaceContentCleanup$' -v -count=1 -timeout=4m \
+            go test -race -p 1 ./internal/k3s -run '^TestIsolatedNamespace' -v -count=1 -timeout=4m \
             | tee "$RUNNER_TEMP/namespace-cleanup-test.log"
       - name: Stop the isolated cluster
         if: always()

@@ -213,3 +213,68 @@ func TestContentPreparationBudgetFallsBackWithoutCompletingCleanup(t *testing.T)
 		}
 	}
 }
+
+func TestContentPreparationConflictKeepsReplacementAndNamespacePending(t *testing.T) {
+	binding, _, objects := terminatingContentFixture()
+	client := fake.NewSimpleClientset(objects...)
+	deletes := 0
+	client.PrependReactor("delete", "networkpolicies", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		deletes++
+		options := action.(k8stesting.DeleteAction).GetDeleteOptions()
+		if options.Preconditions == nil || options.Preconditions.UID == nil || options.Preconditions.ResourceVersion == nil {
+			t.Fatal("resource replacement was not protected by UID and version")
+		}
+		return true, nil, apierrors.NewConflict(schema.GroupResource{Group: "networking.k8s.io", Resource: "networkpolicies"}, action.(k8stesting.DeleteAction).GetName(), errors.New("resource changed after list"))
+	})
+	err := deleteTestAdapter(t, client).DeleteStoppedWorkload(context.Background(), deleteCommand(binding), binding)
+	var pending *operations.ProgressPendingError
+	if !errors.As(err, &pending) || deletes != 1 {
+		t.Fatalf("conflict forced deletion or completed namespace cleanup: error=%v deletes=%d", err, deletes)
+	}
+	if list, err := client.NetworkingV1().NetworkPolicies(binding.Namespace).List(context.Background(), metav1.ListOptions{}); err != nil || len(list.Items) != 4 {
+		t.Fatal("conflicting content was removed", err)
+	}
+}
+
+func TestContentPreparationResumesPartialDeleteWithoutRepeatingMutation(t *testing.T) {
+	binding, _, objects := terminatingContentFixture()
+	client := fake.NewSimpleClientset(objects...)
+	removed := map[string]int{}
+	failed := false
+	client.PrependReactor("delete", "networkpolicies", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		name := action.(k8stesting.DeleteAction).GetName()
+		if !failed && len(removed) == 1 {
+			failed = true
+			return true, nil, apierrors.NewServiceUnavailable("interrupted after one child deletion")
+		}
+		removed[name]++
+		return false, nil, nil
+	})
+	adapter := deleteTestAdapter(t, client)
+	err := adapter.DeleteStoppedWorkload(context.Background(), deleteCommand(binding), binding)
+	var pending *operations.ProgressPendingError
+	if err == nil || errors.As(err, &pending) || !failed || len(removed) != 1 {
+		t.Fatal("partial API failure was completed or hidden as normal progress", err)
+	}
+	// Construct a fresh adapter to discard all in-process cleanup state.
+	adapter = deleteTestAdapter(t, client)
+	for range 6 {
+		err := adapter.DeleteStoppedWorkload(context.Background(), deleteCommand(binding), binding)
+		if !errors.As(err, &pending) {
+			t.Fatal("retry completed before namespace absence", err)
+		}
+	}
+	if len(removed) != 4 {
+		t.Fatalf("remaining policies were not removed: %v", removed)
+	}
+	for name, count := range removed {
+		if count != 1 {
+			t.Fatalf("cleanup repeated a successful deletion for %s: %d", name, count)
+		}
+	}
+	for _, action := range client.Actions() {
+		if action.GetVerb() == "create" || action.GetVerb() == "patch" || action.GetVerb() == "update" {
+			t.Fatal("retry recreated content or removed a finalizer")
+		}
+	}
+}
