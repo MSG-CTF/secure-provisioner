@@ -15,7 +15,14 @@ func shutdownPolicy(strategy string) string {
 }
 
 func TestImagePolicyShutdownReachesResolvedDurableCommand(t *testing.T) {
-	catalog, err := ParseImagePolicies([]byte(shutdownPolicy(`"python_sigint_pid1"`)))
+	for _, strategy := range []string{"python_sigint_pid1", "python_sigint_child"} {
+		t.Run(strategy, func(t *testing.T) { assertShutdownDurableCommand(t, strategy) })
+	}
+}
+
+func assertShutdownDurableCommand(t *testing.T, strategy string) {
+	t.Helper()
+	catalog, err := ParseImagePolicies([]byte(shutdownPolicy(`"` + strategy + `"`)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +51,7 @@ func TestImagePolicyShutdownReachesResolvedDurableCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Count(string(encoded), `"ShutdownStrategy":"python_sigint_pid1"`) != 3 {
+	if strings.Count(string(encoded), `"ShutdownStrategy":"`+strategy+`"`) != 3 {
 		t.Fatal("reviewed shutdown did not survive in container, policy request, and resolved policy")
 	}
 }
@@ -72,6 +79,7 @@ func TestImagePolicyShutdownRejectsUnsupportedStrategyOrProfile(t *testing.T) {
 func TestCallerCannotSelectShutdownStrategyOrLifecycle(t *testing.T) {
 	for _, field := range []string{
 		`"shutdown_strategy":"python_sigint_pid1"`, `"ShutdownStrategy":"python_sigint_pid1"`,
+		`"shutdown_strategy":"python_sigint_child"`, `"ShutdownStrategy":"python_sigint_child"`,
 		`"lifecycle":{"preStop":{"exec":{"command":["id"]}}}`, `"command":["id"]`, `"args":["id"]`,
 	} {
 		var container RuntimeContainer

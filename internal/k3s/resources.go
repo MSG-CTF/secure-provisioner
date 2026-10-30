@@ -165,13 +165,10 @@ func buildResourceSetForOperation(cluster Cluster, command provisioner.CreateWor
 				Limits:   quantities.DeepCopy(),
 			},
 		}
-		if requirement.ShutdownStrategy == isolation.ShutdownStrategyPythonSIGINTPID1 {
+		if hook := reviewedShutdownCommand(requirement.ShutdownStrategy); hook != nil {
 			podContainer.Lifecycle = &corev1.Lifecycle{
 				PreStop: &corev1.LifecycleHandler{
-					Exec: &corev1.ExecAction{Command: []string{
-						"/usr/local/bin/python3", "-I", "-B", "-c",
-						"import os, signal; os.kill(1, signal.SIGINT)",
-					}},
+					Exec: &corev1.ExecAction{Command: hook},
 				},
 			}
 		}

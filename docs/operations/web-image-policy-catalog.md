@@ -45,7 +45,14 @@ CI 토큰은 전용 팀·Target에서 위 세 WEB digest 중 하나의 단일 �
 
 새 항목의 `ci_smoke_enabled`는 모두 false다. 운영 호스트의 기존 27개 항목은 보존하고 위 네 항목만 추가한다. 저장소의 정책 전체를 운영 파일에 덮어쓰지 않는다. 현재 준비 승인도 `create_enabled`를 요구하므로 OSINT를 `blocked`로 유지하면 새 준비와 생성이 함께 거절된다. 이미 검증한 노드 캐시는 삭제하지 않는다. active 포인터, Backend 자동 활성화와 상시 timer를 변경하지 않으며 AFTERIMAGE 보류를 유지한다.
 
-`shutdown_strategy`는 운영자 정책에만 지정할 수 있는 닫힌 선택값이다. 현재 `python_sigint_pid1` 하나만 WEB 프로필에 허용한다. Runtime은 컨테이너의 preStop에 `/usr/local/bin/python3 -I -B -c "import os, signal; os.kill(1, signal.SIGINT)"`를 고정 argv로 생성한다. 외부 요청은 이 값이나 임의 lifecycle·command·args를 지정할 수 없다. 선택값을 큐의 생성 명령과 해시에 보존하고, 요청·해결 정책·실행 명령 간 불일치나 readback 시 hook 변경을 거절한다. 기존에 생략한 이미지에는 hook을 추가하지 않는다. 일반 grace 기간 안의 정상 종료를 위한 설정이며 강제 종료의 정상 처리를 보장하지 않는다. 이 필드를 이해하는 Runtime 바이너리를 먼저 배포해야 한다.
+`shutdown_strategy`는 운영자 정책에만 지정할 수 있는 닫힌 선택값이다. WEB 프로필에서 `python_sigint_pid1`과 `python_sigint_child`를 허용한다. Runtime은 컨테이너의 preStop에 `/usr/local/bin/python3 -I -B -c "import os, signal; os.kill(1, signal.SIGINT)"`를 고정 argv로 생성한다. 외부 요청은 이 값이나 임의 lifecycle·command·args를 지정할 수 없다. 선택값을 큐의 생성 명령과 해시에 보존하고, 요청·해결 정책·실행 명령 간 불일치나 readback 시 hook 변경을 거절한다. 기존에 생략한 이미지에는 hook을 추가하지 않는다. 일반 grace 기간 안의 정상 종료를 위한 설정이며 강제 종료의 정상 처리를 보장하지 않는다. 이 필드를 이해하는 Runtime 바이너리를 먼저 배포해야 한다.
+
+Grade Tampering의 원본 이미지 `3a3de9c6…3652fdb`에는 `python_sigint_child`를 사용합니다
+셸이 PID 1인 이미지에서 같은 UID의 Python 주 프로세스 하나를 찾고, 시작 시각과 pidfd로 대상을 확인한 뒤 SIGINT를 보냅니다
+대상이 여러 개이거나 프로세스가 바뀌었거나 pidfd를 사용할 수 없으면 신호를 보내지 않고 기존 종료 유예를 따릅니다
+다른 이미지와 기존 PID 1 방식의 고정 명령은 유지하며 CPU·메모리·네임스페이스 정리·예약 반납 순서는 바꾸지 않습니다
+새 바이너리를 먼저 설치하고 승인 목록의 해당 digest 항목에만 이 값을 반영합니다
+
 
 TCP 연결 자체가 문제 세션을 시작하는 이미지에는 운영자 정책의 tcp_startup_only를 사용합니다
 이 값은 PWN 이미지에서만 허용하며 HTTP 준비 확인과 함께 지정하면 거절합니다
