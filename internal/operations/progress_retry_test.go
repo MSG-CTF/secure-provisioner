@@ -15,6 +15,7 @@ func TestNormalCleanupProgressUsesBoundedDelayAndRetainsOwnership(t *testing.T) 
 		want time.Duration
 	}{
 		{"progress", fmt.Errorf("wrapped: %w", NewProgressPendingError("GATEWAY_WORKLOAD_DELETE_PENDING", nil)), time.Second},
+		{"gateway admission busy", NewProgressPendingError("GATEWAY_LIFECYCLE_BUSY", nil), time.Second},
 		{"remote fault", NewHeldExecutionError("GATEWAY_UNAVAILABLE", errors.New("connection failed")), 32 * time.Second},
 		{"pending text without typed progress", NewHeldExecutionError("GATEWAY_WORKLOAD_DELETE_PENDING", errors.New("forbidden")), 32 * time.Second},
 	} {

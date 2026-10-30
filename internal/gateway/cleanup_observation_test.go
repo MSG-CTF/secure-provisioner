@@ -130,3 +130,48 @@ func TestTwelveGatewayCleanupsRetainRecoveryUntilNamespaceAbsence(t *testing.T) 
 		}
 	}
 }
+
+type deferredLifecycleJournal struct {
+	*memoryJournal
+	failure error
+}
+
+func (j deferredLifecycleJournal) WithLock(context.Context, string, func(Session) error) error {
+	return j.failure
+}
+
+func TestGatewayAdmissionProgressAndDatabaseFaultRemainDistinct(t *testing.T) {
+	for _, admission := range []bool{true, false} {
+		for _, create := range []bool{true, false} {
+			t.Run(fmt.Sprintf("admission=%t/create=%t", admission, create), func(t *testing.T) {
+				command := provisioner.CreateWorkloadCommand{InstanceID: "busy-instance", TargetID: "target", RuntimeType: provisioner.RuntimeTypeKubernetes,
+					Containers: []provisioner.WorkloadContainer{{Name: "web", Ports: []int{8080}, Expose: true}}}
+				record := Record{Command: command, Result: provisioner.CreateWorkloadResult{NamespaceUID: "ns1", RuntimeWorkloadID: "target/namespace/instance"}, Phase: PhaseRouteDeleted}
+				var failure error = errors.New("database connection failed")
+				wantCode := "GATEWAY_JOURNAL_UNAVAILABLE"
+				if admission {
+					failure = operations.NewProgressPendingError("GATEWAY_LIFECYCLE_BUSY", nil)
+					wantCode = "GATEWAY_LIFECYCLE_BUSY"
+				}
+				journal := deferredLifecycleJournal{&memoryJournal{records: map[string]Record{command.InstanceID: record}}, failure}
+				backend, remote := &fakeBackend{}, &fakeRoutes{}
+				adapter := NewAdapter(backend, remote, journal)
+				var err error
+				if create {
+					_, err = adapter.CreateWorkload(context.Background(), command)
+				} else {
+					err = adapter.DeleteWorkload(context.Background(), provisioner.DeleteWorkloadCommand{InstanceID: command.InstanceID}, recoveryBinding(record))
+				}
+				code, retryable := operations.ClassifyExecutionError(err)
+				var pending *operations.ProgressPendingError
+				if code != wantCode || !retryable || errors.As(err, &pending) != admission {
+					t.Fatalf("admission and fault paths merged: code=%s retryable=%v error=%v", code, retryable, err)
+				}
+				current, _ := journal.Get(context.Background(), command.InstanceID)
+				if current.Phase != PhaseRouteDeleted || backend.creates != 0 || backend.deletes != 0 || backend.quiesces != 0 || remote.deletes != 0 || remote.puts != 0 {
+					t.Fatal("failed admission mutated workload, route or cleanup intent")
+				}
+			})
+		}
+	}
+}
