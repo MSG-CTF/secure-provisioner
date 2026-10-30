@@ -34,7 +34,7 @@ jobs:
             --publish 127.0.0.1:16443:6443 "$K3S_IMAGE" server \
             --disable traefik,servicelb,metrics-server --write-kubeconfig-mode 600
           for attempt in $(seq 1 90); do
-            if docker exec msgctf-cleanup-k3s kubectl get nodes >/dev/null 2>&1; then
+            if [ -n "$(docker exec msgctf-cleanup-k3s kubectl get nodes -o name 2>/dev/null)" ]; then
               break
             fi
             sleep 2
