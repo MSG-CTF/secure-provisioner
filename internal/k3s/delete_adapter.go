@@ -46,6 +46,17 @@ func NewDeleteAdapterForCreateAdapter(create *Adapter, config DeleteAdapterConfi
 }
 
 func (a *DeleteAdapter) DeleteWorkload(ctx context.Context, command provisioner.DeleteWorkloadCommand, binding runtimebinding.Binding) error {
+	return a.deleteWorkload(ctx, command, binding, false)
+}
+
+// DeleteStoppedWorkload is for Gateway cleanup after route deletion has been
+// acknowledged and the workload has quiesced. Ordinary ingress/direct deletes
+// must retain their original ordering of Namespace-managed resources.
+func (a *DeleteAdapter) DeleteStoppedWorkload(ctx context.Context, command provisioner.DeleteWorkloadCommand, binding runtimebinding.Binding) error {
+	return a.deleteWorkload(ctx, command, binding, true)
+}
+
+func (a *DeleteAdapter) deleteWorkload(ctx context.Context, command provisioner.DeleteWorkloadCommand, binding runtimebinding.Binding, prepareStopped bool) error {
 	if !deleteMatchesBinding(command, binding) {
 		return newRuntimeError("INSTANCE_BINDING_MISMATCH", false, nil)
 	}
@@ -78,6 +89,11 @@ func (a *DeleteAdapter) DeleteWorkload(ctx context.Context, command provisioner.
 		if namespace.DeletionTimestamp != nil {
 			deleteAccepted = true
 			break
+		}
+		if prepareStopped {
+			if err := prepareStoppedNamespaceDelete(ctx, cluster.Client, binding); err != nil {
+				return err
+			}
 		}
 
 		// Namespace finalization already waits for namespaced resources. A second
