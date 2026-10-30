@@ -55,7 +55,7 @@ func TestDeletePreparesStoppedResourcesWithIdentityPreconditions(t *testing.T) {
 		deleted[resource] = true
 		return false, nil, nil
 	})
-	if err := deleteTestAdapter(t, client).DeleteWorkload(context.Background(), deleteCommand(binding), binding); err != nil {
+	if err := deleteTestAdapter(t, client).DeleteStoppedWorkload(context.Background(), deleteCommand(binding), binding); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -81,7 +81,7 @@ func TestDeletePreparationPreservesPodGraceAndActiveControllers(t *testing.T) {
 				}
 				return false, nil, nil
 			})
-			if err := deleteTestAdapter(t, client).DeleteWorkload(context.Background(), deleteCommand(binding), binding); err != nil {
+			if err := deleteTestAdapter(t, client).DeleteStoppedWorkload(context.Background(), deleteCommand(binding), binding); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -103,7 +103,7 @@ func TestDeletePreparationDoesNotTouchReplacementNamespace(t *testing.T) {
 		t.Fatal("replacement namespace or its content was deleted")
 		return true, nil, nil
 	})
-	err := deleteTestAdapter(t, client).DeleteWorkload(context.Background(), deleteCommand(binding), binding)
+	err := deleteTestAdapter(t, client).DeleteStoppedWorkload(context.Background(), deleteCommand(binding), binding)
 	if runtimeErrorCode(t, err) != "RUNTIME_IDENTITY_MISMATCH" {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestDeletePreparationSkipsForeignObjectsAndKeepsFinalizers(t *testing.T) {
 	client.PrependReactor("delete", "namespaces", func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, nil })
 	adapter := deleteTestAdapter(t, client)
 	adapter.config.DeleteTimeout = 15 * time.Millisecond
-	err := adapter.DeleteWorkload(context.Background(), deleteCommand(binding), binding)
+	err := adapter.DeleteStoppedWorkload(context.Background(), deleteCommand(binding), binding)
 	var pending *operations.ProgressPendingError
 	if !errors.As(err, &pending) {
 		t.Fatalf("remaining finalizer was accepted as cleanup success: %v", err)
@@ -146,7 +146,7 @@ func TestDeletePreparationFallsBackWithNarrowChildResourceRBAC(t *testing.T) {
 			client.PrependReactor(verb, "replicasets", func(k8stesting.Action) (bool, runtime.Object, error) {
 				return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "apps", Resource: "replicasets"}, "", errors.New("restricted target"))
 			})
-			if err := deleteTestAdapter(t, client).DeleteWorkload(context.Background(), deleteCommand(binding), binding); err != nil {
+			if err := deleteTestAdapter(t, client).DeleteStoppedWorkload(context.Background(), deleteCommand(binding), binding); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -165,14 +165,14 @@ func TestDeletePreparationRetriesPartialCleanupWithoutRecreatingResources(t *tes
 		return false, nil, nil
 	})
 	adapter := deleteTestAdapter(t, client)
-	first := adapter.DeleteWorkload(context.Background(), deleteCommand(binding), binding)
+	first := adapter.DeleteStoppedWorkload(context.Background(), deleteCommand(binding), binding)
 	if first == nil {
 		t.Fatal("partial cleanup was reported complete")
 	}
 	if _, err := client.CoreV1().Namespaces().Get(context.Background(), binding.Namespace, metav1.GetOptions{}); err != nil {
 		t.Fatal("namespace was removed after preparation failed", err)
 	}
-	if err := adapter.DeleteWorkload(context.Background(), deleteCommand(binding), binding); err != nil {
+	if err := adapter.DeleteStoppedWorkload(context.Background(), deleteCommand(binding), binding); err != nil {
 		t.Fatal(err)
 	}
 	for _, action := range client.Actions() {
@@ -188,7 +188,7 @@ func TestDeletePreparationKeepsStalledChildAPIOnFailureRetry(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
 	defer cancel()
 	client.PrependReactor("list", "replicasets", func(k8stesting.Action) (bool, runtime.Object, error) { <-ctx.Done(); return true, nil, ctx.Err() })
-	err := deleteTestAdapter(t, client).DeleteWorkload(ctx, deleteCommand(binding), binding)
+	err := deleteTestAdapter(t, client).DeleteStoppedWorkload(ctx, deleteCommand(binding), binding)
 	var pending *operations.ProgressPendingError
 	if !errors.Is(err, context.DeadlineExceeded) || errors.As(err, &pending) {
 		t.Fatalf("stalled child API became normal progress: %v", err)
@@ -196,6 +196,19 @@ func TestDeletePreparationKeepsStalledChildAPIOnFailureRetry(t *testing.T) {
 	for _, action := range client.Actions() {
 		if action.GetVerb() == "delete" {
 			t.Fatal("delete continued after an unresponsive child API")
+		}
+	}
+}
+
+func TestOrdinaryDeleteLeavesChildDeletionToNamespaceController(t *testing.T) {
+	binding, namespace, deployment, replicaSet, service := stoppedNamespaceFixture()
+	client := fake.NewSimpleClientset(namespace, deployment, replicaSet, service)
+	if err := deleteTestAdapter(t, client).DeleteWorkload(context.Background(), deleteCommand(binding), binding); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range client.Actions() {
+		if action.GetResource().Resource != "namespaces" {
+			t.Fatalf("ordinary deletion changed child-resource ordering: %#v", action)
 		}
 	}
 }

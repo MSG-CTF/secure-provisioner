@@ -2,6 +2,7 @@
 
 Gateway가 접속 경로를 제거하고 Pod 종료를 확인한 뒤, 런타임이 자신이 만든 Deployment·ReplicaSet·Service를 먼저 삭제합니다
 Namespace 컨트롤러가 이 리소스를 순서대로 정리하기를 기다리는 시간을 줄이기 위한 변경입니다
+Gateway의 종료 확인을 거치지 않는 일반 삭제는 기존 Namespace 삭제 순서를 사용합니다
 
 ## 삭제 조건
 
