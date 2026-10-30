@@ -87,10 +87,11 @@ type OperationResponse struct {
 }
 
 type OperationResultResponse struct {
-	RuntimeWorkloadID string                     `json:"runtime_workload_id"`
-	ServiceURL        string                     `json:"service_url,omitempty"`
-	Endpoints         []WorkloadEndpointResponse `json:"endpoints,omitempty"`
-	Status            string                     `json:"status,omitempty"`
+	SteadyCPUMillicores int                        `json:"steady_cpu_millicores,omitempty"`
+	RuntimeWorkloadID   string                     `json:"runtime_workload_id"`
+	ServiceURL          string                     `json:"service_url,omitempty"`
+	Endpoints           []WorkloadEndpointResponse `json:"endpoints,omitempty"`
+	Status              string                     `json:"status,omitempty"`
 }
 
 type WorkloadEndpointResponse struct {
@@ -316,9 +317,10 @@ func newOperationResultResponse(operation operations.Operation) *OperationResult
 			return nil
 		}
 		response := &OperationResultResponse{
-			RuntimeWorkloadID: operation.Result.Create.RuntimeWorkloadID,
-			ServiceURL:        operation.Result.Create.ServiceURL,
-			Endpoints:         make([]WorkloadEndpointResponse, 0, len(operation.Result.Create.Endpoints)),
+			SteadyCPUMillicores: operation.Result.Create.SteadyCPUMillicores,
+			RuntimeWorkloadID:   operation.Result.Create.RuntimeWorkloadID,
+			ServiceURL:          operation.Result.Create.ServiceURL,
+			Endpoints:           make([]WorkloadEndpointResponse, 0, len(operation.Result.Create.Endpoints)),
 		}
 		for _, endpoint := range operation.Result.Create.Endpoints {
 			response.Endpoints = append(response.Endpoints, newWorkloadEndpointResponse(endpoint))

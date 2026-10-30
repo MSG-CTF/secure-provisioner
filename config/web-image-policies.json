@@ -73,6 +73,8 @@
     {
       "image": "ghcr.io/msg-ctf/challenges/web-grade-tampering/web@sha256:3a3de9c6c3670eed8e4e771ae4d4ad981825144796b80f1d523fba2403652fdb",
       "shutdown_strategy": "python_sigint_child",
+      "steady_cpu_millicores": 300,
+      "startup_cpu_millicores": 1000,
       "container": "web",
       "isolation_profile": "WEB",
       "status": "create_enabled",
@@ -310,6 +312,8 @@
     },
     {
       "image": "ghcr.io/msg-ctf/challenges/web-open-house/web@sha256:8d8492c1746836790691930c3ae937f01705f9a824ebc821fd939da80b3b5ea7",
+      "steady_cpu_millicores": 500,
+      "startup_cpu_millicores": 2000,
       "container": "web",
       "isolation_profile": "WEB",
       "status": "create_enabled",
@@ -492,6 +496,8 @@
     },
     {
       "image": "ghcr.io/msg-ctf/challenges/misc-cashout/web@sha256:5ba579e0b8636abc93cf7afe6defbe2a85076fd1bb2725418157aa23f7f9b185",
+      "steady_cpu_millicores": 250,
+      "startup_cpu_millicores": 1000,
       "container": "web",
       "isolation_profile": "WEB",
       "status": "create_enabled",

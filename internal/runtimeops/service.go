@@ -363,6 +363,13 @@ func (s *Service) GetRuntimeStatus(ctx context.Context, instanceID string) (k3s.
 		}
 	}
 	if err != nil {
+		if errors.Is(err, runtimebinding.ErrNotFound) {
+			if pending, recoveryErr := s.failedStartupBinding(instanceID); recoveryErr == nil {
+				return pendingGatewayStatus(pending, s.now()), nil
+			} else if !errors.Is(recoveryErr, runtimebinding.ErrNotFound) {
+				return k3s.RuntimeStatus{}, recoveryErr
+			}
+		}
 		return k3s.RuntimeStatus{}, err
 	}
 	if binding.State == runtimebinding.StateDeleted {
@@ -396,6 +403,16 @@ func (s *Service) EnqueueDelete(command provisioner.DeleteWorkloadCommand) (oper
 	s.enqueueMu.Lock()
 	defer s.enqueueMu.Unlock()
 	if _, bindingErr := s.bindings.Get(command.InstanceID); errors.Is(bindingErr, runtimebinding.ErrNotFound) {
+		if pending, recoveryErr := s.failedStartupBinding(command.InstanceID); recoveryErr == nil {
+			if !deleteMatchesBinding(command, pending) {
+				return operations.Operation{}, false, ErrBindingMismatch
+			}
+			if _, _, saveErr := s.bindings.SaveCreated(pending); saveErr != nil {
+				return operations.Operation{}, false, saveErr
+			}
+		} else if !errors.Is(recoveryErr, runtimebinding.ErrNotFound) {
+			return operations.Operation{}, false, recoveryErr
+		}
 		if recovery, ok := s.create.(gatewayRecovery); ok {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
