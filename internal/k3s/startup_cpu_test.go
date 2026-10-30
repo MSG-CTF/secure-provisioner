@@ -22,10 +22,19 @@ import (
 )
 
 func startupFixture(t *testing.T) (provisioner.CreateWorkloadCommand, ResourceSet, *corev1.Pod, *appsv1.ReplicaSet) {
+	return startupFixtureWithShutdown(t, "")
+}
+
+func startupFixtureWithShutdown(t *testing.T, strategy isolation.ShutdownStrategy) (provisioner.CreateWorkloadCommand, ResourceSet, *corev1.Pod, *appsv1.ReplicaSet) {
 	t.Helper()
 	command := validCreateCommand("aws-dev")
 	command.PolicyRequest.WorkloadProfile = isolation.WorkloadProfileWeb
 	command.SteadyCPUMillicores = 300
+	if strategy != "" {
+		command.Containers[0].ShutdownStrategy = strategy
+		command.Policy.Containers[0].ShutdownStrategy = strategy
+		command.PolicyRequest.Containers = append([]isolation.ContainerRequirement(nil), command.Policy.Containers...)
+	}
 	resources, err := BuildResourceSet(nodePortGVisorCluster("aws-dev"), command)
 	if err != nil {
 		t.Fatal(err)
@@ -39,6 +48,47 @@ func startupFixture(t *testing.T) (provisioner.CreateWorkloadCommand, ResourceSe
 		OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: rs.Name, UID: rs.UID, Controller: ptr.To(true)}}},
 		Spec: *d.Spec.Template.Spec.DeepCopy(), Status: corev1.PodStatus{Phase: corev1.PodRunning}}
 	return command, resources, pod, rs
+}
+
+func TestStartupResizePreservesReviewedChildShutdown(t *testing.T) {
+	command, resources, pod, rs := startupFixtureWithShutdown(t, isolation.ShutdownStrategyPythonSIGINTChild)
+	wantLifecycle := resources.Deployment.Spec.Template.Spec.Containers[0].Lifecycle.DeepCopy()
+	client := fake.NewSimpleClientset(resources.Deployment.DeepCopy(), pod.DeepCopy(), rs)
+	var transitions []int64
+	client.PrependReactor("update", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if action.GetSubresource() != "resize" {
+			t.Fatal("CPU resize used an unrestricted pod update")
+		}
+		candidate := action.(k8stesting.UpdateAction).GetObject().(*corev1.Pod).DeepCopy()
+		if !reflect.DeepEqual(candidate.Spec.Containers[0].Lifecycle, wantLifecycle) {
+			t.Fatal("CPU resize changed the reviewed shutdown hook")
+		}
+		candidate.Generation++
+		transitions = append(transitions, candidate.Spec.Containers[0].Resources.Limits.Cpu().MilliValue())
+		candidate.Status.ObservedGeneration = candidate.Generation
+		candidate.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
+		candidate.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: candidate.Spec.Containers[0].Name,
+			ContainerID: "containerd://same-process", RestartCount: 0, Resources: candidate.Spec.Containers[0].Resources.DeepCopy()}}
+		if err := client.Tracker().Update(corev1.SchemeGroupVersion.WithResource("pods"), candidate, candidate.Namespace); err != nil {
+			t.Fatal(err)
+		}
+		return true, candidate, nil
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := prepareStartupCPU(ctx, client, resources.Deployments, resources.ExpectedSpecHashes, command, time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(transitions, []int64{500, 300}) {
+		t.Fatalf("CPU transitions = %v", transitions)
+	}
+	current, err := client.CoreV1().Pods(pod.Namespace).Get(ctx, pod.Name, metav1.GetOptions{})
+	if err != nil || !steadyCPUObserved(current, 300) || !reflect.DeepEqual(current.Spec.Containers[0].Lifecycle, wantLifecycle) {
+		t.Fatal("steady CPU or reviewed shutdown was lost")
+	}
+	if !reflect.DeepEqual(resources.Deployment.Spec.Template.Spec.Containers[0].Lifecycle, wantLifecycle) {
+		t.Fatal("CPU resize changed the replacement pod shutdown behavior")
+	}
 }
 
 func TestStartupTemplateStaysSteadyAndPreservesAuthorConfiguration(t *testing.T) {
