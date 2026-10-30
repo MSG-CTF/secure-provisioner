@@ -338,10 +338,27 @@ func (r *Router) CreateWorkloadForOperation(ctx context.Context, c provisioner.C
 	return provisioner.CreateWorkloadResult{RuntimeWorkloadID: workID(t.ID, c.InstanceID), NamespaceUID: uid, ServiceURL: t.PublicURL, Endpoints: endpoints}, nil
 }
 func (r *Router) DeleteWorkload(ctx context.Context, c provisioner.DeleteWorkloadCommand, b runtimebinding.Binding) error {
+	return r.deleteWorkload(ctx, c, b, false)
+}
+
+// Preserve Gateway's acknowledged-stop capability through the VM router. VM
+// targets keep their own generation-checked deletion protocol.
+func (r *Router) DeleteStoppedWorkload(ctx context.Context, c provisioner.DeleteWorkloadCommand, b runtimebinding.Binding) error {
+	return r.deleteWorkload(ctx, c, b, true)
+}
+
+func (r *Router) deleteWorkload(ctx context.Context, c provisioner.DeleteWorkloadCommand, b runtimebinding.Binding, stopped bool) error {
 	t, ok := r.targets[b.TargetID]
 	if !ok {
 		if c.RuntimeType == provisioner.RuntimeTypeVM {
 			return operations.NewExecutionError("TARGET_NOT_FOUND", true, nil)
+		}
+		if stopped {
+			if prepared, ok := r.delete.(interface {
+				DeleteStoppedWorkload(context.Context, provisioner.DeleteWorkloadCommand, runtimebinding.Binding) error
+			}); ok {
+				return prepared.DeleteStoppedWorkload(ctx, c, b)
+			}
 		}
 		return r.delete.DeleteWorkload(ctx, c, b)
 	}
