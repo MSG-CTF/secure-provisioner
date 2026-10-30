@@ -36,6 +36,8 @@ type endpointProtocolPolicy struct {
 }
 
 type ImagePolicy struct {
+	SteadyCPUMillicores           int                        `json:"steady_cpu_millicores,omitempty"`
+	StartupCPUMillicores          int                        `json:"startup_cpu_millicores,omitempty"`
 	Image                         string                     `json:"image"`
 	Container                     string                     `json:"container"`
 	IsolationProfile              string                     `json:"isolation_profile"`
@@ -265,6 +267,10 @@ func (catalog *ImagePolicyCatalog) AllowsCISmoke(image string) bool {
 }
 
 func validateImagePolicyRequirements(policy ImagePolicy) error {
+	if (policy.SteadyCPUMillicores != 0 || policy.StartupCPUMillicores != 0) &&
+		(policy.IsolationProfile != "WEB" || policy.SteadyCPUMillicores < 1 || policy.StartupCPUMillicores <= policy.SteadyCPUMillicores || policy.StartupCPUMillicores > 2000) {
+		return errors.New("startup CPU policy requires a WEB image and a positive steady CPU below a peak of at most 2000m")
+	}
 	if policy.TerminationGracePeriodSeconds != nil && (*policy.TerminationGracePeriodSeconds < 1 || !isolation.ValidTerminationGracePeriod(*policy.TerminationGracePeriodSeconds)) {
 		return errors.New("termination_grace_period_seconds must be between 1 and 300")
 	}
@@ -334,6 +340,15 @@ func validateImagePolicyRequirements(policy ImagePolicy) error {
 // Apply replaces caller-supplied requirements only for exact, reviewed image
 // digests. Unknown digests in managed repositories fail closed.
 func (catalog *ImagePolicyCatalog) Apply(request *CreateWorkloadRequest) error {
+	if request != nil && request.Workload.SteadyCPUMillicores != 0 {
+		if catalog == nil || len(request.Workload.Containers) != 1 || request.IsolationProfile != "WEB" || request.Target.RuntimeType != RuntimeTypeKubernetes {
+			return ErrImagePolicyRejected
+		}
+		policy, ok := catalog.StartupCPUProfiles()[request.Workload.Containers[0].Image]
+		if !ok || policy.Steady != request.Workload.SteadyCPUMillicores || policy.Peak != request.Workload.ResourceLimits.CPUMillicores {
+			return ErrImagePolicyRejected
+		}
+	}
 	if catalog == nil || request == nil {
 		return nil
 	}
