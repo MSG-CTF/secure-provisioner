@@ -223,6 +223,10 @@ func buildResourceSetForOperation(cluster Cluster, command provisioner.CreateWor
 			Containers:         []corev1.Container{podContainer},
 			EnableServiceLinks: boolPointer(false),
 		}
+		if requirement.TerminationGracePeriodSeconds > 0 {
+			seconds := requirement.TerminationGracePeriodSeconds
+			podSpec.TerminationGracePeriodSeconds = &seconds
+		}
 		applyPodSecurityBaseline(&podSpec, &podSpec.Containers[0], requirement)
 		if command.Policy.RuntimeClassName != "" {
 			runtimeClassName := command.Policy.RuntimeClassName
@@ -527,6 +531,7 @@ func validWorkloadCommand(
 	hasExposed := false
 	for _, container := range containers {
 		if provisioner.ValidateEnvironment(container.Env, false) != nil ||
+			!isolation.ValidTerminationGracePeriod(container.TerminationGracePeriodSeconds) ||
 			!isolation.ValidShutdownStrategy(isolation.WorkloadProfile(command.Policy.WorkloadProfileRef.Name), container.ShutdownStrategy) ||
 			!provisioner.ValidSecretReference(container.SecretRef) ||
 			(container.RequiresFlag && container.SecretRef == "") {

@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MSG-CTF/secure-provisioner/internal/operations"
+
 	"github.com/MSG-CTF/secure-provisioner/internal/provisioner"
 	"github.com/MSG-CTF/secure-provisioner/internal/runtimebinding"
 )
@@ -25,6 +27,20 @@ func TestGatewayCleanupStepYieldsWorkerWithoutReportingCleanupComplete(t *testin
 	err := backend.DeleteWorkloadStep(context.Background(), provisioner.DeleteWorkloadCommand{}, runtimebinding.Binding{})
 	if !errors.Is(err, context.DeadlineExceeded) || time.Since(started) > 4*time.Second {
 		t.Fatalf("incomplete deletion must yield the worker with an error: elapsed=%s err=%v", time.Since(started), err)
+	}
+	var pending *operations.ProgressPendingError
+	if !errors.As(err, &pending) {
+		t.Fatal("normal cleanup progress inherited failure backoff")
+	}
+}
+
+func TestCleanupStepDoesNotClassifyRemoteFaultAsNormalProgress(t *testing.T) {
+	failure := errors.New("remote API forbidden")
+	backend := &KubernetesBackend{Delete: cleanupDeleteFunc(func(context.Context) error { return failure })}
+	err := backend.DeleteWorkloadStep(context.Background(), provisioner.DeleteWorkloadCommand{}, runtimebinding.Binding{})
+	var pending *operations.ProgressPendingError
+	if !errors.Is(err, failure) || errors.As(err, &pending) {
+		t.Fatal("remote fault became a fast progress retry")
 	}
 }
 
