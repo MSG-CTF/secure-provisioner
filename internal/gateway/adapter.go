@@ -156,7 +156,10 @@ func (a *Adapter) CreateWorkloadForOperation(ctx context.Context, c provisioner.
 	// Callback paths classify journal/remote uncertainty explicitly. Preserve
 	// backend runtime errors and cleanup proof wrappers exactly as returned.
 	if err != nil && !callbackRan {
-		err = hold("GATEWAY_JOURNAL_UNAVAILABLE", err)
+		var pending *operations.ProgressPendingError
+		if !errors.As(err, &pending) {
+			err = hold("GATEWAY_JOURNAL_UNAVAILABLE", err)
+		}
 	}
 	return result, err
 }

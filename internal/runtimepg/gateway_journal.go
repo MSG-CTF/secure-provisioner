@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/MSG-CTF/secure-provisioner/internal/gateway"
+	"github.com/MSG-CTF/secure-provisioner/internal/operations"
 	"time"
 )
 
@@ -49,11 +50,16 @@ func (j *GatewayJournal) HasPendingCleanup(ctx context.Context, target string) (
 	return pending, err
 }
 func (j *GatewayJournal) WithLock(ctx context.Context, id string, fn func(gateway.Session) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	select {
 	case j.budget <- struct{}{}:
 		defer func() { <-j.budget }()
 	default:
-		return errors.New("Gateway lifecycle lock budget busy")
+		// All slots can be held by healthy lifecycle work. Preserve ownership
+		// and retry shortly instead of treating local admission as a DB outage.
+		return operations.NewProgressPendingError("GATEWAY_LIFECYCLE_BUSY", nil)
 	}
 	conn, err := j.locks.Conn(ctx)
 	if err != nil {
