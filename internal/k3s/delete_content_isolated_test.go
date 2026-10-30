@@ -97,7 +97,15 @@ func TestIsolatedNamespaceContentCleanup(t *testing.T) {
 			}
 		}
 	}
+	// Seeding is test setup, not lifecycle traffic. Start the adapter's normal
+	// 20 QPS / 40 burst client after setup, and apply the production Gateway's
+	// eight-callback admission limit to each two-second cleanup step.
+	client, err = kubernetes.NewForConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
 	adapter := deleteTestAdapter(t, client)
+	admission := make(chan struct{}, 8)
 	var workers sync.WaitGroup
 	var resultMu sync.Mutex
 	seconds := make([]float64, 0, len(bindings))
@@ -107,9 +115,16 @@ func TestIsolatedNamespaceContentCleanup(t *testing.T) {
 			defer workers.Done()
 			started := time.Now()
 			for ctx.Err() == nil {
+				select {
+				case admission <- struct{}{}:
+				case <-ctx.Done():
+					t.Error("cleanup admission exceeded the test deadline")
+					return
+				}
 				step, stop := context.WithTimeout(ctx, 2*time.Second)
 				err := adapter.DeleteStoppedWorkload(step, deleteCommand(binding), binding)
 				stop()
+				<-admission
 				if err == nil {
 					if _, lookup := client.CoreV1().Namespaces().Get(ctx, binding.Namespace, metav1.GetOptions{}); !apierrors.IsNotFound(lookup) {
 						t.Errorf("cleanup succeeded before namespace absence: %v", lookup)
@@ -122,7 +137,7 @@ func TestIsolatedNamespaceContentCleanup(t *testing.T) {
 				}
 				var pending *operations.ProgressPendingError
 				if !errors.As(err, &pending) {
-					t.Errorf("isolated cleanup failed: %v", err)
+					t.Errorf("isolated cleanup failed: %v; cause: %v", err, errors.Unwrap(err))
 					return
 				}
 				select {
