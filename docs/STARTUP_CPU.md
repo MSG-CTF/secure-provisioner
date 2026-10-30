@@ -33,6 +33,14 @@ failed-CREATE cleanup path. Interrupted CREATE operations also retain the
 existing rollback behavior. Do not lower or release a reservation on a timeout
 without the normal Runtime cleanup proof.
 
+If startup rollback exhausts its retry budget before a ready binding exists,
+status lookup exposes only the recorded cleanup identity as TERMINATING.
+It does not expose access or claim deletion. Explicit DELETE validates team,
+target, workload ID and original namespace UID, then uses the normal cleanup
+worker. Unknown namespace identity, an active create, a checkpoint or multiple
+create generations cannot enter this recovery path. Lookup uses an indexed
+instance identity, and repeated DELETE retains its operation ID.
+
 Roll out Broker support first, then Runtime binary and reviewed image catalog,
 then Scheduler migration and binary. Enable Scheduler's startup CPU switch
 only after all three support the contract. Leave it off to retain normal CPU.
