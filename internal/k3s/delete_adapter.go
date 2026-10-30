@@ -88,6 +88,9 @@ func (a *DeleteAdapter) deleteWorkload(ctx context.Context, command provisioner.
 		}
 		if namespace.DeletionTimestamp != nil {
 			if prepareStopped {
+				if err := prepareTerminatingNamespaceContent(ctx, cluster.Client, namespace, binding); err != nil {
+					return err
+				}
 				// This successful, identity-checked observation is sufficient to
 				// yield the Gateway worker. A second request at the step deadline
 				// could turn normal finalization into an API timeout/backoff.
@@ -150,6 +153,9 @@ func (a *DeleteAdapter) deleteWorkload(ctx context.Context, command provisioner.
 		}
 		if identityErr := namespaceBindingError(current, binding); identityErr != nil {
 			return identityErr
+		}
+		if err := prepareTerminatingNamespaceContent(ctx, cluster.Client, current, binding); err != nil {
+			return err
 		}
 		return operations.NewProgressPendingError("NAMESPACE_DELETE_PENDING", nil)
 	}

@@ -1,0 +1,23 @@
+# Namespace의 남은 자원 정리
+
+기존 Gateway 삭제는 Deployment·ReplicaSet·Service를 먼저 정리하고,
+NetworkPolicy·Secret·ServiceAccount·LimitRange·ResourceQuota는 Namespace
+컨트롤러에 맡겼습니다 이번 변경은 그 남은 자원도 조금씩 먼저 정리합니다
+
+Namespace가 종료 중이고 Pod가 하나도 없을 때만 실행합니다 Namespace와
+자원의 UID·팀 소유권을 확인하고, 자원 삭제에도 UID와 resourceVersion을
+지정합니다 다른 팀 자원이나 finalizer가 붙은 자원은 기존 컨트롤러에 맡깁니다
+
+한 작업에서 최대 2개를 삭제하며 준비 작업은 250ms로 제한합니다 자체 준비
+시간을 다 쓰면 기존 Namespace 컨트롤러에 맡기고 다음 조회로 넘깁니다
+상위 작업 취소와 API 오류는 그대로 반환합니다 Namespace가 실제로 사라진
+것을 확인하기 전에는 삭제 완료로 처리하지 않습니다
+
+Kubernetes 1.36.4의 Namespace 컨트롤러에는 API 서버들이 종료 상태를
+확인할 시간을 주는 5초 대기가 있습니다 이 대기는 변경하지 않습니다
+[Namespace 컨트롤러 구현](https://github.com/kubernetes/kubernetes/blob/v1.36.4/pkg/controller/namespace/namespace_controller.go)
+
+격리 CI는 임시 K3s에 합성 자원을 만든 Namespace 12개를 실제 API로
+삭제합니다 loopback 주소만 허용하며 운영 접속 정보나 문제 이미지는
+사용하지 않습니다 CPU 원복·브로커 예약 반납과 실제 사이트 속도는 이
+시험의 검증 범위에 포함되지 않습니다 운영 시험 결과를 별도로 확인해야 합니다
