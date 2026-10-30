@@ -87,6 +87,12 @@ func (a *DeleteAdapter) deleteWorkload(ctx context.Context, command provisioner.
 			return identityErr
 		}
 		if namespace.DeletionTimestamp != nil {
+			if prepareStopped {
+				// This successful, identity-checked observation is sufficient to
+				// yield the Gateway worker. A second request at the step deadline
+				// could turn normal finalization into an API timeout/backoff.
+				return operations.NewProgressPendingError("NAMESPACE_DELETE_PENDING", nil)
+			}
 			deleteAccepted = true
 			break
 		}
@@ -127,6 +133,25 @@ func (a *DeleteAdapter) deleteWorkload(ctx context.Context, command provisioner.
 	}
 	if !deleteAccepted {
 		return namespaceAPIError(lastDeleteErr)
+	}
+	if prepareStopped {
+		// Gateway cleanup already has a durable journal and retries progress.
+		// Observe once rather than polling until the short worker step expires.
+		// Success still requires confirmed absence of this namespace generation.
+		current, getErr := cluster.Client.CoreV1().Namespaces().Get(ctx, binding.Namespace, metav1.GetOptions{})
+		if apierrors.IsNotFound(getErr) {
+			return nil
+		}
+		if getErr != nil {
+			if ctx.Err() != nil {
+				return operationCancelledError(ctx.Err())
+			}
+			return namespaceAPIError(getErr)
+		}
+		if identityErr := namespaceBindingError(current, binding); identityErr != nil {
+			return identityErr
+		}
+		return operations.NewProgressPendingError("NAMESPACE_DELETE_PENDING", nil)
 	}
 
 	waitCtx, cancel := context.WithTimeout(ctx, a.config.DeleteTimeout)
