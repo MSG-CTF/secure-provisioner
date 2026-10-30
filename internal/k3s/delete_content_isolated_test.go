@@ -100,11 +100,11 @@ func TestIsolatedNamespaceContentCleanup(t *testing.T) {
 	// Seeding is test setup, not lifecycle traffic. Start the adapter's normal
 	// 20 QPS / 40 burst client after setup, and apply the production Gateway's
 	// eight-callback admission limit to each two-second cleanup step.
-	client, err = kubernetes.NewForConfig(config)
+	clients, err := lifecycleClients(config)
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter := deleteTestAdapter(t, client)
+	adapter := deleteTestAdapter(t, clients.Kubernetes)
 	admission := make(chan struct{}, 8)
 	var workers sync.WaitGroup
 	var resultMu sync.Mutex

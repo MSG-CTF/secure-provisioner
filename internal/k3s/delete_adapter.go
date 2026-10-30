@@ -2,6 +2,7 @@ package k3s
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/MSG-CTF/secure-provisioner/internal/operations"
@@ -195,6 +196,10 @@ func (a *DeleteAdapter) deleteWorkload(ctx context.Context, command provisioner.
 }
 
 func namespaceAPIError(err error) error {
+	var pending *operations.ProgressPendingError
+	if errors.As(err, &pending) {
+		return pending
+	}
 	return newRuntimeError("TARGET_TEMPORARILY_UNAVAILABLE", kubernetesErrorRetryable(err), err)
 }
 
