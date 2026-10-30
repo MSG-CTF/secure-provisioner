@@ -79,6 +79,9 @@ func (a *DeleteAdapter) DeleteWorkload(ctx context.Context, command provisioner.
 			deleteAccepted = true
 			break
 		}
+		if err := prepareStoppedNamespaceDelete(ctx, cluster.Client, binding); err != nil {
+			return err
+		}
 
 		// Namespace finalization already waits for namespaced resources. A second
 		// foreground GC finalizer only adds another controller's observation delay.
