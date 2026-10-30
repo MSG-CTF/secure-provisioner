@@ -265,6 +265,11 @@ func buildResourceSetForOperation(cluster Cluster, command provisioner.CreateWor
 				Ports:    servicePorts,
 			},
 		}
+		for _, alias := range requirement.ServiceAliases {
+			privateAlias := service.DeepCopy()
+			privateAlias.Name = alias
+			resources.Services = append(resources.Services, privateAlias)
+		}
 		publicService := service
 		publicPorts := requirement.PublicPorts()
 		mixed := len(publicPorts) > 0 && len(publicPorts) < len(requirement.Ports)

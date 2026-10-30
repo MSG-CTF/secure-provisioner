@@ -1,0 +1,94 @@
+{
+  "request_id": "afterimage-k3s-offline-plan",
+  "instance_id": "00000000-0000-4000-8000-000000000125",
+  "team_id": "00000000-0000-4000-8000-000000000012",
+  "release_id": "00000000-0000-4000-8000-000000000125",
+  "architecture": "AMD64",
+  "isolation_profile": "WEB",
+  "target": {
+    "runtime_type": "KUBERNETES",
+    "target_id": "offline-k3s-plan"
+  },
+  "workload": {
+    "containers": [
+      {
+        "name": "bot-k3s",
+        "image": "ghcr.io/msg-ctf/challenges/web-afterimage/bot-k3s@sha256:fc7bb881a81520734ab8accddf7330a2ea076c9de5d10fd15e8545459dfc53dd",
+        "ports": [
+          4000
+        ],
+        "expose": false,
+        "run_as_user": 10001
+      },
+      {
+        "name": "case-vault-k3s",
+        "image": "ghcr.io/msg-ctf/challenges/web-afterimage/case-vault-k3s@sha256:1a6d12e2556a77482cb1fc01ca9ff353c605f9aef32a9e46bcdcbd6ce86b5d64",
+        "ports": [
+          4400
+        ],
+        "expose": false,
+        "run_as_user": 10001,
+        "secret_ref": "00000000-0000-4000-8000-000000000125"
+      },
+      {
+        "name": "core-k3s",
+        "image": "ghcr.io/msg-ctf/challenges/web-afterimage/core-k3s@sha256:0d093170b77e07b6a3218edfb81afb33ad6273fb2150ec1c06a20a6819de0dac",
+        "ports": [
+          3000
+        ],
+        "expose": false,
+        "run_as_user": 10001
+      },
+      {
+        "name": "exporter-k3s",
+        "image": "ghcr.io/msg-ctf/challenges/web-afterimage/exporter-k3s@sha256:1bf22ef74db64b48506b85ccbf82c487616e24267950526161f69e10ce1694d1",
+        "ports": [
+          4100
+        ],
+        "expose": false,
+        "run_as_user": 10001
+      },
+      {
+        "name": "indexer-k3s",
+        "image": "ghcr.io/msg-ctf/challenges/web-afterimage/indexer-k3s@sha256:d7c22ca62a3d56a6c13ade023377b603a1c00e401c12fd15f4dce0c14019c20e",
+        "ports": [
+          4300
+        ],
+        "expose": false,
+        "run_as_user": 10001
+      },
+      {
+        "name": "inventory-metadata-k3s",
+        "image": "ghcr.io/msg-ctf/challenges/web-afterimage/inventory-metadata-k3s@sha256:90ebdbf90e1730ca658e02e7e6cdc76e500698042ee83fb46c8583d7e307c127",
+        "ports": [
+          4200
+        ],
+        "expose": false,
+        "run_as_user": 10001
+      },
+      {
+        "name": "portal-k3s",
+        "image": "ghcr.io/msg-ctf/challenges/web-afterimage/portal-k3s@sha256:f912506f8915479537d20cebe786af192adb6737696233fde855f2a8e1e72283",
+        "ports": [
+          8080
+        ],
+        "expose": true,
+        "run_as_user": 10001
+      },
+      {
+        "name": "indexer-runner-k3s",
+        "image": "ghcr.io/msg-ctf/challenges/web-afterimage/indexer-runner-k3s@sha256:a54a39a5b6ac26737f41f3528d8629485bffdfbfc5e8bf11f9939a214b4e0589",
+        "ports": [
+          4310
+        ],
+        "expose": false,
+        "run_as_user": 10001
+      }
+    ],
+    "resource_limits": {
+      "cpu_millicores": 2000,
+      "memory_mib": 6144,
+      "ephemeral_storage_mib": 2048
+    }
+  }
+}

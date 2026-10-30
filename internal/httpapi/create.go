@@ -58,6 +58,7 @@ type RuntimeContainer struct {
 	shutdownStrategy              isolation.ShutdownStrategy
 	terminationGracePeriodSeconds int64
 	publicOriginEnv               string
+	serviceAliases                []string
 }
 
 func (container *RuntimeContainer) UnmarshalJSON(data []byte) error {
@@ -530,6 +531,9 @@ func (request CreateWorkloadRequest) toPolicyRequest(containers []provisioner.Wo
 			WritablePaths:                 make([]isolation.WritablePath, len(writablePaths)),
 			ShutdownStrategy:              container.ShutdownStrategy,
 			TerminationGracePeriodSeconds: container.TerminationGracePeriodSeconds,
+		}
+		if len(request.Workload.Containers) > 0 {
+			requirements[index].ServiceAliases = slices.Clone(request.Workload.Containers[index].serviceAliases)
 		}
 		for pathIndex, writable := range writablePaths {
 			requirements[index].WritablePaths[pathIndex] = isolation.WritablePath{Path: writable.Path, SizeMiB: writable.SizeMiB}

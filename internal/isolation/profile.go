@@ -54,6 +54,7 @@ type ContainerRequirement struct {
 	ExposedPorts                  []int            `json:",omitempty"`
 	ShutdownStrategy              ShutdownStrategy `json:",omitempty"`
 	TerminationGracePeriodSeconds int64            `json:",omitempty"`
+	ServiceAliases                []string         `json:",omitempty"`
 }
 
 func (container ContainerRequirement) PublicPorts() []int {

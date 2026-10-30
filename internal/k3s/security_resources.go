@@ -25,6 +25,9 @@ func validateResolvedPolicy(
 	containers []provisioner.WorkloadContainer,
 ) (map[string]isolation.ContainerRequirement, bool) {
 	policy := command.Policy
+	if isolation.ValidateServiceAliases(policy.Containers) != nil {
+		return nil, false
+	}
 	if !supportedIsolationRef(policy.IsolationRef) ||
 		!canonicalExecutionPolicy(policy) ||
 		policy.OutboundMode != isolation.OutboundNone ||
@@ -237,6 +240,10 @@ func buildRuntimeResourceQuota(
 	nodePortCount int,
 ) *corev1.ResourceQuota {
 	totals := resourceList(resolvedResourceLimits(policy.ResourceLimits))
+	serviceCount := containerCount
+	for _, container := range policy.Containers {
+		serviceCount += len(container.ServiceAliases)
+	}
 	return &corev1.ResourceQuota{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      runtimeResourceControlsName,
@@ -251,7 +258,7 @@ func buildRuntimeResourceQuota(
 			corev1.ResourceRequestsEphemeralStorage:             totals[corev1.ResourceEphemeralStorage],
 			corev1.ResourceLimitsEphemeralStorage:               totals[corev1.ResourceEphemeralStorage],
 			corev1.ResourcePods:                                 countQuantity(containerCount),
-			corev1.ResourceServices:                             countQuantity(containerCount),
+			corev1.ResourceServices:                             countQuantity(serviceCount),
 			corev1.ResourceServicesLoadBalancers:                countQuantity(0),
 			corev1.ResourceServicesNodePorts:                    countQuantity(nodePortCount),
 			corev1.ResourceName("count/deployments.apps"):       countQuantity(containerCount),
