@@ -41,22 +41,24 @@ type RuntimeHealthcheck struct {
 }
 
 type RuntimeContainer struct {
-	Name              string            `json:"name"`
-	Image             string            `json:"image"`
-	Ports             []int             `json:"ports"`
-	Expose            bool              `json:"expose"`
-	ExposedPorts      []int             `json:"exposed_ports,omitempty"`
-	RunAsUser         int64             `json:"run_as_user"`
-	WritablePaths     []WritablePath    `json:"writable_paths,omitempty"`
-	Env               map[string]string `json:"env,omitempty"`
-	SecretRef         string            `json:"secret_ref,omitempty"`
-	readinessHTTP     *provisioner.HTTPReadiness
-	tcpStartupOnly    bool
-	requiresFlag      bool
-	flagFilePath      string
-	endpointProtocols []provisioner.PortProtocol
-	shutdownStrategy  isolation.ShutdownStrategy
-	publicOriginEnv   string
+	Name                          string            `json:"name"`
+	Image                         string            `json:"image"`
+	Ports                         []int             `json:"ports"`
+	Expose                        bool              `json:"expose"`
+	ExposedPorts                  []int             `json:"exposed_ports,omitempty"`
+	RunAsUser                     int64             `json:"run_as_user"`
+	WritablePaths                 []WritablePath    `json:"writable_paths,omitempty"`
+	Env                           map[string]string `json:"env,omitempty"`
+	SecretRef                     string            `json:"secret_ref,omitempty"`
+	readinessHTTP                 *provisioner.HTTPReadiness
+	tcpStartupOnly                bool
+	requiresFlag                  bool
+	flagFilePath                  string
+	endpointProtocols             []provisioner.PortProtocol
+	shutdownStrategy              isolation.ShutdownStrategy
+	terminationGracePeriodSeconds int64
+	publicOriginEnv               string
+	serviceAliases                []string
 }
 
 func (container *RuntimeContainer) UnmarshalJSON(data []byte) error {
@@ -400,11 +402,12 @@ func (request CreateWorkloadRequest) normalizedContainers() ([]provisioner.Workl
 		normalized := provisioner.WorkloadContainer{
 			Name: container.Name, Image: container.Image, Ports: ports, Expose: container.Expose,
 			Env: maps.Clone(container.Env), SecretRef: container.SecretRef, RequiresFlag: container.requiresFlag,
-			FlagFilePath:      container.flagFilePath,
-			TCPStartupOnly:    container.tcpStartupOnly,
-			ShutdownStrategy:  container.shutdownStrategy,
-			EndpointProtocols: slices.Clone(container.endpointProtocols),
-			PublicOriginEnv:   container.publicOriginEnv,
+			FlagFilePath:                  container.flagFilePath,
+			TCPStartupOnly:                container.tcpStartupOnly,
+			ShutdownStrategy:              container.shutdownStrategy,
+			TerminationGracePeriodSeconds: container.terminationGracePeriodSeconds,
+			EndpointProtocols:             slices.Clone(container.endpointProtocols),
+			PublicOriginEnv:               container.publicOriginEnv,
 		}
 		if container.readinessHTTP != nil {
 			readiness := *container.readinessHTTP
@@ -520,13 +523,17 @@ func (request CreateWorkloadRequest) toPolicyRequest(containers []provisioner.Wo
 			writablePaths = request.Workload.Containers[index].WritablePaths
 		}
 		requirements[index] = isolation.ContainerRequirement{
-			Name:             container.Name,
-			Ports:            append([]int(nil), container.Ports...),
-			Expose:           container.Expose,
-			ExposedPorts:     append([]int(nil), container.ExposedPorts...),
-			RunAsUser:        runAsUser,
-			WritablePaths:    make([]isolation.WritablePath, len(writablePaths)),
-			ShutdownStrategy: container.ShutdownStrategy,
+			Name:                          container.Name,
+			Ports:                         append([]int(nil), container.Ports...),
+			Expose:                        container.Expose,
+			ExposedPorts:                  append([]int(nil), container.ExposedPorts...),
+			RunAsUser:                     runAsUser,
+			WritablePaths:                 make([]isolation.WritablePath, len(writablePaths)),
+			ShutdownStrategy:              container.ShutdownStrategy,
+			TerminationGracePeriodSeconds: container.TerminationGracePeriodSeconds,
+		}
+		if len(request.Workload.Containers) > 0 {
+			requirements[index].ServiceAliases = slices.Clone(request.Workload.Containers[index].serviceAliases)
 		}
 		for pathIndex, writable := range writablePaths {
 			requirements[index].WritablePaths[pathIndex] = isolation.WritablePath{Path: writable.Path, SizeMiB: writable.SizeMiB}

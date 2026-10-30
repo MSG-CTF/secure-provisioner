@@ -229,7 +229,7 @@ func (w *Worker) processLeasedAttempt(ctx context.Context, claimed ClaimedOperat
 		_, err := w.leaseStore.MarkLeaseFailed(claimed, failure, now)
 		return err
 	}
-	_, err := w.leaseStore.MarkLeaseRetrying(claimed, failure, now.Add(w.backoff(claimed.Operation.Attempt)), now)
+	_, err := w.leaseStore.MarkLeaseRetrying(claimed, failure, now.Add(w.retryDelay(claimed.Operation.Attempt, executeErr)), now)
 	return err
 }
 
@@ -315,7 +315,7 @@ func (w *Worker) process(ctx context.Context, operation Operation) error {
 	if _, err := w.legacyStore.MarkRetrying(running.ID, failure); err != nil {
 		return err
 	}
-	if err := w.sleep(ctx, w.backoff(running.Attempt)); err != nil {
+	if err := w.sleep(ctx, w.retryDelay(running.Attempt, err)); err != nil {
 		if ctx.Err() != nil && isContextError(err) {
 			return w.legacyStore.Requeue(running.ID)
 		}
@@ -329,6 +329,14 @@ func noUncheckpointedCleanup(operation Operation, failure Failure) bool {
 		return true
 	}
 	return operation.Result.CreateCleanup != nil && *operation.Result.CreateCleanup == *failure.CreateCleanup
+}
+
+func (w *Worker) retryDelay(attempt int, err error) time.Duration {
+	var pending interface{ ProgressPending() bool }
+	if errors.As(err, &pending) && pending.ProgressPending() {
+		return time.Second
+	}
+	return w.backoff(attempt)
 }
 
 func (w *Worker) execute(ctx context.Context, running Operation) (OperationResult, error) {

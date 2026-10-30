@@ -250,6 +250,10 @@ func (a *Adapter) remove(ctx context.Context, s Session, r Record) error {
 		if quiesceErr != nil {
 			return hold("GATEWAY_WORKLOAD_STOP_PENDING", quiesceErr)
 		}
+	} else if err := a.backend.Quiesce(ctx, r); err != nil {
+		// Route deletion is durable, but pod termination may still be in progress
+		// after a retry or restart. Wait before handing the namespace to its controller.
+		return hold("GATEWAY_WORKLOAD_STOP_PENDING", err)
 	}
 	binding := recoveryBinding(r)
 	command := provisioner.DeleteWorkloadCommand{RequestID: r.Command.RequestID, InstanceID: r.Command.InstanceID, TeamID: r.Command.TeamID, TargetID: r.Command.TargetID, RuntimeType: r.Command.RuntimeType, RuntimeWorkloadID: r.Result.RuntimeWorkloadID}

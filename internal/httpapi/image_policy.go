@@ -36,22 +36,24 @@ type endpointProtocolPolicy struct {
 }
 
 type ImagePolicy struct {
-	Image            string                     `json:"image"`
-	Container        string                     `json:"container"`
-	IsolationProfile string                     `json:"isolation_profile"`
-	Status           string                     `json:"status"`
-	BlockedReason    string                     `json:"blocked_reason,omitempty"`
-	RequiresFlag     bool                       `json:"requires_flag,omitempty"`
-	FlagFilePath     string                     `json:"flag_file_path,omitempty"`
-	CISmokeEnabled   bool                       `json:"ci_smoke_enabled,omitempty"`
-	RunAsUser        int64                      `json:"run_as_user"`
-	Ports            []int                      `json:"ports"`
-	ExposedPorts     []int                      `json:"exposed_ports"`
-	WritablePaths    []WritablePath             `json:"writable_paths"`
-	ReadinessHTTP    *provisioner.HTTPReadiness `json:"readiness_http,omitempty"`
-	TCPStartupOnly   bool                       `json:"tcp_startup_only,omitempty"`
-	ShutdownStrategy isolation.ShutdownStrategy `json:"shutdown_strategy,omitempty"`
-	PublicOriginEnv  string                     `json:"public_origin_env,omitempty"`
+	Image                         string                     `json:"image"`
+	Container                     string                     `json:"container"`
+	IsolationProfile              string                     `json:"isolation_profile"`
+	Status                        string                     `json:"status"`
+	BlockedReason                 string                     `json:"blocked_reason,omitempty"`
+	RequiresFlag                  bool                       `json:"requires_flag,omitempty"`
+	FlagFilePath                  string                     `json:"flag_file_path,omitempty"`
+	CISmokeEnabled                bool                       `json:"ci_smoke_enabled,omitempty"`
+	RunAsUser                     int64                      `json:"run_as_user"`
+	Ports                         []int                      `json:"ports"`
+	ExposedPorts                  []int                      `json:"exposed_ports"`
+	WritablePaths                 []WritablePath             `json:"writable_paths"`
+	ReadinessHTTP                 *provisioner.HTTPReadiness `json:"readiness_http,omitempty"`
+	TCPStartupOnly                bool                       `json:"tcp_startup_only,omitempty"`
+	ShutdownStrategy              isolation.ShutdownStrategy `json:"shutdown_strategy,omitempty"`
+	TerminationGracePeriodSeconds *int64                     `json:"termination_grace_period_seconds,omitempty"`
+	PublicOriginEnv               string                     `json:"public_origin_env,omitempty"`
+	ServiceAliases                []string                   `json:"service_aliases,omitempty"`
 }
 
 func (catalog *ImagePolicyCatalog) RequiredFlagImages() []string {
@@ -157,6 +159,11 @@ func ParseImagePolicies(contents []byte) (*ImagePolicyCatalog, error) {
 		catalog.vmRequired[repository] = struct{}{}
 	}
 	for _, policy := range config.Images {
+		if len(policy.ServiceAliases) > 0 {
+			if policy.IsolationProfile != "WEB" || isolation.ValidateServiceAliases([]isolation.ContainerRequirement{{Name: policy.Container, ServiceAliases: policy.ServiceAliases}}) != nil {
+				return nil, errors.New("invalid trusted service alias policy")
+			}
+		}
 		if !validImmutableImageReference(policy.Image) {
 			return nil, fmt.Errorf("image policy requires an immutable image: %q", policy.Image)
 		}
@@ -258,6 +265,9 @@ func (catalog *ImagePolicyCatalog) AllowsCISmoke(image string) bool {
 }
 
 func validateImagePolicyRequirements(policy ImagePolicy) error {
+	if policy.TerminationGracePeriodSeconds != nil && (*policy.TerminationGracePeriodSeconds < 1 || !isolation.ValidTerminationGracePeriod(*policy.TerminationGracePeriodSeconds)) {
+		return errors.New("termination_grace_period_seconds must be between 1 and 300")
+	}
 	if policy.PublicOriginEnv != "" && (policy.PublicOriginEnv != "PUBLIC_ORIGIN" || policy.IsolationProfile != "WEB" || len(policy.ExposedPorts) != 1) {
 		return errors.New("public_origin_env requires PUBLIC_ORIGIN on a single-endpoint WEB image")
 	}
@@ -412,10 +422,15 @@ func (catalog *ImagePolicyCatalog) Apply(request *CreateWorkloadRequest) error {
 		container.flagFilePath = policy.FlagFilePath
 		container.tcpStartupOnly = policy.TCPStartupOnly
 		container.shutdownStrategy = policy.ShutdownStrategy
+		container.terminationGracePeriodSeconds = 0
+		if policy.TerminationGracePeriodSeconds != nil {
+			container.terminationGracePeriodSeconds = *policy.TerminationGracePeriodSeconds
+		}
 		container.RunAsUser = policy.RunAsUser
 		container.Expose = false
 		container.ExposedPorts = slices.Clone(policy.ExposedPorts)
 		container.WritablePaths = slices.Clone(policy.WritablePaths)
+		container.serviceAliases = slices.Clone(policy.ServiceAliases)
 		if policy.ReadinessHTTP != nil {
 			readiness := *policy.ReadinessHTTP
 			container.readinessHTTP = &readiness
