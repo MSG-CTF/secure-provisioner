@@ -196,6 +196,10 @@ func (a *DeleteAdapter) deleteWorkload(ctx context.Context, command provisioner.
 }
 
 func namespaceAPIError(err error) error {
+	var budget *lifecycleBudgetError
+	if errors.As(err, &budget) {
+		return operations.NewProgressPendingError("KUBERNETES_API_BUDGET_BUSY", err)
+	}
 	var pending *operations.ProgressPendingError
 	if errors.As(err, &pending) {
 		return pending

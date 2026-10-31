@@ -12,10 +12,92 @@ import (
 
 	"github.com/MSG-CTF/secure-provisioner/internal/operations"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/util/flowcontrol"
 )
+
+func TestLocalAPIBudgetBeforeCreateDoesNotAcquireCleanupHold(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	limiter := &lifecycleRateLimiter{flowcontrol.NewTokenBucketRateLimiter(1, 1)}
+	limiter.TryAccept()
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: server.URL, RateLimiter: limiter})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_, budgetErr := client.CoreV1().Namespaces().Get(ctx, "not-dispatched", metav1.GetOptions{})
+	if budgetErr == nil || requests.Load() != 0 || ctx.Err() != nil {
+		t.Fatal("local budget fixture reached a server or expired", budgetErr)
+	}
+	command := validCreateCommand("aws-dev")
+	backend := readyClient(t, command)
+	backend.PrependReactor("get", "namespaces", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, budgetErr
+	})
+	adapter := newTestAdapter(t, adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "test")}, backend))
+	_, err = adapter.CreateWorkload(context.Background(), command)
+	var pending *operations.ProgressPendingError
+	var held interface{ HoldRetry() bool }
+	if err == nil || errors.As(err, &pending) || errors.As(err, &held) {
+		t.Fatal("create before any namespace mutation acquired cleanup-only retry semantics", err)
+	}
+	var runtimeErr *RuntimeError
+	if !errors.As(err, &runtimeErr) || !runtimeErr.Retryable() {
+		t.Fatal("local budget failure stopped using bounded create retries", err)
+	}
+	for _, action := range backend.Actions() {
+		if action.GetVerb() == "create" || action.GetVerb() == "delete" || action.GetVerb() == "patch" || action.GetVerb() == "update" {
+			t.Fatal("creation mutated resources before a successful preflight")
+		}
+	}
+	store := operations.NewMemoryStore(func() (string, error) { return "budget-create-operation", nil })
+	op, _, err := store.EnqueueCreate(command, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := budgetCreateFailure{operations.NewExecutionError(runtimeErr.Code(), runtimeErr.Retryable(), runtimeErr)}
+	worker, err := operations.NewWorker(store, executor, operations.WorkerConfig{Concurrency: 1, WorkerID: "budget-worker",
+		PollInterval: time.Millisecond, LeaseDuration: time.Minute, RenewInterval: 10 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	work, finish := context.WithTimeout(context.Background(), 3*time.Second)
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(work) }()
+	defer func() { finish(); <-done }()
+	for work.Err() == nil {
+		got, err := store.Get(op.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Status == operations.OperationStatusFailed {
+			if got.Attempt != 1 {
+				t.Fatalf("create retried beyond its one-attempt budget: %d", got.Attempt)
+			}
+			return
+		}
+		if got.Status == operations.OperationStatusRetrying {
+			t.Fatal("create ignored its maximum attempts because of cleanup progress")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("create did not reach its bounded failure state")
+}
+
+type budgetCreateFailure struct{ failure error }
+
+func (executor budgetCreateFailure) Execute(context.Context, operations.Operation) (operations.OperationResult, error) {
+	return operations.OperationResult{}, executor.failure
+}
 
 func TestKubernetesHTTPFailuresCannotMasqueradeAsLocalBudgetProgress(t *testing.T) {
 	for _, test := range []struct {
@@ -80,11 +162,12 @@ func TestLocalAPIBudgetDefersBeforeDispatchAndPreservesCancellation(t *testing.T
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	_, err = client.CoreV1().Namespaces().Get(ctx, "not-dispatched", metav1.GetOptions{})
-	var pending *operations.ProgressPendingError
-	if !errors.As(err, &pending) || ctx.Err() != nil || requests.Load() != 0 {
+	var budget *lifecycleBudgetError
+	if !errors.As(err, &budget) || ctx.Err() != nil || requests.Load() != 0 {
 		t.Fatalf("local budget was a remote failure or sent HTTP: error=%v context=%v requests=%d", err, ctx.Err(), requests.Load())
 	}
-	if namespaceAPIError(err) != pending {
+	var pending *operations.ProgressPendingError
+	if !errors.As(namespaceAPIError(err), &pending) {
 		t.Fatal("namespace error classification lost local admission progress")
 	}
 	cancelled, stop := context.WithCancel(context.Background())
