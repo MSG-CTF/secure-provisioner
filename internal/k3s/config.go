@@ -222,7 +222,7 @@ func lifecycleClients(config *rest.Config) (ClientSet, error) {
 	config = rest.CopyConfig(config)
 	config.QPS = lifecycleClientQPS
 	config.Burst = lifecycleClientBurst
-	config.RateLimiter = flowcontrol.NewTokenBucketRateLimiter(config.QPS, config.Burst)
+	config.RateLimiter = &lifecycleRateLimiter{flowcontrol.NewTokenBucketRateLimiter(config.QPS, config.Burst)}
 	client, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return ClientSet{}, err

@@ -1,0 +1,63 @@
+name: Verify isolated Namespace cleanup
+
+on:
+  pull_request:
+    paths:
+      - internal/k3s/**
+      - .github/workflows/namespace-cleanup.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: isolated-namespace-cleanup-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  isolated-k3s:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Start an isolated loopback K3s API
+        env:
+          K3S_IMAGE: rancher/k3s:v1.36.4-k3s1@sha256:edad48e12bf81c3a09ac1c05c0c0ffaaa22145980b989d6fae84543a76b83657
+        run: |
+          docker run --detach --name msgctf-cleanup-k3s --privileged --cgroupns=host \
+            --publish 127.0.0.1:16443:6443 "$K3S_IMAGE" server \
+            --disable traefik,servicelb,metrics-server --write-kubeconfig-mode 600
+          for attempt in $(seq 1 90); do
+            if [ -n "$(docker exec msgctf-cleanup-k3s kubectl get nodes -o name 2>/dev/null)" ]; then
+              break
+            fi
+            sleep 2
+          done
+          docker exec msgctf-cleanup-k3s kubectl wait --for=condition=Ready nodes --all --timeout=90s
+          umask 077
+          docker exec msgctf-cleanup-k3s cat /etc/rancher/k3s/k3s.yaml > "$RUNNER_TEMP/cleanup-kubeconfig"
+          sed -i 's#https://127.0.0.1:6443#https://127.0.0.1:16443#g' "$RUNNER_TEMP/cleanup-kubeconfig"
+      - name: Delete twelve synthetic namespaces with the real API
+        run: |
+          set -o pipefail
+          PROVISIONER_TEST_CLEANUP_KUBECONFIG="$RUNNER_TEMP/cleanup-kubeconfig" \
+            go test -race -p 1 ./internal/k3s -run '^TestIsolatedNamespace' -v -count=1 -timeout=4m \
+            | tee "$RUNNER_TEMP/namespace-cleanup-test.log"
+      - name: Stop the isolated cluster
+        if: always()
+        run: |
+          docker rm --force msgctf-cleanup-k3s || true
+          rm -f "$RUNNER_TEMP/cleanup-kubeconfig"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: isolated-namespace-cleanup-${{ github.sha }}
+          path: ${{ runner.temp }}/namespace-cleanup-test.log
+          if-no-files-found: ignore
+          retention-days: 7
