@@ -372,12 +372,12 @@ def ready(conditions):
     return isinstance(conditions, list) and any(isinstance(c, dict) and c.get("type") == "Ready" and c.get("status") == "True" for c in conditions)
 
 
-def verify_node(node, expected):
+def verify_node(node, expected, *, require_agent_label=True):
     try:
         meta, spec, status = node["metadata"], node["spec"], node["status"]
         info = status["nodeInfo"]
         matches = (node.get("kind") == "Node" and meta["name"] == expected["node_name"] and identifier(meta["uid"]) and
-            not meta.get("deletionTimestamp") and meta.get("labels", {}).get(LABEL) == "true" and
+            not meta.get("deletionTimestamp") and (not require_agent_label or meta.get("labels", {}).get(LABEL) == "true") and
             not spec.get("unschedulable", False) and spec.get("providerID", "") == expected["provider_id"] and
             not any(t.get("effect") in ("NoSchedule", "NoExecute") for t in spec.get("taints", [])) and
             info["machineID"] == expected["machine_id"] and identifier(info["bootID"]) and info["operatingSystem"] == "linux" and
