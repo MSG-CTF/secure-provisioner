@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-spec = importlib.util.spec_from_file_location("k3s_lifecycle_client", Path(__file__).with_name("k3s_lifecycle_client.py"))
+spec = importlib.util.spec_from_file_location("k3s_namespace_cache", Path(__file__).with_name("k3s_namespace_cache.py"))
 tool = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(tool)
 UID = "0f395a01-f9b1-4863-8278-391a67f87d55"
@@ -37,7 +37,7 @@ class FakeSystem:
         self.budget = dict(budget)
 
 
-class LifecycleClientTest(unittest.TestCase):
+class NamespaceCacheProfileTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -51,11 +51,11 @@ class LifecycleClientTest(unittest.TestCase):
 
     def test_plan_is_read_only_and_uses_append_dropin(self):
         plan = self.tuning.plan()
-        self.assertEqual(plan["baseline"], {"qps": 20, "burst": 30})
+        self.assertEqual(plan["baseline"], tool.BASE)
         self.assertFalse(self.tuning.path.exists())
         self.assertFalse(self.tuning.state_path.exists())
         self.assertEqual(self.system.restarts, 0)
-        self.assertIn(b"kube-controller-manager-arg+:", tool.DROPIN)
+        self.assertIn(b"kube-apiserver-arg+:", tool.DROPIN)
         self.assertEqual((self.config / "config.yaml").read_bytes(), self.original)
 
     def test_apply_restore_preserve_every_existing_argument(self):
@@ -84,8 +84,8 @@ class LifecycleClientTest(unittest.TestCase):
         self.assertFalse(self.tuning.state_path.exists())
         self.assertEqual(self.system.restarts, 0)
 
-    def test_existing_budget_override_is_not_replaced(self):
-        (self.config / "config.yaml").write_bytes(b"kube-controller-manager-arg:\n - kube-api-qps=45\n")
+    def test_existing_cache_override_is_not_replaced(self):
+        (self.config / "config.yaml").write_bytes(b"kube-controller-manager-arg:\n - watch-cache=true\n")
         with self.assertRaises(tool.Refused):
             self.tuning.apply()
         self.assertEqual(self.system.restarts, 0)
@@ -136,10 +136,23 @@ class LifecycleClientTest(unittest.TestCase):
         # A last-moment workload prevents both the initial restart and rollback restart
         self.assertEqual(self.system.restarts, 0)
 
-    def test_configz_selects_controller_not_scheduler_or_cloud(self):
-        config = {"componentconfig": {"clientConnection": {"qps": 50, "burst": 100}},
-                  "kubecontrollermanager.config.k8s.io": {"Generic": {"ClientConnection": {"qps": 20, "burst": 30}}}}
-        self.assertEqual(tool.controller_budget(config), tool.BASE)
+    def test_actual_startup_log_parses_quoted_false_and_default(self):
+        self.assertEqual(tool.cache_profile('msg="Running kube-apiserver --watch-cache=false"'), tool.TUNED)
+        self.assertEqual(tool.cache_profile('msg="Running kube-apiserver --secure-port=6443"'), tool.BASE)
+        for log in ['', 'Running kube-apiserver --watch-cache=unknown', 'Running kube-apiserver --watch-cache=false --watch-cache=true']:
+            with self.subTest(log=log), self.assertRaises(tool.Refused):
+                tool.cache_profile(log)
+
+    def test_namespace_arriving_during_failed_verification_blocks_rollback_restart(self):
+        def wait(expected, budget):
+            self.system.namespaces = [{"metadata": {"name": "ctf-arrived"}}]
+            raise tool.Refused("verification failed")
+        with patch.object(self.system, "wait", side_effect=wait):
+            with self.assertRaises(tool.Refused):
+                self.tuning.apply()
+        self.assertEqual(self.system.restarts, 1)
+        self.assertTrue(self.tuning.path.exists())
+
 
 
 if __name__ == "__main__":

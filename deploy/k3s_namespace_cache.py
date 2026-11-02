@@ -1,18 +1,21 @@
-"""Opt-in K3s controller API budget tuning on one drained, empty execution node."""
+"""Opt-in watch-cache profile for the reviewed SQLite K3s execution nodes."""
 import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
 import time
 import uuid
 
-DROPIN_NAME = "zz-msgctf-lifecycle-client.yaml"
-DROPIN = b"# Managed by MSG CTF k3s_lifecycle_client.py\nkube-controller-manager-arg+:\n  - kube-api-qps=50\n  - kube-api-burst=100\n"
-BASE = {"qps": 20, "burst": 30}
-TUNED = {"qps": 50, "burst": 100}
+DROPIN_NAME = "zz-msgctf-namespace-cache.yaml"
+DROPIN = b"# Managed by MSG CTF k3s_namespace_cache.py\nkube-apiserver-arg+:\n  - watch-cache=false\n"
+BASE = {"watch_cache": True}
+TUNED = {"watch_cache": False}
+REVIEWED_VERSION = "v1.36.4+k3s1"
+
 
 
 class Refused(RuntimeError):
@@ -23,10 +26,13 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def controller_budget(config):
-    # /configz also contains cloud-controller, scheduler and proxy budgets
-    connection = config["kubecontrollermanager.config.k8s.io"]["Generic"]["ClientConnection"]
-    return {"qps": connection["qps"], "burst": connection["burst"]}
+def cache_profile(log):
+    if "Running kube-apiserver" not in log:
+        raise Refused("cannot verify the running apiserver flags")
+    flags = re.findall(r"--watch-cache=([a-z]+)", log)
+    if len(flags) > 1 or (flags and flags[0] not in ["true", "false"]):
+        raise Refused("ambiguous apiserver cache flags")
+    return {"watch_cache": flags != ["false"]}
 
 
 def validate_node(nodes, namespaces, expected):
@@ -50,18 +56,24 @@ class System:
         nodes = json.loads(self.run(base + ["get", "nodes", "-o", "json"]))["items"]
         namespaces = json.loads(self.run(base + ["get", "namespaces", "-o", "json"]))["items"]
         validate_node(nodes, namespaces, expected)
-        raw = self.run(["k3s", "kubectl", "--server=https://127.0.0.1:10257", "--insecure-skip-tls-verify=true",
-                        "--request-timeout=5s", "get", "--raw", "/configz"])
-        return controller_budget(json.loads(raw))
+        if nodes[0]["status"]["nodeInfo"]["kubeletVersion"] != REVIEWED_VERSION:
+            raise Refused("only the reviewed K3s version is supported")
+        log = self.run(["journalctl", "-u", "k3s", "--no-pager", "-g", "Running kube-apiserver", "-n", "1", "-o", "cat"])
+        return cache_profile(log)
 
     def check_config_source(self):
         pid = self.run(["systemctl", "show", "k3s", "--property=MainPID", "--value"]).strip()
         arguments = Path("/proc", pid, "cmdline").read_bytes().split(b"\0")
         environment = dict(p.split(b"=", 1) for p in Path("/proc", pid, "environ").read_bytes().split(b"\0") if b"=" in p)
-        if environment.get(b"K3S_CONFIG_FILE") or environment.get(b"K3S_KUBE_CONTROLLER_MANAGER_ARG"):
-            raise Refused("custom K3s config source or controller CLI environment requires manual review")
-        if any(a == b"--config" or a.startswith(b"--config=") or a.startswith(b"--kube-controller-manager-arg") for a in arguments):
-            raise Refused("K3s CLI config overrides require manual review")
+        keys = [b"K3S_CONFIG_FILE", b"K3S_KUBE_APISERVER_ARG", b"K3S_DATASTORE_ENDPOINT", b"K3S_CLUSTER_INIT"]
+        if any(environment.get(key) for key in keys):
+            raise Refused("custom API, datastore or config environment requires review")
+        flags = [b"--config", b"--kube-apiserver-arg", b"--datastore-endpoint", b"--cluster-init", b"--server"]
+        if any(a == flag or a.startswith(flag + b"=") for a in arguments for flag in flags):
+            raise Refused("custom API, datastore or config CLI arguments require review")
+        database = Path("/var/lib/rancher/k3s/server/db/state.db")
+        if database.is_symlink() or not database.is_file() or Path("/var/lib/rancher/k3s/server/db/etcd/member").exists():
+            raise Refused("only the reviewed SQLite single-node datastore is supported")
 
     def restart(self):
         self.run(["systemctl", "restart", "k3s"], timeout=45)
@@ -75,11 +87,11 @@ class System:
             except (Refused, subprocess.TimeoutExpired, KeyError, ValueError):
                 pass
             time.sleep(1)
-        raise Refused("K3s did not recover the same Node UID and expected controller budget")
+        raise Refused("K3s did not recover the same Node UID and expected apiserver cache profile")
 
 
 class Tuning:
-    def __init__(self, expected, config_root=Path("/etc/rancher/k3s"), state_root=Path("/var/lib/msgctf-k3s-lifecycle"), system=None):
+    def __init__(self, expected, config_root=Path("/etc/rancher/k3s"), state_root=Path("/var/lib/msgctf-k3s-cache-profile"), system=None):
         self.expected = str(uuid.UUID(expected))
         self.root = config_root
         self.path = config_root / "config.yaml.d" / DROPIN_NAME
@@ -95,8 +107,8 @@ class Tuning:
             if path.is_symlink() or not path.is_file():
                 raise Refused("config path is not a regular file")
             content = path.read_bytes()
-            if b"kube-api-qps" in content or b"kube-api-burst" in content:
-                raise Refused("existing controller API overrides require manual review")
+            if b"watch-cache" in content or b"datastore-endpoint" in content or b"cluster-init" in content:
+                raise Refused("existing cache or datastore overrides require manual review")
             result[str(path)] = digest(content)
         return result
 
@@ -126,7 +138,7 @@ class Tuning:
             raise Refused("owned tuning/checkpoint already exists; inspect or restore first")
         before = self.config_hashes()
         if self.system.snapshot(self.expected) != BASE:
-            raise Refused("controller does not have the reviewed 20 QPS / 30 burst baseline")
+            raise Refused("apiserver does not have the reviewed default watch-cache baseline")
         return {"node_uid": self.expected, "before_config_hashes": before, "baseline": BASE,
                 "target": TUNED, "candidate_sha256": digest(DROPIN), "phase": "planned"}
 
@@ -150,6 +162,9 @@ class Tuning:
             self.unchanged(state)
         except Exception:
             if self.path.is_file() and not self.path.is_symlink() and self.path.read_bytes() == DROPIN:
+                self.unchanged(state)
+                if restarted:
+                    self.system.snapshot(self.expected)
                 self.path.unlink()
                 if restarted:
                     self.system.restart()
@@ -171,7 +186,7 @@ class Tuning:
             raise Refused("owned drop-in changed or checkpoint is not restorable")
         current = self.system.snapshot(self.expected)
         if current not in [BASE, TUNED]:
-            raise Refused("unexpected live controller budget")
+            raise Refused("unexpected live cache profile")
         self.path.unlink()
         self.system.restart()
         self.system.wait(self.expected, BASE)
@@ -188,8 +203,24 @@ def main():
     args = parser.parse_args()
     if os.name != "posix" or os.geteuid() != 0:
         raise Refused("run as root on the reviewed Linux K3s execution node")
+    import fcntl
     tuning = Tuning(args.expected_node_uid)
-    print(json.dumps(getattr(tuning, args.mode)()))
+    if args.mode == "plan":
+        print(json.dumps(tuning.plan()))
+        return
+    directory = tuning.state_path.parent
+    if directory.is_symlink():
+        raise Refused("checkpoint directory is a symlink")
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    lock_path = directory / (tuning.expected + ".lock")
+    descriptor = os.open(lock_path, os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, "w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise Refused("another node-profile operation is running") from error
+        print(json.dumps(getattr(tuning, args.mode)()))
+
 
 
 if __name__ == "__main__":
