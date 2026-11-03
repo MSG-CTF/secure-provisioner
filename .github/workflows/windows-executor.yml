@@ -1,0 +1,47 @@
+name: Verify Windows Executor
+
+on:
+  pull_request:
+    paths:
+      - cmd/windows-executor/**
+      - cmd/windows-executor-client/**
+      - internal/testpki/**
+      - .github/workflows/windows-executor.yml
+      - go.mod
+      - go.sum
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-executor:
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test credential isolation and redirect rejection on Windows
+        run: go test -count=1 -timeout 2m ./cmd/windows-executor-client ./cmd/windows-executor
+      - name: Build the Windows executor
+        run: go build -trimpath -o "$env:RUNNER_TEMP/windows-executor.exe" ./cmd/windows-executor
+      - name: Record the built source and executable digest
+        shell: pwsh
+        env:
+          BUILD_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          @{source_commit=$env:BUILD_SOURCE_COMMIT; binary_sha256=(Get-FileHash -Algorithm SHA256 "$env:RUNNER_TEMP/windows-executor.exe").Hash.ToLower()} |
+            ConvertTo-Json | Set-Content -Encoding utf8 "$env:RUNNER_TEMP/windows-executor-build.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-executor-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            ${{ runner.temp }}/windows-executor.exe
+            ${{ runner.temp }}/windows-executor-build.json
+          retention-days: 7
