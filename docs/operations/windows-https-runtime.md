@@ -1,0 +1,106 @@
+# Windows 11 HTTPS Runtime
+
+Windows EXE의 선택 경로는 Backend → Runtime → Broker → VM HTTPS 실행기다.
+Backend는 EXE를 비공개 저장소에 보관하고 Runtime의
+`POST /v1/checker-submissions`에 메타데이터와 `selection_mode=broker_pool`을
+보낸다. Runtime은 Backend의 `/internal/v1/checker-submissions/{id}/payload`에서
+원본 EXE를 가져온다. Backend가 Broker 또는 VM의 실행기 API를 직접 호출하지 않는다.
+새 `broker_pool` 요청에는 Backend active release가 필요 없으며 `release_id`를 생략한다.
+이전 요청의 유효한 release UUID는 재전송 호환을 위해 허용하지만 VM 선택에는 쓰지 않는다.
+고정 VM 방식에서는 release UUID를 계속 요구한다.
+release 없는 Backend 코드를 적용하기 전에 이 Runtime 버전을 먼저 배포한다.
+이전 Runtime은 새 요청을 400으로 거절하며, Backend는 불명확한 전송을 자동 재실행하지 않는다.
+
+## 활성화
+
+- PostgreSQL Runtime 저장소와 마이그레이션을 먼저 준비한다.
+- `PROVISIONER_WINDOWS_CONFIG`를 절대 경로의 JSON 설정 파일로 지정한다.
+  현재 배포 계약에는 [Broker mTLS 설정 예시](../../deploy/windows/config.broker-mtls.example.json)를 쓴다.
+  [정적 토큰 HTTPS 예시](../../deploy/windows/config.https.example.json)는 별도 실행기용으로 유지한다.
+- Broker Runtime 토큰은 `broker_token_file`에 둔다. VM HTTPS 실행에는
+  `https_executor.client_certificate_file`과 `client_key_file`의 mTLS 자격증명을 쓴다.
+  VM 서버 인증서는 Broker의 `executor_certificate_pem`을 받아 정확히 고정한다.
+  Broker 토큰을 VM에 전송하지 않는다.
+  운영 Runtime의 `root:provisioner` 비밀 파일은 `0640`을 허용한다.
+  그룹 쓰기 권한이나 전체 사용자 권한은 허용하지 않는다.
+- 내부·외부 Backend에는 서로 다른 체커 서비스 토큰을 설정하고,
+  `checker.backends`에는 Runtime에서 접근 가능한 HTTPS origin을 넣는다.
+  Backend 쪽 `EXE_CHECKERS_JSON`의 서비스 토큰, `checker_commit_sha`와
+  `config_version`은 Runtime 설정과 일치해야 한다. `broker_pool`은 선택된 VM의
+  이미지·드라이버 해시를 Broker가 제공하지 않으므로 두 해시를 요청과 RESULT에
+  넣지 않는다. 고정 VM 경로의 승인 해시 검사는 유지한다. 이 토큰은 VM 실행기
+  토큰과 별개다.
+- 각 VM의 실행기는 Runtime 클라이언트 인증서를 검증하고 443 인바운드를 Runtime
+  송신 주소에만 허용해야 한다. Broker가 READY로 반환한 VM은 동적으로 선택한다.
+
+## 실행 순서
+
+Windows 팀별 대기열은 Backend에서 팀당 대기 또는 실행 중 한 건으로 접수를 제한한다
+총 실행 횟수 제한은 없으며 완료한 팀의 새 요청은 기존 대기 요청 뒤에 놓인다
+Runtime은 파일 준비가 끝난 QUEUED 요청을 접수 순서대로 VM에 배정한다
+뒤의 워커가 먼저 VM을 조회해도 BindTarget에서 앞선 준비 요청을 확인하므로 추월하지 않는다
+파일 조회 중인 FETCH_PENDING 요청은 다른 팀의 준비된 실행까지 막지 않는다
+요청과 대기 순서는 기존 PostgreSQL 기록에 남으며 추가 마이그레이션은 없다
+
+체커 POST 및 GET 응답의 선택 필드 queue_state는 QUEUED, PREPARING, RUNNING 중 하나다
+QUEUED일 때 queue_position은 같은 VM 풀에서 대기 중인 팀의 순번이다
+내부와 외부 Backend의 같은 팀 ID는 별도 팀으로 계산하며 다른 팀 식별자는 반환하지 않는다
+조회 실패 시 순번을 추정하지 않으며 VM 배정 뒤에는 queue_position을 생략한다
+Backend는 5초 간격으로 확인하고 15초가 지난 순번을 현재 순번으로 표시하지 않는다
+
+1. Runtime은 Broker의 `GET /v1/runtime/windows-vms`에서 READY 목록을 조회하고
+   VM 하나를 고른다. 목록은 예약이 아니다.
+2. Runtime은 선택한 VM의 최신 접속정보를 조회하고 같은 `execution_id`로
+   `started` 이벤트를 보낸다. Broker가 `200/RUNNING`을 확인하기 전에는 EXE를
+   보내지 않는다. `409`이면 그 VM을 사용하지 않는다.
+3. Runtime은 Broker가 알려준 IP에 HTTPS로 접속한다. Broker가 준 VM 인증서를 정확히
+   검증하고 Runtime 클라이언트 인증서로 EXE를 PUT한다. 실행기에서 결과를 조회하여 종료 코드와
+   stdout/stderr를 저장한다.
+4. Runtime은 Broker에 같은 ID의 `finished`를 영속 재시도한다. Broker가
+   해당 ID의 `200/FINISHED`를 확인한 뒤 Backend에 `RESULT`를 통보한다.
+   `vm_state`는 그 시점의 VM 상태이므로 복구 후 재전송에서는 `READY`일 수도 있다.
+   완료 통보가 유실돼도 저장된 ID와 본문으로 재시도한다.
+
+## 현재 제한
+
+- Broker READY는 HTTPS 실행기의 설치·도달 가능성을 증명하지 않는다.
+- 새 VM의 서버 인증서는 Broker 접속정보에 있어야 하고, 실행기는 Runtime 클라이언트
+  인증서를 허용해야 한다. mTLS 모드에서는 VM별 정적 Runtime 설정을 추가하지 않는다.
+- `finished` 이후 VM은 `RESET_REQUIRED`다. 자동 이미지 복구는 이 변경에
+  포함되지 않는다. 복구 담당자가 아래 API로 READY 전환을 통보하면 Runtime은
+  Backend에 별도 `CLEANUP(true)`를 재시도한다. 실제 채점 접수는
+  이미지 복구·비밀값 전달·E2E 검증 후 활성화한다.
+- Backend의 최초 체커 POST 응답이 불명확하고 이후 GET이 404이면 현재
+  Backend는 자동 재접수를 하지 않고 작업을 보류한다. 운영자가 Runtime DB와
+  Broker 이벤트 이력을 확인해야 한다.
+
+## 이미지 복구 완료 수신 API
+
+복구 담당 프로세스는 선택된 VM을 깨끗한 이미지로 복구하고 Broker가 해당
+`execution_id`에 대해 READY 전환을 승인한 **뒤** Runtime에 통지한다.
+Runtime이 이 POST만으로 VM을 READY로 바꾸지는 않는다. 송신자는 전용
+`PROVISIONER_WINDOWS_RECOVERY_TOKEN_FILE`(또는 `_TOKEN`)을 사용한다.
+다른 Runtime 서비스·Backend checker 토큰과는 다른 값이어야 한다.
+
+```http
+POST /internal/v1/windows-vms/{resource_target_id}/recovery-events
+Authorization: Bearer <Windows recovery token>
+Content-Type: application/json
+
+{"execution_id":"<Runtime execution UUID>","event_id":"<stable event UUID>","vm_state":"READY"}
+```
+
+Runtime은 실행 기록에 저장된 VM UUID가 일치하고 Broker `finished` 응답까지
+저장된 `broker_pool` 실행에만 200을 반환한다. 첫 통지는 DB에 기록하고
+같은 `event_id` 재전송은 `replayed=true`로 응답한다. 다른 이벤트 ID나 VM을
+같은 실행에 연결하면 409, 미등록 실행은 404, Broker 종료가 미확정이면
+409를 반환한다. 네트워크 응답이 유실되면 **같은** `event_id`로 재시도한다.
+
+응답 `data.cleanup_delivery=PENDING`은 Backend의 별도 `CLEANUP(true)`가
+아직 전달되지 않았음을 뜻한다. Runtime worker는 RESULT가 Backend에
+확인된 후 이 이벤트 ID와 복구 시각으로 CLEANUP을 구성해 영속 재시도한다.
+Backend 응답 유실 때는 서비스 인증으로 같은 이벤트 본문에 대한 receipt를
+조회한다. 확인되면 `CONFIRMED`로 기록하며, 아직 없으면 작업 토큰을 갱신해
+같은 CLEANUP을 다시 보낸다. Runtime은
+복구 보고의 진위를 Broker에 다시 조회하지 않으므로 전용 토큰은 실제
+Broker READY 승인 결과를 확인하는 복구 담당 프로세스에만 제공한다.

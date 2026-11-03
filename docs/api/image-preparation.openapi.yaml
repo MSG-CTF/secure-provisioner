@@ -1,10 +1,10 @@
 openapi: 3.1.0
 info:
-  title: B Image Preparation Contract Proposal
-  version: 0.1.0-proposal
+  title: B Image Preparation API
+  version: 0.1.0
   description: >-
-    Unimplemented contract for advisory image preparation on Linux K3s.
-    These paths are not available in the current Runtime. See image-preparation-b-contract.md.
+    Disabled-by-default advisory image preparation on Linux K3s.
+    Dedicated credentials and trusted node agents are required. See image-preparation-b-contract.md.
     Readiness never authorizes create, reserves capacity, or requires placement on a ready node.
 servers:
   - url: https://runtime.example.invalid

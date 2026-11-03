@@ -1,5 +1,7 @@
 # WEB 이미지별 런타임 정책
 
+정확한 이미지 digest 집합에 대한 운영자 소유 내부 통신 그래프는 [workload network policies](workload-network-policies.md)를 참고한다.
+
 ## 목적과 적용 범위
 
 문제 저장소의 `info.yaml`을 수정하지 않고, 운영자가 승인한 **정확한 이미지 digest**마다 컨테이너의 실행 UID, 쓰기 가능 디렉터리, 외부 공개 포트를 지정한다. 정책 파일은 [`config/web-image-policies.json`](../../config/web-image-policies.json)이다. 비밀값은 이 파일에 넣지 않는다.
@@ -29,6 +31,28 @@ CI 토큰은 전용 팀·Target에서 위 세 WEB digest 중 하나의 단일 �
 예시 서버 설치 위치는 `/etc/secure-provisioner/web-image-policies.json`이다. 서비스 환경 파일에 `PROVISIONER_IMAGE_POLICIES=/etc/secure-provisioner/web-image-policies.json`을 추가하고 서비스 계정이 정책 파일을 읽을 수 있어야 한다. 새 파일과 바이너리를 함께 배포하고 서비스를 재시작한다. 정책 파일은 Git에서 검토·버전 관리하며 VM에서만 수동 수정하지 않는다. 같은 digest의 정책을 바꾸면 새 인스턴스나 재생성에 다른 사양이 적용될 수 있으므로, 변경 이유와 영향을 검토하고 이미 실행 중인 인스턴스의 생성 기록을 확인한다.
 
 ## 현재 이미지별 판정
+
+### 2026-10-28 원본 active 추가 검증
+
+10월 27일 08:43:24 KST의 active 원본과 관리자 조회를 대조했다. 아래 네 release의 현재 active ID·revision·전체 이미지 집합은 원본과 일치하고 Backend 배포 승인이 유효하다. Cashout과 OSINT의 현재 채점값은 각 원본 소스의 정답과 메모리에서 비교해 일치를 확인했다. 정답과 인증정보는 정책·시험 보고서에 기록하지 않는다.
+
+| 문제 / revision | 정책 | 검증 및 조건 |
+| --- | --- | --- |
+| crypto-nerves / 573 | `create_enabled` | 원본 `web@1f2a6696…` 고정. UID10001, 공개8080, `/tmp`64MiB, `/healthz`:8080. 실제 Backend FLAG 주입·공개 HTTPS 암호 세션·공식 삭제 확인 |
+| misc-cashout / 584 | `create_enabled` | 원본 `web@5ba579e0…` 고정. UID10001, 공개18419, `/tmp`64MiB, `/healthz`:18419. 이미지의 SIGINT 종료 경로를 고정 preStop으로 사용하며 생성·공개 wallet/settlements·종료·재기동·삭제를 확인한 뒤 반영 |
+| web-logout-please / 552 | `create_enabled` | 원본 `service@5e5c1c0e…` 고정. UID10001, 공개8080, 내부 readiness9090, `/tmp`64MiB. 실제 Backend FLAG와 의도된 공개 풀이 흐름·9090 비공개·삭제 확인. 더 최신 발행 이미지로 대체하지 않음 |
+| osint-the-past-has-an-address / 593 | `blocked` | 원본 `web@0a605f7c…`의 제한된 Kubernetes 기동·정답 일치·공개 조회 기능은 통과. 현재 release의 `APP_ENV=development`, `PUBLIC_ORIGIN=auto`는 TLS Gateway 뒤에서 HTTP 숨은 주소를 생성하므로 공개 HTTPS origin과 불일치. 명시적 production HTTPS origin을 앱 시작 전에 연결하고 같은 origin의 숨은 페이지까지 검증해야 함 |
+
+새 항목의 `ci_smoke_enabled`는 모두 false다. 운영 호스트의 기존 27개 항목은 보존하고 위 네 항목만 추가한다. 저장소의 정책 전체를 운영 파일에 덮어쓰지 않는다. 현재 준비 승인도 `create_enabled`를 요구하므로 OSINT를 `blocked`로 유지하면 새 준비와 생성이 함께 거절된다. 이미 검증한 노드 캐시는 삭제하지 않는다. active 포인터, Backend 자동 활성화와 상시 timer를 변경하지 않으며 AFTERIMAGE 보류를 유지한다.
+
+`shutdown_strategy`는 운영자 정책에만 지정할 수 있는 닫힌 선택값이다. WEB 프로필에서 `python_sigint_pid1`과 `python_sigint_child`를 허용한다. Runtime은 컨테이너의 preStop에 `/usr/local/bin/python3 -I -B -c "import os, signal; os.kill(1, signal.SIGINT)"`를 고정 argv로 생성한다. 외부 요청은 이 값이나 임의 lifecycle·command·args를 지정할 수 없다. 선택값을 큐의 생성 명령과 해시에 보존하고, 요청·해결 정책·실행 명령 간 불일치나 readback 시 hook 변경을 거절한다. 기존에 생략한 이미지에는 hook을 추가하지 않는다. 일반 grace 기간 안의 정상 종료를 위한 설정이며 강제 종료의 정상 처리를 보장하지 않는다. 이 필드를 이해하는 Runtime 바이너리를 먼저 배포해야 한다.
+
+Grade Tampering의 원본 이미지 `3a3de9c6…3652fdb`에는 `python_sigint_child`를 사용합니다
+셸이 PID 1인 이미지에서 같은 UID의 Python 주 프로세스 하나를 찾고, 시작 시각과 pidfd로 대상을 확인한 뒤 SIGINT를 보냅니다
+대상이 여러 개이거나 프로세스가 바뀌었거나 pidfd를 사용할 수 없으면 신호를 보내지 않고 기존 종료 유예를 따릅니다
+다른 이미지와 기존 PID 1 방식의 고정 명령은 유지하며 CPU·메모리·네임스페이스 정리·예약 반납 순서는 바꾸지 않습니다
+새 바이너리를 먼저 설치하고 승인 목록의 해당 digest 항목에만 이 값을 반영합니다
+
 
 TCP 연결 자체가 문제 세션을 시작하는 이미지에는 운영자 정책의 tcp_startup_only를 사용합니다
 이 값은 PWN 이미지에서만 허용하며 HTTP 준비 확인과 함께 지정하면 거절합니다
@@ -137,6 +161,14 @@ requires_flag 이미지에는 승인된 FLAG 참조가 필요합니다
 백엔드로 옮긴 뒤 같은 배포가 이미 검증됐다는 뜻은 아닙니다
 
 ## 새 이미지 발행 시
+
+접속 안내와 격리 프로필은 별개입니다
+Infinite Pack의 31337 포트는 TCP 메뉴이지만 기존 WEB 격리 정책을 유지해야 합니다
+이런 경우 운영자 정책 파일의 endpoint_protocols에 이미지 digest·컨테이너·포트·접속 방식을 지정합니다
+일치하는 NodePort의 응답 주소와 protocol만 바뀌며 노출 포트, NetworkPolicy, UID, 컨테이너 실행 설정은 바뀌지 않습니다
+HTTP Ingress에 TCP 접속 안내를 지정하면 생성 전에 거절합니다
+호출자가 요청 JSON에 접속 방식을 추가해 덮어쓸 수는 없습니다
+새 이미지로 교체할 때에는 endpoint_protocols의 digest도 검토해서 갱신해야 합니다
 
 1. 발행 산출물의 정확한 `image@sha256:<digest>`와 컨테이너 이름·내부 포트를 확인한다.
 2. 읽기 전용 root filesystem과 UID 10001로 문제 기능을 시험한다. 실패한 경로를 자동 허용하지 말고 필요한 디렉터리만 크기와 함께 검토한다. 마운트할 디렉터리에 이미지가 원래 제공하던 파일이 있는지도 확인한다.

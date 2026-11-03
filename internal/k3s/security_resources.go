@@ -5,6 +5,7 @@ import (
 	"encoding/base32"
 	"math"
 	"path"
+	"reflect"
 	"strings"
 
 	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
@@ -24,6 +25,9 @@ func validateResolvedPolicy(
 	containers []provisioner.WorkloadContainer,
 ) (map[string]isolation.ContainerRequirement, bool) {
 	policy := command.Policy
+	if isolation.ValidateServiceAliases(policy.Containers) != nil {
+		return nil, false
+	}
 	if !supportedIsolationRef(policy.IsolationRef) ||
 		!canonicalExecutionPolicy(policy) ||
 		policy.OutboundMode != isolation.OutboundNone ||
@@ -34,13 +38,51 @@ func validateResolvedPolicy(
 		policy.ResourceLimits.EphemeralStorageMiB != command.ResourceLimits.EphemeralStorageMiB {
 		return nil, false
 	}
+	if !reflect.DeepEqual(command.PolicyRequest.WorkloadNetwork, policy.WorkloadNetwork) {
+		return nil, false
+	}
+	if policy.WorkloadNetwork != nil {
+		if policy.IsolationRef.Version != "v2" || policy.InternalConnections != nil ||
+			isolation.ValidateWorkloadNetwork(policy.WorkloadNetwork, isolation.WorkloadProfile(policy.WorkloadProfileRef.Name), policy.Containers) != nil ||
+			len(policy.WorkloadNetwork.Containers) != len(containers) {
+			return nil, false
+		}
+		images := make(map[string]string, len(containers))
+		for _, container := range containers {
+			images[container.Name] = container.Image
+		}
+		for _, identity := range policy.WorkloadNetwork.Containers {
+			if images[identity.Name] != identity.Image {
+				return nil, false
+			}
+		}
+	}
 
 	approved := make(map[string]isolation.ContainerRequirement, len(policy.Containers))
+	requestedShutdown := make(map[string]isolation.ShutdownStrategy, len(command.PolicyRequest.Containers))
+	requestedGrace := make(map[string]int64, len(command.PolicyRequest.Containers))
+	for _, requirement := range command.PolicyRequest.Containers {
+		if !isolation.ValidShutdownStrategy(command.PolicyRequest.WorkloadProfile, requirement.ShutdownStrategy) {
+			return nil, false
+		}
+		if !isolation.ValidTerminationGracePeriod(requirement.TerminationGracePeriodSeconds) {
+			return nil, false
+		}
+		if _, duplicate := requestedShutdown[requirement.Name]; duplicate {
+			return nil, false
+		}
+		requestedShutdown[requirement.Name] = requirement.ShutdownStrategy
+		requestedGrace[requirement.Name] = requirement.TerminationGracePeriodSeconds
+	}
 	totalWritableMiB := int64(0)
 	totalEphemeralMiB := int64(policy.ResourceLimits.EphemeralStorageMiB)
 	exposedContainers := 0
 	for _, requirement := range policy.Containers {
-		if requirement.RunAsUser <= 0 {
+		if requirement.RunAsUser <= 0 ||
+			!isolation.ValidTerminationGracePeriod(requirement.TerminationGracePeriodSeconds) ||
+			requestedGrace[requirement.Name] != requirement.TerminationGracePeriodSeconds ||
+			!isolation.ValidShutdownStrategy(isolation.WorkloadProfile(policy.WorkloadProfileRef.Name), requirement.ShutdownStrategy) ||
+			requestedShutdown[requirement.Name] != requirement.ShutdownStrategy {
 			return nil, false
 		}
 		if _, duplicate := approved[requirement.Name]; duplicate {
@@ -88,13 +130,20 @@ func validateResolvedPolicy(
 		}
 		approved[requirement.Name] = requirement
 	}
+	for name, strategy := range requestedShutdown {
+		if _, found := approved[name]; (strategy != "" || requestedGrace[name] != 0) && !found {
+			return nil, false
+		}
+	}
 	if policy.WorkloadProfileRef == (isolation.ProfileRef{Name: "PWN", Version: "v1"}) && exposedContainers != 1 {
 		return nil, false
 	}
 
 	for index, container := range containers {
 		requirement, found := approved[container.Name]
-		if !found || !samePorts(container.PublicPorts(), requirement.PublicPorts()) || !samePorts(container.Ports, requirement.Ports) {
+		if !found || container.ShutdownStrategy != requirement.ShutdownStrategy ||
+			container.TerminationGracePeriodSeconds != requirement.TerminationGracePeriodSeconds ||
+			!samePorts(container.PublicPorts(), requirement.PublicPorts()) || !samePorts(container.Ports, requirement.Ports) {
 			return nil, false
 		}
 		containerWritableMiB := int64(0)
@@ -191,6 +240,10 @@ func buildRuntimeResourceQuota(
 	nodePortCount int,
 ) *corev1.ResourceQuota {
 	totals := resourceList(resolvedResourceLimits(policy.ResourceLimits))
+	serviceCount := containerCount
+	for _, container := range policy.Containers {
+		serviceCount += len(container.ServiceAliases)
+	}
 	return &corev1.ResourceQuota{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      runtimeResourceControlsName,
@@ -205,7 +258,7 @@ func buildRuntimeResourceQuota(
 			corev1.ResourceRequestsEphemeralStorage:             totals[corev1.ResourceEphemeralStorage],
 			corev1.ResourceLimitsEphemeralStorage:               totals[corev1.ResourceEphemeralStorage],
 			corev1.ResourcePods:                                 countQuantity(containerCount),
-			corev1.ResourceServices:                             countQuantity(containerCount),
+			corev1.ResourceServices:                             countQuantity(serviceCount),
 			corev1.ResourceServicesLoadBalancers:                countQuantity(0),
 			corev1.ResourceServicesNodePorts:                    countQuantity(nodePortCount),
 			corev1.ResourceName("count/deployments.apps"):       countQuantity(containerCount),

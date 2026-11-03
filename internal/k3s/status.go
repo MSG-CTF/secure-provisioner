@@ -62,6 +62,7 @@ type RuntimeStatus struct {
 	RuntimeWorkloadID string
 	Phase             string
 	EndpointReady     bool
+	CleanupPending    bool
 	MetricsAvailable  bool
 	ObservedAt        time.Time
 	Node              NodeRuntimeStatus

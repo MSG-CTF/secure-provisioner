@@ -1,8 +1,10 @@
-# B안 이미지 준비 및 사전 다운로드 API 계약 제안
+# B안 이미지 준비 및 사전 다운로드 API 계약
 
-상태: 구현 전 검토안. 이 문서와 OpenAPI 추가는 HTTP handler, 다운로드 worker,
-노드 agent, DB migration 또는 운영 설정을 활성화하지 않는다.
-기준: Runtime `a4c1f47`, Scheduler `d138f3f`, Broker staging `fd5ab63`.
+상태: 계약 구현 추가, 기본 비활성. HTTP handler, PostgreSQL worker/관측 저장소,
+노드 agent와 설치 예시는 구현되어 있으며 운영 활성화는 별도 절차다.
+[설치·검증 runbook](../operations/image-preparation.md)에 실제 검증 범위와 제한을 기록한다.
+최초 설계 기준: Runtime `a4c1f47`, Scheduler `d138f3f`, Broker staging `fd5ab63`
+현재 구현의 설정과 검증 범위는 위 runbook을 기준으로 확인합니다
 
 연결 이슈: [Runtime #69](https://github.com/MSG-CTF/secure-provisioner/issues/69),
 [Scheduler #75](https://github.com/MSG-CTF/instance-scheduler/issues/75),

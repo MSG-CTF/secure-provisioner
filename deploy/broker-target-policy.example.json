@@ -1,0 +1,15 @@
+{
+  "provider": "GCP",
+  "region": "us-central1",
+  "enabled": true,
+  "gateway_enabled": false,
+  "security_capabilities": {
+    "network_policy_enforced": false,
+    "supplemental_groups_policy_strict": false,
+    "pod_pid_limit_enforced": false,
+    "network_policy_provider": "kube-router",
+    "dns_namespace": "kube-system",
+    "dns_pod_selector": { "k8s-app": "kube-dns" },
+    "runtime_classes": []
+  }
+}

@@ -8,7 +8,9 @@ import (
 	"strings"
 
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/util/flowcontrol"
 	metricsclient "k8s.io/metrics/pkg/client/clientset/versioned"
 )
 
@@ -17,16 +19,18 @@ type registryFile struct {
 }
 
 type registryClusterConfig struct {
-	TargetID             string                        `json:"target_id"`
-	Provider             Provider                      `json:"provider"`
-	Region               string                        `json:"region"`
-	Architecture         string                        `json:"architecture"`
-	KubeconfigPath       string                        `json:"kubeconfig_path"`
-	PublicGateway        string                        `json:"public_gateway"`
-	IngressClass         string                        `json:"ingress_class,omitempty"`
-	ExposureMode         ExposureMode                  `json:"exposure_mode,omitempty"`
-	Enabled              *bool                         `json:"enabled"`
-	SecurityCapabilities *registrySecurityCapabilities `json:"security_capabilities"`
+	TargetID               string                        `json:"target_id"`
+	BrokerResourceTargetID string                        `json:"broker_resource_target_id,omitempty"`
+	Provider               Provider                      `json:"provider"`
+	Region                 string                        `json:"region"`
+	Architecture           string                        `json:"architecture"`
+	KubeconfigPath         string                        `json:"kubeconfig_path"`
+	PublicGateway          string                        `json:"public_gateway"`
+	IngressClass           string                        `json:"ingress_class,omitempty"`
+	ExposureMode           ExposureMode                  `json:"exposure_mode,omitempty"`
+	Enabled                *bool                         `json:"enabled"`
+	Gateway                *GatewayConfig                `json:"gateway,omitempty"`
+	SecurityCapabilities   *registrySecurityCapabilities `json:"security_capabilities"`
 }
 
 type registrySecurityCapabilities struct {
@@ -168,16 +172,18 @@ func (c registryClusterConfig) clusterConfig() (ClusterConfig, bool) {
 		capabilities = c.SecurityCapabilities.clusterCapabilities()
 	}
 	return ClusterConfig{
-		TargetID:             c.TargetID,
-		Provider:             c.Provider,
-		Region:               c.Region,
-		Architecture:         c.Architecture,
-		KubeconfigPath:       c.KubeconfigPath,
-		PublicGateway:        c.PublicGateway,
-		IngressClass:         c.IngressClass,
-		ExposureMode:         c.ExposureMode,
-		Enabled:              *c.Enabled,
-		SecurityCapabilities: capabilities,
+		TargetID:               c.TargetID,
+		BrokerResourceTargetID: c.BrokerResourceTargetID,
+		Provider:               c.Provider,
+		Region:                 c.Region,
+		Architecture:           c.Architecture,
+		KubeconfigPath:         c.KubeconfigPath,
+		PublicGateway:          c.PublicGateway,
+		IngressClass:           c.IngressClass,
+		ExposureMode:           c.ExposureMode,
+		Enabled:                *c.Enabled,
+		Gateway:                c.Gateway,
+		SecurityCapabilities:   capabilities,
 	}, true
 }
 
@@ -204,12 +210,20 @@ func (c registrySecurityCapabilities) clusterCapabilities() SecurityCapabilities
 
 type KubeconfigClientFactory struct{}
 
-func (KubeconfigClientFactory) FromKubeconfig(path string) (ClientSet, error) {
-	config, err := clientcmd.BuildConfigFromFlags("", path)
-	if err != nil {
-		return ClientSet{}, err
-	}
-	kubernetesClient, err := kubernetes.NewForConfig(config)
+// Lifecycle operations verify ownership and isolation after each mutation. The
+// client-go default of five requests per second serialized those checks across
+// all workers on a target during a team reset. Keep a bounded per-target budget
+// shared by the Kubernetes and metrics clients instead of multiplying it by
+// API group or worker count.
+const lifecycleClientQPS float32 = 20
+const lifecycleClientBurst = 40
+
+func lifecycleClients(config *rest.Config) (ClientSet, error) {
+	config = rest.CopyConfig(config)
+	config.QPS = lifecycleClientQPS
+	config.Burst = lifecycleClientBurst
+	config.RateLimiter = flowcontrol.NewTokenBucketRateLimiter(config.QPS, config.Burst)
+	client, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return ClientSet{}, err
 	}
@@ -217,5 +231,23 @@ func (KubeconfigClientFactory) FromKubeconfig(path string) (ClientSet, error) {
 	if err != nil {
 		return ClientSet{}, err
 	}
-	return ClientSet{Kubernetes: kubernetesClient, Metrics: metrics}, nil
+	return ClientSet{Kubernetes: client, Metrics: metrics, restConfig: config}, nil
+}
+
+func (KubeconfigClientFactory) FromKubeconfig(path string) (ClientSet, error) {
+	config, err := clientcmd.BuildConfigFromFlags("", path)
+	if err != nil {
+		return ClientSet{}, err
+	}
+	return lifecycleClients(config)
+}
+
+// FromKubeconfigData constructs independent clients from already verified,
+// inline Broker credentials; it does not write a shared kubeconfig file.
+func (KubeconfigClientFactory) FromKubeconfigData(raw []byte) (ClientSet, error) {
+	config, err := clientcmd.RESTConfigFromKubeConfig(raw)
+	if err != nil {
+		return ClientSet{}, err
+	}
+	return lifecycleClients(config)
 }

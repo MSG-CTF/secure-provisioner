@@ -1,0 +1,123 @@
+[
+  {
+    "step": "Confirm no existing helper",
+    "argv": [
+      "/usr/bin/test",
+      "!",
+      "-e",
+      "/usr/local/sbin/msgctf-gateway-nodeport-firewall.py"
+    ]
+  },
+  {
+    "step": "Confirm no existing static config",
+    "argv": [
+      "/usr/bin/test",
+      "!",
+      "-e",
+      "/etc/secure-provisioner/gateway-nodeport-firewall.json"
+    ]
+  },
+  {
+    "step": "Confirm no existing firewall unit",
+    "argv": [
+      "/usr/bin/test",
+      "!",
+      "-e",
+      "/etc/systemd/system/msgctf-gateway-nodeport-firewall.service"
+    ]
+  },
+  {
+    "step": "Confirm no existing owned Runtime drop-in",
+    "argv": [
+      "/usr/bin/test",
+      "!",
+      "-e",
+      "/etc/systemd/system/secure-provisioner.service.d/80-gateway-nodeport-firewall.conf"
+    ]
+  },
+  {
+    "step": "Confirm no existing owned K3s drop-in",
+    "argv": [
+      "/usr/bin/test",
+      "!",
+      "-e",
+      "/etc/systemd/system/k3s.service.d/80-gateway-nodeport-firewall.conf"
+    ]
+  },
+  {
+    "step": "Assert the existing Runtime config directory is root-owned, non-symlink, and not group/world writable; preserve its owner, group, and mode",
+    "argv": [
+      "/usr/bin/python3",
+      "-I",
+      "-c",
+      "import os, stat; s = os.lstat('/etc/secure-provisioner'); assert stat.S_ISDIR(s.st_mode) and s.st_uid == 0 and not (s.st_mode & 0o022), 'existing Runtime config directory must be root-owned and not group/world writable'"
+    ]
+  },
+  {
+    "step": "Install helper",
+    "argv": [
+      "/usr/bin/install",
+      "-o",
+      "root",
+      "-g",
+      "root",
+      "-m",
+      "0755",
+      "/root/msgctf-gateway-nodeport-firewall/msgctf-gateway-nodeport-firewall.py",
+      "/usr/local/sbin/msgctf-gateway-nodeport-firewall.py"
+    ]
+  },
+  {
+    "step": "Install static source policy",
+    "argv": [
+      "/usr/bin/install",
+      "-o",
+      "root",
+      "-g",
+      "root",
+      "-m",
+      "0644",
+      "/root/msgctf-gateway-nodeport-firewall/gateway-nodeport-firewall.example.json",
+      "/etc/secure-provisioner/gateway-nodeport-firewall.json"
+    ]
+  },
+  {
+    "step": "Install firewall unit",
+    "argv": [
+      "/usr/bin/install",
+      "-o",
+      "root",
+      "-g",
+      "root",
+      "-m",
+      "0644",
+      "/root/msgctf-gateway-nodeport-firewall/msgctf-gateway-nodeport-firewall.service",
+      "/etc/systemd/system/msgctf-gateway-nodeport-firewall.service"
+    ]
+  },
+  {
+    "step": "Validate staged unit syntax without starting any service",
+    "argv": [
+      "/usr/bin/systemd-analyze",
+      "verify",
+      "/etc/systemd/system/msgctf-gateway-nodeport-firewall.service"
+    ]
+  },
+  {
+    "step": "Reload service definitions",
+    "argv": [
+      "/usr/bin/systemctl",
+      "daemon-reload"
+    ]
+  },
+  {
+    "step": "Inspect status: expected inactive and disabled; do not enable/start while target remains Gateway OFF",
+    "argv": [
+      "/usr/bin/systemctl",
+      "--no-pager",
+      "--full",
+      "status",
+      "msgctf-gateway-nodeport-firewall.service"
+    ]
+  }
+]
