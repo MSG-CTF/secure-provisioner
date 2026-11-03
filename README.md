@@ -268,3 +268,5 @@ K3s NodePort target별 opt-in이며 기본 off입니다. 보조 컨테이너는 
 endpoint는 하나만 허용합니다. PostgreSQL과 별도 송신 token 파일이 필요하며,
 Gateway DELETE204 확인 전에는 Service/NodePort를 반환하지 않습니다. TCP의 TLS/SNI
 metadata 전달은 Scheduler/Backend/Frontend 연계 변경도 필요합니다.
+
+초기 설계 기록: [Gateway 연동 검토](docs/api/runtime-gateway-v1-integration-assessment.md)
