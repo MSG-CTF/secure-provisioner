@@ -16,7 +16,7 @@ def deployment(game):
             "automountServiceAccountToken": False,
             "securityContext": {"runAsNonRoot": True, "runAsUser": 10001},
             "volumes": [{"name": "state", "persistentVolumeClaim": {"claimName": "game-state"}}],
-            "containers": [{"name": n, "image": f"ghcr.io/msg-ctf/2026_msg_ctf/koth-{game}/{n}@sha256:" + "a" * 64,
+            "containers": [{"name": n, "image": f"ghcr.io/msg-ctf/challenges/koth-{game}/{n}@sha256:" + "a" * 64,
                 "command": ["original-command"], "envFrom": [{"secretRef": {"name": n + "-env"}}],
                 "env": [{"name": "KEPT", "value": "ordinary-setting"}],
                 "volumeMounts": [{"name": "state", "mountPath": "/data"}],

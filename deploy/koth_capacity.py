@@ -26,7 +26,7 @@ def jenga_template(template):
     if len(containers) != 1 or containers[0]["name"] != "jenga":
         raise ValueError("Unexpected Jenga container layout")
     game = containers[0]
-    if not re.fullmatch(r"ghcr\.io/msg-ctf/2026_msg_ctf/koth-jenga/jenga@sha256:[0-9a-f]{64}", game["image"]):
+    if not re.fullmatch(r"ghcr\.io/msg-ctf/challenges/koth-jenga/jenga@sha256:[0-9a-f]{64}", game["image"]):
         raise ValueError("Jenga must use its approved immutable image")
     mounts = [m for m in game.get("volumeMounts", []) if m["mountPath"] == "/data"]
     if len(mounts) != 1 or mounts[0].get("readOnly") or mounts[0].get("subPathExpr"):
@@ -61,7 +61,7 @@ def swanopoly_template(template):
         raise ValueError("Swanopoly requires separate test and submit runners")
     for name in ("test", "submit"):
         container = by_name[name]
-        if not re.fullmatch(r"ghcr\.io/msg-ctf/2026_msg_ctf/koth-swanopoly/" + name + r"@sha256:[0-9a-f]{64}", container["image"]):
+        if not re.fullmatch(r"ghcr\.io/msg-ctf/challenges/koth-swanopoly/" + name + r"@sha256:[0-9a-f]{64}", container["image"]):
             raise ValueError("Swanopoly must use its approved immutable runner images")
         container["env"] = [e for e in container.get("env", []) if e["name"] != "RUNNER_MAX_WAIT_QUEUE"]
         container["env"].append({"name": "RUNNER_MAX_WAIT_QUEUE", "value": "128"})
