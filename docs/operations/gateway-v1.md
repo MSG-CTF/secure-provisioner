@@ -118,7 +118,7 @@ HTTP `service_url`은 Gateway의 HTTPS URL이다. TCP 응답 예시는 다음과
 
 기존 네 필드를 유지하며 `port`는 내부 컨테이너 포트다. 네 transport 필드는 선택
 필드이며 legacy endpoint에서는 생략한다. Gateway HTTP에도 같은 transport metadata를
-넣는다. TCP 참가자는 TLS/SNI 클라이언트를 사용해야 한다. 현재 Scheduler 이후의
+넣는다. TLS TCP 참가자는 TLS/SNI 클라이언트를 사용해야 한다. 현재 Scheduler 이후의
 Backend/Frontend가 이 값을 보존·표시하는 변경도 필요하므로 **Runtime 변경만으로
 참가자 TCP 연동 완료를 선언하지 않는다**.
 
@@ -126,6 +126,52 @@ CREATE 성공은 workload 준비+Gateway control plane 반영 확인이다. Gate
 DNS·공인 인증서·방화벽·외부 문제 응답을 검증하지 않는다. 전용 target에서 실제
 Gateway → 공인 IP:NodePort의 연결, CNI/NAT, HTTP/TCP/SNI를 따로 검증해야 한다.
 기존 NodePort 접근 정책을 Gateway 전용 방화벽 규칙으로 자동 변경하지 않는다.
+
+### TCP 공개 포트와 평문 연결 지원 준비
+
+일반 공개 TCP용 Gateway 구현은 [별도 배포 번들](../../deploy/gateway/README.md)에
+추가했다. 이 방식은 기존 3필드 PUT을 유지하며 Gateway의 `tcp_public_ports` 설정으로
+**새 TCP 경로만** 평문 공인 포트에 배치한다. HTTP와 기존 TLS TCP 경로는 유지한다.
+이 범위에는 소유 팀 접속 인증을 포함하지 않으므로 Runtime의
+`PROVISIONER_GATEWAY_TCP_TRANSPORT`는 미설정/`legacy`로 둔다. 아래 owner 계약 초안을
+활성화하는 절차와 구분한다. 번들·포트 범위·방화벽은 아직 운영에 적용하지 않았다.
+
+Runtime은 Gateway가 반환하는 TCP `port`와 명시적인 `tls` 값을 사용한다.
+공개 포트를 NodePort나 컨테이너 포트에서 추측하지 않으며, 난수 서브도메인은
+계속 유지한다. HTTP 경로는 기존 HTTPS URL과 TLS 443으로 제한한다.
+
+Gateway가 평문 TCP를 지원하여 아래 경로를 반환한다면 Runtime의 endpoint는
+다음 형태가 된다.
+
+```json
+{
+  "container_name": "pwn",
+  "port": 1337,
+  "protocol": "TCP",
+  "service_url": "tcp://example-random.gate.msgctf.kr:42817",
+  "hostname": "example-random.gate.msgctf.kr",
+  "connection_port": 42817,
+  "tls": false
+}
+```
+
+`tls=false`는 API JSON에서 생략하지 않는다. 평문 연결에는 `server_name`을
+반환하지 않고, 암호화 TCP에는 `tls://hostname:connection_port`와 SNI를 반환한다.
+Gateway 응답의 `tls` 누락/null, 잘못된 포트, 허용 도메인 밖의 hostname은 거절한다.
+저장된 route를 재개할 때도 같은 공개 포트와 TLS 설정을 사용한다.
+
+이 변경은 Gateway의 현재 PUT 요청 형식을 바꾸거나 평문 모드를 요청하지 않는다.
+운영 Gateway v1은 현재 `443 + TLS` 계약이므로 Runtime 변경만으로 일반 `nc`가
+가능해지지 않는다. Gateway 측 공개 포트 예약/중복 방지, 재시작 복구, TCP listener,
+기존 연결 종료와 안전한 포트 회수, 방화벽 지원을 먼저 구현하고 검증해야 한다.
+전환 전에는 외부 `nc`, 동시 생성, 재시작, 삭제 후 접속 차단과 기존 TLS 경로를
+함께 검증한다. 난수 hostname과 포트는 사용자/팀 소유권 인증을 대신하지 않는다.
+
+접속 모드와 팀 소유권의 추가 요청 연동은
+[별도 계약 초안](../api/gateway-tcp-owner-draft.md)에 정리했다.
+`PROVISIONER_GATEWAY_TCP_TRANSPORT` 기본값은 `legacy`이며, 이 상태에서는 기존
+요청 본문을 유지한다. `tls`/`plain`은 관리자가 초안을 승인·구현하고 전용 Gateway에서
+검증한 뒤에만 사용한다. 운영 Gateway v1에는 이 추가 필드를 보내지 않는다.
 
 ## 삭제·재시작·정리 증명
 

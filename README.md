@@ -22,6 +22,10 @@ CTF 문제 인스턴스의 K3s 워크로드 생성·삭제와 상태 조회를 �
 
 API 계약은 [런타임 API 명세](docs/api/runtime-operations.md)와
 [OpenAPI](docs/api/secure-provisioner.openapi.yaml)에 정리되어 있습니다.
+Windows 11 EXE 제출의 Backend → Runtime → Broker → HTTPS 실행기 경로는
+[Windows HTTPS Runtime 안내](docs/operations/windows-https-runtime.md)에 정리했습니다.
+`PROVISIONER_WINDOWS_CONFIG`로 활성화하며 Broker 실행 승인, EXE 전송,
+결과 수집 및 영속 완료 통보를 제공합니다.
 [WEB 이미지별 런타임 정책](docs/operations/web-image-policy-catalog.md)은
 `info.yaml`을 수정하지 않고 운영 설정을 고정하는 방법과 현재 이미지별 상태를 설명합니다.
 
@@ -250,6 +254,14 @@ resident-node/metadata host boundary는 각각 `#11`, `#32`의 검증이 끝날 
 production 완료로 간주하지 않습니다.
 
 실행 설정 전환: [백엔드 비밀값 주입](docs/operations/backend-secret-injection.md)
+
+## Optional image preparation
+
+Runtime can prepare approved immutable images in actual K3s node caches through
+dedicated, disabled-by-default APIs and workers. See the
+[installation and verification runbook](docs/operations/image-preparation.md),
+[API contract](docs/api/image-preparation-b-contract.md), and
+[trusted node configuration](config/image-prefetch-nodes.example.json).
 
 선택 기능: [Gateway v1 단일 공개 endpoint 설정과 복구](docs/operations/gateway-v1.md).
 K3s NodePort target별 opt-in이며 기본 off입니다. 보조 컨테이너는 유지하고 공개

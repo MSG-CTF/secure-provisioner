@@ -84,6 +84,9 @@ func resolveWorkloadProfile(ref ProfileRef) (string, EndpointProtocol, ExposureR
 }
 
 func validateContainers(containers []ContainerRequirement, limits ResourceLimits) error {
+	if err := ValidateServiceAliases(containers); err != nil {
+		return err
+	}
 	if len(containers) == 0 {
 		return rejected("at least one container is required")
 	}
@@ -140,6 +143,12 @@ func validateContainers(containers []ContainerRequirement, limits ResourceLimits
 func validateWorkloadProfile(ref ProfileRef, containers []ContainerRequirement) error {
 	exposedContainers := 0
 	for _, container := range containers {
+		if !ValidShutdownStrategy(WorkloadProfile(ref.Name), container.ShutdownStrategy) {
+			return rejected("unsupported shutdown strategy for workload profile")
+		}
+		if !ValidTerminationGracePeriod(container.TerminationGracePeriodSeconds) {
+			return rejected("unsupported termination grace period")
+		}
 		if len(container.PublicPorts()) > 0 {
 			exposedContainers++
 			if ref == (ProfileRef{Name: "PWN", Version: "v1"}) && len(container.Ports) != 1 {
@@ -192,6 +201,7 @@ func cloneContainerRequirements(containers []ContainerRequirement) []ContainerRe
 			cloned[index].ExposedPorts = append([]int{}, container.ExposedPorts...)
 		}
 		cloned[index].WritablePaths = append([]WritablePath(nil), container.WritablePaths...)
+		cloned[index].ServiceAliases = append([]string(nil), container.ServiceAliases...)
 	}
 	return cloned
 }

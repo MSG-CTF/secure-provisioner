@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/MSG-CTF/secure-provisioner/internal/k3s"
 	"github.com/MSG-CTF/secure-provisioner/internal/operations"
@@ -21,9 +22,10 @@ type DeleteBackend interface {
 	DeleteWorkload(context.Context, provisioner.DeleteWorkloadCommand, runtimebinding.Binding) error
 }
 type KubernetesBackend struct {
-	Registry *k3s.Registry
-	Create   CreateBackend
-	Delete   DeleteBackend
+	Registry     *k3s.Registry
+	Create       CreateBackend
+	Delete       DeleteBackend
+	TCPTransport PublicTransport
 }
 
 // Reject unknown or disabled targets before the request enters the durable
@@ -57,6 +59,28 @@ func (b *KubernetesBackend) CreateWorkloadForOperation(ctx context.Context, c pr
 }
 func (b *KubernetesBackend) DeleteWorkload(ctx context.Context, c provisioner.DeleteWorkloadCommand, binding runtimebinding.Binding) error {
 	return b.Delete.DeleteWorkload(ctx, c, binding)
+}
+
+// A removed Gateway route already has a durable cleanup intent. Give the
+// namespace controller time to work without occupying a lifecycle worker for
+// the full deletion timeout. The caller retains the route journal and binding
+// and retries until DeleteWorkload actually confirms namespace absence.
+// Ordinary deletes without a Gateway journal keep their original timeout.
+func (b *KubernetesBackend) DeleteWorkloadStep(ctx context.Context, c provisioner.DeleteWorkloadCommand, binding runtimebinding.Binding) error {
+	stepCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	remove := b.Delete.DeleteWorkload
+	if stopped, ok := b.Delete.(interface {
+		DeleteStoppedWorkload(context.Context, provisioner.DeleteWorkloadCommand, runtimebinding.Binding) error
+	}); ok {
+		remove = stopped.DeleteStoppedWorkload
+	}
+	err := remove(stepCtx, c, binding)
+	var pending *operations.ProgressPendingError
+	if errors.As(err, &pending) && ctx.Err() == nil {
+		return operations.NewProgressPendingError("GATEWAY_WORKLOAD_DELETE_PENDING", err)
+	}
+	return err
 }
 func (b *KubernetesBackend) CleanupFailedCreate(ctx context.Context, c provisioner.CreateWorkloadCommand, cleanup provisioner.CreateCleanup) error {
 	if cleaner, ok := b.Create.(k3s.FailedCreateCleaner); ok {
@@ -115,7 +139,15 @@ func (b *KubernetesBackend) Destination(ctx context.Context, c provisioner.Creat
 	} else if endpoint.Protocol != "HTTP" {
 		return Destination{}, "", errors.New("unsupported Gateway protocol")
 	}
-	return Destination{TargetIP: ip, TargetPort: port, Protocol: protocol}, uid, nil
+	destination := Destination{TargetIP: ip, TargetPort: port, Protocol: protocol}
+	if protocol == "tcp" && b.TCPTransport != TransportLegacy {
+		destination.PublicTransport = b.TCPTransport
+		destination.OwnerTeamID = string(c.TeamID)
+		if !destination.validDraft() {
+			return Destination{}, "", errors.New("invalid Gateway TCP contract owner or transport")
+		}
+	}
+	return destination, uid, nil
 }
 func (b *KubernetesBackend) Verify(ctx context.Context, r Record) error {
 	return b.verify(ctx, r, true)
@@ -242,7 +274,7 @@ func (b *KubernetesBackend) Quiesce(ctx context.Context, r Record) error {
 		return err
 	}
 	if len(pods.Items) > 0 {
-		return fmt.Errorf("%d workload pods still terminating", len(pods.Items))
+		return operations.NewProgressPendingError("GATEWAY_WORKLOAD_STOP_PENDING", fmt.Errorf("%d workload pods still terminating", len(pods.Items)))
 	}
 	return nil
 }

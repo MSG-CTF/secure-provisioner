@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 // ImagePolicyCatalog is an operator-owned, immutable-at-runtime set of
 // requirements for published challenge images. It contains no secret values.
 type ImagePolicyCatalog struct {
+	revision                 string
 	managed                  map[string]struct{}
 	images                   map[string]ImagePolicy
 	graphByImage             map[string]*isolation.WorkloadNetwork
@@ -34,20 +36,26 @@ type endpointProtocolPolicy struct {
 }
 
 type ImagePolicy struct {
-	Image            string                     `json:"image"`
-	Container        string                     `json:"container"`
-	IsolationProfile string                     `json:"isolation_profile"`
-	Status           string                     `json:"status"`
-	BlockedReason    string                     `json:"blocked_reason,omitempty"`
-	RequiresFlag     bool                       `json:"requires_flag,omitempty"`
-	FlagFilePath     string                     `json:"flag_file_path,omitempty"`
-	CISmokeEnabled   bool                       `json:"ci_smoke_enabled,omitempty"`
-	RunAsUser        int64                      `json:"run_as_user"`
-	Ports            []int                      `json:"ports"`
-	ExposedPorts     []int                      `json:"exposed_ports"`
-	WritablePaths    []WritablePath             `json:"writable_paths"`
-	ReadinessHTTP    *provisioner.HTTPReadiness `json:"readiness_http,omitempty"`
-	TCPStartupOnly   bool                       `json:"tcp_startup_only,omitempty"`
+	SteadyCPUMillicores           int                        `json:"steady_cpu_millicores,omitempty"`
+	StartupCPUMillicores          int                        `json:"startup_cpu_millicores,omitempty"`
+	Image                         string                     `json:"image"`
+	Container                     string                     `json:"container"`
+	IsolationProfile              string                     `json:"isolation_profile"`
+	Status                        string                     `json:"status"`
+	BlockedReason                 string                     `json:"blocked_reason,omitempty"`
+	RequiresFlag                  bool                       `json:"requires_flag,omitempty"`
+	FlagFilePath                  string                     `json:"flag_file_path,omitempty"`
+	CISmokeEnabled                bool                       `json:"ci_smoke_enabled,omitempty"`
+	RunAsUser                     int64                      `json:"run_as_user"`
+	Ports                         []int                      `json:"ports"`
+	ExposedPorts                  []int                      `json:"exposed_ports"`
+	WritablePaths                 []WritablePath             `json:"writable_paths"`
+	ReadinessHTTP                 *provisioner.HTTPReadiness `json:"readiness_http,omitempty"`
+	TCPStartupOnly                bool                       `json:"tcp_startup_only,omitempty"`
+	ShutdownStrategy              isolation.ShutdownStrategy `json:"shutdown_strategy,omitempty"`
+	TerminationGracePeriodSeconds *int64                     `json:"termination_grace_period_seconds,omitempty"`
+	PublicOriginEnv               string                     `json:"public_origin_env,omitempty"`
+	ServiceAliases                []string                   `json:"service_aliases,omitempty"`
 }
 
 func (catalog *ImagePolicyCatalog) RequiredFlagImages() []string {
@@ -124,6 +132,7 @@ func ParseImagePolicies(contents []byte) (*ImagePolicyCatalog, error) {
 		return nil, errors.New("image policy file requires schema_version 1 or 2, managed_repositories, and images; networks require version 2")
 	}
 	catalog := &ImagePolicyCatalog{managed: make(map[string]struct{}), images: make(map[string]ImagePolicy), vmRequired: make(map[string]struct{}), graphByImage: make(map[string]*isolation.WorkloadNetwork), graphManagedRepositories: make(map[string]struct{})}
+	catalog.revision = fmt.Sprintf("sha256:%x", sha256.Sum256(contents))
 	for _, repository := range config.ManagedRepositories {
 		if repository == "" || repository != imageRepository(repository) || strings.ContainsAny(repository, "@: \t\r\n") {
 			return nil, fmt.Errorf("invalid managed image repository %q", repository)
@@ -152,6 +161,11 @@ func ParseImagePolicies(contents []byte) (*ImagePolicyCatalog, error) {
 		catalog.vmRequired[repository] = struct{}{}
 	}
 	for _, policy := range config.Images {
+		if len(policy.ServiceAliases) > 0 {
+			if policy.IsolationProfile != "WEB" || isolation.ValidateServiceAliases([]isolation.ContainerRequirement{{Name: policy.Container, ServiceAliases: policy.ServiceAliases}}) != nil {
+				return nil, errors.New("invalid trusted service alias policy")
+			}
+		}
 		if !validImmutableImageReference(policy.Image) {
 			return nil, fmt.Errorf("image policy requires an immutable image: %q", policy.Image)
 		}
@@ -253,6 +267,19 @@ func (catalog *ImagePolicyCatalog) AllowsCISmoke(image string) bool {
 }
 
 func validateImagePolicyRequirements(policy ImagePolicy) error {
+	if (policy.SteadyCPUMillicores != 0 || policy.StartupCPUMillicores != 0) &&
+		(policy.IsolationProfile != "WEB" || policy.SteadyCPUMillicores < 1 || policy.StartupCPUMillicores <= policy.SteadyCPUMillicores || policy.StartupCPUMillicores > 2000) {
+		return errors.New("startup CPU policy requires a WEB image and a positive steady CPU below a peak of at most 2000m")
+	}
+	if policy.TerminationGracePeriodSeconds != nil && (*policy.TerminationGracePeriodSeconds < 1 || !isolation.ValidTerminationGracePeriod(*policy.TerminationGracePeriodSeconds)) {
+		return errors.New("termination_grace_period_seconds must be between 1 and 300")
+	}
+	if policy.PublicOriginEnv != "" && (policy.PublicOriginEnv != "PUBLIC_ORIGIN" || policy.IsolationProfile != "WEB" || len(policy.ExposedPorts) != 1) {
+		return errors.New("public_origin_env requires PUBLIC_ORIGIN on a single-endpoint WEB image")
+	}
+	if !isolation.ValidShutdownStrategy(isolation.WorkloadProfile(policy.IsolationProfile), policy.ShutdownStrategy) {
+		return errors.New("unsupported shutdown strategy for image profile")
+	}
 	if policy.TCPStartupOnly && (policy.IsolationProfile != "PWN" || policy.ReadinessHTTP != nil) {
 		return errors.New("tcp_startup_only requires a PWN image without HTTP readiness")
 	}
@@ -313,6 +340,15 @@ func validateImagePolicyRequirements(policy ImagePolicy) error {
 // Apply replaces caller-supplied requirements only for exact, reviewed image
 // digests. Unknown digests in managed repositories fail closed.
 func (catalog *ImagePolicyCatalog) Apply(request *CreateWorkloadRequest) error {
+	if request != nil && request.Workload.SteadyCPUMillicores != 0 {
+		if catalog == nil || len(request.Workload.Containers) != 1 || request.IsolationProfile != "WEB" || request.Target.RuntimeType != RuntimeTypeKubernetes {
+			return ErrImagePolicyRejected
+		}
+		policy, ok := catalog.StartupCPUProfiles()[request.Workload.Containers[0].Image]
+		if !ok || policy.Steady != request.Workload.SteadyCPUMillicores || policy.Peak != request.Workload.ResourceLimits.CPUMillicores {
+			return ErrImagePolicyRejected
+		}
+	}
 	if catalog == nil || request == nil {
 		return nil
 	}
@@ -346,7 +382,7 @@ func (catalog *ImagePolicyCatalog) Apply(request *CreateWorkloadRequest) error {
 		if policy.Status != "create_enabled" {
 			return fmt.Errorf("%w: image is not ready for deployment", ErrImagePolicyRejected)
 		}
-		if policy.Container != container.Name || policy.IsolationProfile != request.IsolationProfile || !slices.Equal(policy.Ports, container.Ports) {
+		if policy.Container != container.Name || policy.IsolationProfile != request.IsolationProfile || !samePolicyPorts(policy.Ports, container.Ports) {
 			return fmt.Errorf("%w: image, container, profile, or ports do not match", ErrImagePolicyRejected)
 		}
 		selected[index] = policy
@@ -388,13 +424,28 @@ func (catalog *ImagePolicyCatalog) Apply(request *CreateWorkloadRequest) error {
 	}
 	for index, policy := range selected {
 		container := &request.Workload.Containers[index]
+		if policy.PublicOriginEnv != "" {
+			if request.Target.RuntimeType != RuntimeTypeKubernetes {
+				return fmt.Errorf("%w: public origin requires a Kubernetes Gateway workload", ErrImagePolicyRejected)
+			}
+			if _, supplied := container.Env[policy.PublicOriginEnv]; supplied {
+				return fmt.Errorf("%w: public origin is controlled by Runtime", ErrImagePolicyRejected)
+			}
+		}
+		container.publicOriginEnv = policy.PublicOriginEnv
 		container.requiresFlag = policy.RequiresFlag
 		container.flagFilePath = policy.FlagFilePath
 		container.tcpStartupOnly = policy.TCPStartupOnly
+		container.shutdownStrategy = policy.ShutdownStrategy
+		container.terminationGracePeriodSeconds = 0
+		if policy.TerminationGracePeriodSeconds != nil {
+			container.terminationGracePeriodSeconds = *policy.TerminationGracePeriodSeconds
+		}
 		container.RunAsUser = policy.RunAsUser
 		container.Expose = false
 		container.ExposedPorts = slices.Clone(policy.ExposedPorts)
 		container.WritablePaths = slices.Clone(policy.WritablePaths)
+		container.serviceAliases = slices.Clone(policy.ServiceAliases)
 		if policy.ReadinessHTTP != nil {
 			readiness := *policy.ReadinessHTTP
 			container.readinessHTTP = &readiness

@@ -87,10 +87,11 @@ type OperationResponse struct {
 }
 
 type OperationResultResponse struct {
-	RuntimeWorkloadID string                     `json:"runtime_workload_id"`
-	ServiceURL        string                     `json:"service_url,omitempty"`
-	Endpoints         []WorkloadEndpointResponse `json:"endpoints,omitempty"`
-	Status            string                     `json:"status,omitempty"`
+	SteadyCPUMillicores int                        `json:"steady_cpu_millicores,omitempty"`
+	RuntimeWorkloadID   string                     `json:"runtime_workload_id"`
+	ServiceURL          string                     `json:"service_url,omitempty"`
+	Endpoints           []WorkloadEndpointResponse `json:"endpoints,omitempty"`
+	Status              string                     `json:"status,omitempty"`
 }
 
 type WorkloadEndpointResponse struct {
@@ -100,7 +101,7 @@ type WorkloadEndpointResponse struct {
 	ServiceURL     string `json:"service_url"`
 	Hostname       string `json:"hostname,omitempty"`
 	ConnectionPort int    `json:"connection_port,omitempty"`
-	TLS            bool   `json:"tls,omitempty"`
+	TLS            *bool  `json:"tls,omitempty"`
 	ServerName     string `json:"server_name,omitempty"`
 }
 
@@ -316,9 +317,10 @@ func newOperationResultResponse(operation operations.Operation) *OperationResult
 			return nil
 		}
 		response := &OperationResultResponse{
-			RuntimeWorkloadID: operation.Result.Create.RuntimeWorkloadID,
-			ServiceURL:        operation.Result.Create.ServiceURL,
-			Endpoints:         make([]WorkloadEndpointResponse, 0, len(operation.Result.Create.Endpoints)),
+			SteadyCPUMillicores: operation.Result.Create.SteadyCPUMillicores,
+			RuntimeWorkloadID:   operation.Result.Create.RuntimeWorkloadID,
+			ServiceURL:          operation.Result.Create.ServiceURL,
+			Endpoints:           make([]WorkloadEndpointResponse, 0, len(operation.Result.Create.Endpoints)),
 		}
 		for _, endpoint := range operation.Result.Create.Endpoints {
 			response.Endpoints = append(response.Endpoints, newWorkloadEndpointResponse(endpoint))
@@ -338,11 +340,15 @@ func newOperationResultResponse(operation operations.Operation) *OperationResult
 }
 
 func newWorkloadEndpointResponse(endpoint provisioner.WorkloadEndpoint) WorkloadEndpointResponse {
+	var transportTLS *bool
+	if endpoint.Hostname != "" || endpoint.ConnectionPort != 0 || endpoint.ServerName != "" || endpoint.TLS {
+		transportTLS = &endpoint.TLS
+	}
 	return WorkloadEndpointResponse{
 		ContainerName: endpoint.ContainerName,
 		Port:          endpoint.Port,
 		Protocol:      string(endpoint.Protocol),
 		ServiceURL:    endpoint.ServiceURL,
-		Hostname:      endpoint.Hostname, ConnectionPort: endpoint.ConnectionPort, TLS: endpoint.TLS, ServerName: endpoint.ServerName,
+		Hostname:      endpoint.Hostname, ConnectionPort: endpoint.ConnectionPort, TLS: transportTLS, ServerName: endpoint.ServerName,
 	}
 }

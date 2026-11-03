@@ -62,6 +62,9 @@ func (a *Adapter) CreateWorkload(ctx context.Context, c provisioner.CreateWorklo
 	return a.CreateWorkloadForOperation(ctx, c, "")
 }
 func (a *Adapter) CreateWorkloadForOperation(ctx context.Context, c provisioner.CreateWorkloadCommand, op string) (result provisioner.CreateWorkloadResult, err error) {
+	if c, err = a.bindPublicOrigin(ctx, c); err != nil {
+		return result, err
+	}
 	_, lookupErr := a.journal.Get(ctx, c.InstanceID)
 	if errors.Is(lookupErr, ErrNotFound) && !a.backend.Enabled(c.TargetID) {
 		return a.backend.CreateWorkloadForOperation(ctx, c, op)
@@ -119,7 +122,7 @@ func (a *Adapter) CreateWorkloadForOperation(ctx context.Context, c provisioner.
 			route, putErr := a.remote.Put(ctx, c.InstanceID, record.Destination)
 			if putErr != nil {
 				var apiErr *APIError
-				if errors.As(putErr, &apiErr) && (apiErr.Code == "GATEWAY_TARGET_IN_USE" || apiErr.Code == "TARGET_IN_USE" || apiErr.Code == "GATEWAY_INSTANCE_CONFLICT" || apiErr.Code == "INSTANCE_CONFLICT") {
+				if errors.As(putErr, &apiErr) && (apiErr.Code == "GATEWAY_TARGET_IN_USE" || apiErr.Code == "TARGET_IN_USE" || apiErr.Code == "GATEWAY_INSTANCE_CONFLICT" || apiErr.Code == "INSTANCE_CONFLICT" || apiErr.Code == "GATEWAY_OWNER_CONFLICT" || apiErr.Code == "OWNER_CONFLICT" || apiErr.Code == "GATEWAY_CONTRACT_UNCONFIRMED") {
 					record.Phase = PhaseConflictHold
 					if err := s.Save(record); err != nil {
 						return hold("GATEWAY_JOURNAL_UNAVAILABLE", err)
@@ -135,6 +138,12 @@ func (a *Adapter) CreateWorkloadForOperation(ctx context.Context, c provisioner.
 				}
 				return hold(errorCode(putErr), putErr)
 			}
+			if !publicOriginMatches(c, route) {
+				if cleanupErr := a.remove(ctx, s, record); cleanupErr != nil {
+					return provisioner.WithCreateCleanupPending(cleanupErr, provisioner.CreateCleanup{RuntimeWorkloadID: record.Result.RuntimeWorkloadID, NamespaceUID: record.Result.NamespaceUID, FailureCode: "GATEWAY_ORIGIN_MISMATCH"})
+				}
+				return provisioner.WithCreateCleanupCompleted(operations.NewExecutionError("GATEWAY_ORIGIN_MISMATCH", false, nil))
+			}
 			record.Route = route
 			record.Phase = PhaseApplied
 			if saveErr := s.Save(record); saveErr != nil {
@@ -147,7 +156,10 @@ func (a *Adapter) CreateWorkloadForOperation(ctx context.Context, c provisioner.
 	// Callback paths classify journal/remote uncertainty explicitly. Preserve
 	// backend runtime errors and cleanup proof wrappers exactly as returned.
 	if err != nil && !callbackRan {
-		err = hold("GATEWAY_JOURNAL_UNAVAILABLE", err)
+		var pending *operations.ProgressPendingError
+		if !errors.As(err, &pending) {
+			err = hold("GATEWAY_JOURNAL_UNAVAILABLE", err)
+		}
 	}
 	return result, err
 }
@@ -157,10 +169,15 @@ func publicResult(r Record) provisioner.CreateWorkloadResult {
 	for i := range result.Endpoints {
 		e := &result.Endpoints[i]
 		e.Hostname = r.Route.Hostname
-		e.ConnectionPort = 443
-		e.TLS = true
-		e.ServerName = r.Route.Hostname
-		e.ServiceURL = "tls://" + net.JoinHostPort(r.Route.Hostname, strconv.Itoa(443))
+		e.ConnectionPort = r.Route.Port
+		e.TLS = r.Route.TLS
+		e.ServerName = ""
+		scheme := "tcp"
+		if r.Route.TLS {
+			scheme = "tls"
+			e.ServerName = r.Route.Hostname
+		}
+		e.ServiceURL = scheme + "://" + net.JoinHostPort(r.Route.Hostname, strconv.Itoa(r.Route.Port))
 		if r.Destination.Protocol == "http" && r.Route.URL != nil {
 			e.ServiceURL = *r.Route.URL
 		}
@@ -236,10 +253,20 @@ func (a *Adapter) remove(ctx context.Context, s Session, r Record) error {
 		if quiesceErr != nil {
 			return hold("GATEWAY_WORKLOAD_STOP_PENDING", quiesceErr)
 		}
+	} else if err := a.backend.Quiesce(ctx, r); err != nil {
+		// Route deletion is durable, but pod termination may still be in progress
+		// after a retry or restart. Wait before handing the namespace to its controller.
+		return hold("GATEWAY_WORKLOAD_STOP_PENDING", err)
 	}
 	binding := recoveryBinding(r)
 	command := provisioner.DeleteWorkloadCommand{RequestID: r.Command.RequestID, InstanceID: r.Command.InstanceID, TeamID: r.Command.TeamID, TargetID: r.Command.TargetID, RuntimeType: r.Command.RuntimeType, RuntimeWorkloadID: r.Result.RuntimeWorkloadID}
-	if err := a.backend.DeleteWorkload(ctx, command, binding); err != nil {
+	deleteWorkload := a.backend.DeleteWorkload
+	if stepper, ok := a.backend.(interface {
+		DeleteWorkloadStep(context.Context, provisioner.DeleteWorkloadCommand, runtimebinding.Binding) error
+	}); ok {
+		deleteWorkload = stepper.DeleteWorkloadStep
+	}
+	if err := deleteWorkload(ctx, command, binding); err != nil {
 		return hold("GATEWAY_WORKLOAD_DELETE_PENDING", err)
 	}
 	r.Phase = PhaseDeleted

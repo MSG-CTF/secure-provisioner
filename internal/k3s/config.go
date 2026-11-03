@@ -8,7 +8,9 @@ import (
 	"strings"
 
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/util/flowcontrol"
 	metricsclient "k8s.io/metrics/pkg/client/clientset/versioned"
 )
 
@@ -208,12 +210,20 @@ func (c registrySecurityCapabilities) clusterCapabilities() SecurityCapabilities
 
 type KubeconfigClientFactory struct{}
 
-func (KubeconfigClientFactory) FromKubeconfig(path string) (ClientSet, error) {
-	config, err := clientcmd.BuildConfigFromFlags("", path)
-	if err != nil {
-		return ClientSet{}, err
-	}
-	kubernetesClient, err := kubernetes.NewForConfig(config)
+// Lifecycle operations verify ownership and isolation after each mutation. The
+// client-go default of five requests per second serialized those checks across
+// all workers on a target during a team reset. Keep a bounded per-target budget
+// shared by the Kubernetes and metrics clients instead of multiplying it by
+// API group or worker count.
+const lifecycleClientQPS float32 = 20
+const lifecycleClientBurst = 40
+
+func lifecycleClients(config *rest.Config) (ClientSet, error) {
+	config = rest.CopyConfig(config)
+	config.QPS = lifecycleClientQPS
+	config.Burst = lifecycleClientBurst
+	config.RateLimiter = flowcontrol.NewTokenBucketRateLimiter(config.QPS, config.Burst)
+	client, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return ClientSet{}, err
 	}
@@ -221,7 +231,15 @@ func (KubeconfigClientFactory) FromKubeconfig(path string) (ClientSet, error) {
 	if err != nil {
 		return ClientSet{}, err
 	}
-	return ClientSet{Kubernetes: kubernetesClient, Metrics: metrics}, nil
+	return ClientSet{Kubernetes: client, Metrics: metrics, restConfig: config}, nil
+}
+
+func (KubeconfigClientFactory) FromKubeconfig(path string) (ClientSet, error) {
+	config, err := clientcmd.BuildConfigFromFlags("", path)
+	if err != nil {
+		return ClientSet{}, err
+	}
+	return lifecycleClients(config)
 }
 
 // FromKubeconfigData constructs independent clients from already verified,
@@ -231,13 +249,5 @@ func (KubeconfigClientFactory) FromKubeconfigData(raw []byte) (ClientSet, error)
 	if err != nil {
 		return ClientSet{}, err
 	}
-	client, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return ClientSet{}, err
-	}
-	metrics, err := metricsclient.NewForConfig(config)
-	if err != nil {
-		return ClientSet{}, err
-	}
-	return ClientSet{Kubernetes: client, Metrics: metrics}, nil
+	return lifecycleClients(config)
 }

@@ -122,7 +122,7 @@ func NewBrokerSync(registry *Registry, config BrokerSyncConfig) (*BrokerSync, er
 		if _, err := validateClusterConfig(cfg, map[string]struct{}{}); err != nil {
 			return nil, brokerError("BROKER_STATE_POLICY_INVALID")
 		}
-		targets[id] = Cluster{Config: cfg, Client: clients.Kubernetes, Metrics: clients.Metrics}
+		targets[id] = Cluster{Config: cfg, Client: clients.Kubernetes, Metrics: clients.Metrics, restConfig: cloneRESTConfig(clients.restConfig)}
 	}
 	registry.replaceSnapshot(targets)
 	return s, nil
@@ -268,7 +268,7 @@ func (s *BrokerSync) prepare(ctx context.Context, credential brokerCredential, s
 		return fail()
 	}
 	entry := brokerStateEntry{Config: normalized, Credential: credential, DesiredEnabled: normalized.Enabled}
-	return entry, Cluster{Config: normalized, Client: clients.Kubernetes, Metrics: clients.Metrics}, nil
+	return entry, Cluster{Config: normalized, Client: clients.Kubernetes, Metrics: clients.Metrics, restConfig: cloneRESTConfig(clients.restConfig)}, nil
 }
 
 // Sync enrolls only resources not already registered. Existing credentials,

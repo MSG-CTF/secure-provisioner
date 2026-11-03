@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "nodes": [
+    {
+      "target_id": "REPLACE_WITH_PREAPPROVED_RUNTIME_TARGET_ID",
+      "node_name": "replace-with-reviewed-node-name",
+      "machine_id": "REPLACE_FROM_TRUSTED_PROVISIONING_IDENTITY",
+      "provider_id": "REPLACE_WITH_EXACT_NODE_PROVIDER_ID_OR_EMPTY_IF_UNSET",
+      "architecture": "AMD64",
+      "namespace": "runtime-image-preparation",
+      "agent_image": "REPLACE_WITH_REVIEWED_AGENT_IMAGE_AT_SHA256",
+      "allow_replacement": false
+    }
+  ]
+}

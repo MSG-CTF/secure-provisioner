@@ -3,15 +3,61 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestClientAcceptsExplicitTCPTransportAndRejectsInvalidMetadata(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(file, []byte("synthetic-runtime-token"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, protocol, transport string
+		valid                     bool
+	}{
+		{"plaintext TCP", "tcp", `"port":42817,"tls":false,"url":null`, true},
+		{"TLS TCP on assigned port", "tcp", `"port":42818,"tls":true,"url":null`, true},
+		{"legacy TLS TCP", "tcp", `"port":443,"tls":true,"url":null`, true},
+		{"legacy HTTPS", "http", `"port":443,"tls":true,"url":"https://abc.gate.msgctf.kr"`, true},
+		{"missing TLS", "tcp", `"port":42817,"url":null`, false},
+		{"null TLS", "tcp", `"port":42817,"tls":null,"url":null`, false},
+		{"zero port", "tcp", `"port":0,"tls":false,"url":null`, false},
+		{"negative port", "tcp", `"port":-1,"tls":false,"url":null`, false},
+		{"oversized port", "tcp", `"port":65536,"tls":false,"url":null`, false},
+		{"plaintext HTTP", "http", `"port":443,"tls":false,"url":"https://abc.gate.msgctf.kr"`, false},
+		{"HTTP assigned port", "http", `"port":42817,"tls":true,"url":"https://abc.gate.msgctf.kr"`, false},
+		{"TCP URL payload", "tcp", `"port":42817,"tls":false,"url":"tcp://abc.gate.msgctf.kr:42817"`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := fmt.Sprintf(`{"instance_id":"instance-1","hostname":"abc.gate.msgctf.kr","protocol":%q,"created_at":"2026-10-24T00:00:00Z",%s}`, tc.protocol, tc.transport)
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(body)) }))
+			defer server.Close()
+			client, err := NewClient(server.URL, file, 90*time.Second, server.Client().Transport)
+			if err != nil {
+				t.Fatal(err)
+			}
+			route, err := client.Put(context.Background(), "instance-1", Destination{TargetIP: "8.8.8.8", TargetPort: 31042, Protocol: tc.protocol})
+			if (err == nil) != tc.valid {
+				t.Fatalf("route=%+v, err=%v, want valid=%v", route, err, tc.valid)
+			}
+			if tc.valid {
+				var want Route
+				if err := json.Unmarshal([]byte(body), &want); err != nil || !reflect.DeepEqual(route, want) {
+					t.Fatalf("returned transport changed: got=%+v want=%+v err=%v", route, want, err)
+				}
+			}
+		})
+	}
+}
 
 func TestClientQueuesWorkerBurstWithoutExceedingRemoteConcurrency(t *testing.T) {
 	var active, maximum atomic.Int32

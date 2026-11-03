@@ -57,6 +57,8 @@ func TestOperationCodecReadsLegacyExposureWithoutNewField(t *testing.T) {
 
 func TestOperationCodecRoundTripsResolvedCreateCommand(t *testing.T) {
 	command := validResolvedPwnCommand(t)
+	command.ReleaseID = "11111111-1111-4111-8111-111111111111"
+	command.Architecture = "AMD64"
 	command.RequestFingerprint = "caller-input-fingerprint"
 	want, err := operations.NewCreateOperation("op-1", command, 4)
 	if err != nil {

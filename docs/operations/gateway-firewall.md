@@ -19,6 +19,20 @@ bypasses the guard. LOCAL matches the K3s NodePort dispatcher scope; matching
 only a port range would incorrectly drop private workload traffic. This is an
 external-ingress guard at PREROUTING.
 
+For single-NIC nodes, set `ingress_interface` to the hardware NIC receiving
+external traffic, for example `ens4` on the verified GCP nodes. The helper refuses
+a missing, virtual, or ambiguous NIC before changing any rule. The scoped jump
+keeps Pod return traffic outside this external-ingress guard. This matters when
+NodePort source NAT selects a temporary source port in 30000:32767: its SYN-ACK
+returns to a node-local CNI address and otherwise matches the old global jump.
+
+Applying a scoped configuration migrates the exact legacy global jump by
+attaching the complete scoped guard first, then removing the exact old rule.
+External protection stays active throughout the migration, including a failed
+removal or process interruption. Repeating `apply` completes that migration;
+`verify` rejects a remaining legacy jump. Legacy configurations without this
+field retain their previous behavior until the operator stages the new scope.
+
 Install the helper at `/usr/local/sbin/msgctf-gateway-nodeport-firewall.py` and
 static config at `/etc/secure-provisioner/gateway-nodeport-firewall.json`.
 Config and parents must be root-owned and not group/world writable. The existing

@@ -15,6 +15,7 @@ import (
 
 	"github.com/MSG-CTF/secure-provisioner/internal/gateway"
 	"github.com/MSG-CTF/secure-provisioner/internal/httpapi"
+	"github.com/MSG-CTF/secure-provisioner/internal/imageprep"
 	"github.com/MSG-CTF/secure-provisioner/internal/isolation"
 	"github.com/MSG-CTF/secure-provisioner/internal/k3s"
 	"github.com/MSG-CTF/secure-provisioner/internal/operations"
@@ -22,14 +23,17 @@ import (
 	"github.com/MSG-CTF/secure-provisioner/internal/runtimeops"
 	"github.com/MSG-CTF/secure-provisioner/internal/runtimepg"
 	"github.com/MSG-CTF/secure-provisioner/internal/vm"
+	"github.com/MSG-CTF/secure-provisioner/internal/windowsruntime"
 )
 
 type appConfig struct {
+	ImagePreparation      imagePreparationConfig
 	APIOnly               bool
 	Address               string
 	RegistryPath          string
 	Broker                k3s.BrokerSyncConfig
 	VMTargetsPath         string
+	WindowsConfigPath     string
 	ImagePoliciesPath     string
 	BackendSecretURL      string
 	BackendSecretToken    string
@@ -46,6 +50,7 @@ type appConfig struct {
 	GatewayTokenFile      string
 	GatewayTimeout        time.Duration
 	GatewayMaxInflight    int
+	GatewayTCPTransport   gateway.PublicTransport
 }
 
 type application struct {
@@ -110,6 +115,7 @@ func loadConfig(getenv func(string) string) (appConfig, error) {
 	}
 	config := appConfig{
 		VMTargetsPath:      strings.TrimSpace(getenv("PROVISIONER_VM_TARGETS")),
+		WindowsConfigPath:  strings.TrimSpace(getenv("PROVISIONER_WINDOWS_CONFIG")),
 		Address:            valueOrDefault(getenv("PROVISIONER_ADDR"), "127.0.0.1:8080"),
 		RegistryPath:       strings.TrimSpace(getenv("PROVISIONER_CLUSTER_REGISTRY")),
 		ImagePoliciesPath:  strings.TrimSpace(getenv("PROVISIONER_IMAGE_POLICIES")),
@@ -144,7 +150,13 @@ func loadConfig(getenv func(string) string) (appConfig, error) {
 	if config.ServiceAuth, err = loadServiceAuthConfig(getenv); err != nil {
 		return appConfig{}, err
 	}
+	if config.ImagePreparation, err = loadImagePreparationConfig(getenv, config.ServiceAuth); err != nil {
+		return appConfig{}, err
+	}
 	if config.RuntimeStore, err = loadRuntimeStoreConfig(getenv); err != nil {
+		return appConfig{}, err
+	}
+	if err = validateWindowsSettings(config.WindowsConfigPath, config.RuntimeStore.Mode); err != nil {
 		return appConfig{}, err
 	}
 	config.WorkerConcurrency = config.RuntimeStore.Workers
@@ -153,6 +165,12 @@ func loadConfig(getenv func(string) string) (appConfig, error) {
 	}
 	if config.GatewayMaxInflight, err = positiveIntSetting(getenv, "PROVISIONER_GATEWAY_MAX_INFLIGHT", config.GatewayMaxInflight); err != nil {
 		return appConfig{}, err
+	}
+	if config.GatewayTCPTransport, err = gateway.ParseTCPTransport(getenv("PROVISIONER_GATEWAY_TCP_TRANSPORT")); err != nil {
+		return appConfig{}, fmt.Errorf("PROVISIONER_GATEWAY_TCP_TRANSPORT: %w", err)
+	}
+	if config.GatewayTCPTransport != gateway.TransportLegacy && config.GatewayTokenFile == "" {
+		return appConfig{}, errors.New("Gateway TCP contract draft requires PROVISIONER_GATEWAY_RUNTIME_TOKEN_FILE")
 	}
 	if config.MaxAttempts, err = positiveIntSetting(getenv, "PROVISIONER_MAX_ATTEMPTS", config.MaxAttempts); err != nil {
 		return appConfig{}, err
@@ -261,13 +279,18 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 	// Assigned once below, before workers or HTTP handlers can run. The closure
 	// also protects queued K3s commands when the local catalog predates VM scopes.
 	var vmRoute *vm.Router
+	var preparation *imageprep.Service
 	createAdapter, err := k3s.NewAdapter(registry, k3s.AdapterConfig{
+		ReadyImageNodes: func(ctx context.Context, target, arch string, images []string) []string {
+			return preparation.ReadyNodes(ctx, target, arch, images)
+		},
 		ReadyTimeout:       config.ReadyTimeout,
 		PollInterval:       config.PollInterval,
 		RollbackTimeout:    config.RollbackTimeout,
 		Secrets:            secretResolver,
 		RequiredFlagImages: imagePolicies.RequiredFlagImages(),
 		RequiredFlagFiles:  imagePolicies.RequiredFlagFiles(),
+		StartupCPUProfiles: imagePolicies.StartupCPUProfiles(),
 		RequiresVMImage: func(image string) bool {
 			return imagePolicies.RequiresVMImage(image) || vmRoute.RequiresVMImage(image)
 		},
@@ -290,8 +313,10 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 	var operationStore operations.Store = operations.NewMemoryStore(nil)
 	var deleteCoordinator runtimeops.DeleteCoordinator
 	var closeStore func() error
+	var preparationStore imageprep.Store
 	var gatewayJournal gateway.Journal
 	liveGatewayRoutes := false
+	var windowsStore *windowsruntime.PostgresStore
 	readiness := httpapi.ReadinessConfig{StoreMode: config.RuntimeStore.Mode, APIOnly: config.APIOnly}
 	if config.RuntimeStore.Mode == "postgres" {
 		openStore := runtimepg.Open
@@ -307,11 +332,25 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 		deleteCoordinator = database.DeleteCoordinator()
 		closeStore = database.Close
 		readiness.CheckDatabase = database.CheckReadiness
+		preparationStore = database.ImagePreparations()
 		gatewayJournal = database.GatewayJournal()
 		liveGatewayRoutes, err = database.GatewayJournal().HasLiveRoutes(context.Background())
 		if err != nil {
 			_ = database.Close()
 			return nil, err
+		}
+		if config.WindowsConfigPath != "" {
+			windowsStore = database.WindowsExecutions()
+			checkWindowsSchema := windowsStore.Check
+			if config.APIOnly {
+				checkWindowsSchema = windowsStore.CheckBridge
+			}
+			readiness.CheckDatabase = func(ctx context.Context) error {
+				if err := database.CheckReadiness(ctx); err != nil {
+					return err
+				}
+				return checkWindowsSchema(ctx)
+			}
 		}
 	}
 	var create runtimeops.CreateAdapter = createAdapter
@@ -348,7 +387,7 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 			_ = closeStore()
 			return nil, clientErr
 		}
-		adapter := gateway.NewAdapter(&gateway.KubernetesBackend{Registry: registry, Create: create, Delete: deleteWorkload}, client, gatewayJournal)
+		adapter := gateway.NewAdapter(&gateway.KubernetesBackend{Registry: registry, Create: create, Delete: deleteWorkload, TCPTransport: config.GatewayTCPTransport}, client, gatewayJournal)
 		create, deleteWorkload = adapter, adapter
 		config.RollbackTimeout = max(config.RollbackTimeout, config.GatewayTimeout+config.DeleteTimeout+10*time.Second)
 	}
@@ -381,9 +420,47 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 		}
 		return nil, err
 	}
+	windows, checker, windowsErr := initializeWindows(config, windowsStore)
+	if windowsErr != nil {
+		if closeStore != nil {
+			_ = closeStore()
+		}
+		return nil, windowsErr
+	}
+	runWorkers := service.Run
+	if config.ImagePreparation.Auth.Enabled {
+		if preparationStore == nil || imagePolicies == nil {
+			if closeStore != nil {
+				_ = closeStore()
+			}
+			return nil, errors.New("image preparation requires PostgreSQL and an approved image policy catalog")
+		}
+		transport, parseErr := imageprep.NewFileTransport(config.ImagePreparation.NodesPath, k3s.KubernetesImageRunner(registry))
+		if parseErr != nil {
+			_ = closeStore()
+			return nil, parseErr
+		}
+		preparation = imageprep.NewService(preparationStore, k3s.ImageInventory{Registry: registry}, imagePolicies, transport, config.ImagePreparation.Worker)
+		runWorkers = func(ctx context.Context) error {
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			done := make(chan error, 2)
+			go func() { done <- service.Run(ctx) }()
+			go func() { done <- preparation.Run(ctx) }()
+			first := <-done
+			cancel()
+			return errors.Join(first, <-done)
+		}
+	}
+	if windows != nil {
+		priorRun := runWorkers
+		runWorkers = func(ctx context.Context) error { return runCombinedWorkers(ctx, priorRun, windows.Run) }
+	}
+	handler := httpapi.NewHandlerWithWindows(service, service, config.ServiceAuth, imagePolicies, readiness, vmPolicy, windowsUseCase(windows), checkerUseCase(checker))
+	handler = httpapi.WithImagePreparations(handler, preparation, config.ImagePreparation.Auth)
 	app := &application{
-		handler:   httpapi.NewHandlerWithVM(service, service, config.ServiceAuth, imagePolicies, readiness, vmPolicy),
-		runWorker: service.Run,
+		handler:   handler,
+		runWorker: runWorkers,
 		close:     closeStore,
 	}
 	if broker != nil {

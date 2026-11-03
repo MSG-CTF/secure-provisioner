@@ -1,0 +1,5 @@
+{
+  "base_domain": "gate.msgctf.kr",
+  "gateway_public_ip": "REPLACE_WITH_GATEWAY_PUBLIC_IP",
+  "tcp_public_ports": {"start": 40000, "end": 49999}
+}

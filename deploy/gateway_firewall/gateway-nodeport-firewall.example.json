@@ -1,5 +1,6 @@
 {
   "schema_version": 1,
+  "ingress_interface": "ens4",
   "gateway_ipv4_sources": ["34.172.6.196/32"],
   "gateway_ipv6_sources": []
 }

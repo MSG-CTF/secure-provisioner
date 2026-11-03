@@ -1,1 +1,1 @@
-"""Explicitly operated Gateway-only NodePort protection; not activated by deployment."""
+"""Gateway firewall policy and regression tests included in deployment CI."""

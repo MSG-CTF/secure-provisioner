@@ -61,6 +61,7 @@ func NewRegistry(configs []ClusterConfig, factory ClientFactory) (*Registry, err
 		metricsIdentities[metricsIdentity] = struct{}{}
 		cluster.Client = clients.Kubernetes
 		cluster.Metrics = clients.Metrics
+		cluster.restConfig = cloneRESTConfig(clients.restConfig)
 		targets[config.TargetID] = cluster
 	}
 
@@ -152,6 +153,7 @@ func validateClusterConfig(config ClusterConfig, seenTargetIDs map[string]struct
 }
 
 func copyCluster(cluster Cluster) Cluster {
+	cluster.restConfig = cloneRESTConfig(cluster.restConfig)
 	if cluster.Config.Gateway != nil {
 		copy := *cluster.Config.Gateway
 		cluster.Config.Gateway = &copy

@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh approved image-agent Node UIDs after boot or replacement
+
+[Timer]
+OnBootSec=45s
+OnUnitInactiveSec=30s
+AccuracySec=5s
+RandomizedDelaySec=5s
+Unit=image-prefetch-enroll.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target

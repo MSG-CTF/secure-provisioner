@@ -9,6 +9,65 @@ import (
 const validCurrentServiceToken = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 const validPreviousServiceToken = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
 const validCISmokeServiceToken = "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+const validCheckerServiceToken = "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE"
+const validInternalCheckerToken = "IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII"
+const validExternalCheckerToken = "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
+const validWindowsRecoveryToken = "RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR"
+
+func TestLoadServiceAuthConfigScopesWindowsRecoveryToken(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "windows-recovery-token")
+	if err := os.WriteFile(path, []byte(validWindowsRecoveryToken+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config, err := loadServiceAuthConfig(environment(map[string]string{
+		"PROVISIONER_SERVICE_TOKEN":               validCurrentServiceToken,
+		"PROVISIONER_WINDOWS_RECOVERY_TOKEN_FILE": path,
+	}))
+	if err != nil || config.WindowsRecoveryToken != validWindowsRecoveryToken {
+		t.Fatalf("recovery token missing: %v", err)
+	}
+	for _, conflicting := range []string{validCurrentServiceToken, validCheckerServiceToken} {
+		values := map[string]string{
+			"PROVISIONER_SERVICE_TOKEN":          validCurrentServiceToken,
+			"PROVISIONER_CHECKER_SERVICE_TOKEN":  validCheckerServiceToken,
+			"PROVISIONER_WINDOWS_RECOVERY_TOKEN": conflicting,
+		}
+		if _, err := loadServiceAuthConfig(environment(values)); err == nil {
+			t.Fatalf("reused recovery token accepted: %q", conflicting)
+		}
+	}
+}
+
+func TestLoadServiceAuthConfigScopesTwoCheckerBackends(t *testing.T) {
+	config, err := loadServiceAuthConfig(environment(map[string]string{
+		"PROVISIONER_SERVICE_TOKEN":                  validCurrentServiceToken,
+		"PROVISIONER_CHECKER_INTERNAL_SERVICE_TOKEN": validInternalCheckerToken,
+		"PROVISIONER_CHECKER_EXTERNAL_SERVICE_TOKEN": validExternalCheckerToken,
+	}))
+	if err != nil || config.CheckerBackendTokens["internal"] != validInternalCheckerToken || config.CheckerBackendTokens["external"] != validExternalCheckerToken {
+		t.Fatalf("checker backends not loaded: %+v %v", config, err)
+	}
+	for _, values := range []map[string]string{
+		{"PROVISIONER_CHECKER_INTERNAL_SERVICE_TOKEN": validInternalCheckerToken, "PROVISIONER_CHECKER_EXTERNAL_SERVICE_TOKEN": validInternalCheckerToken},
+		{"PROVISIONER_CHECKER_INTERNAL_SERVICE_TOKEN": validCurrentServiceToken, "PROVISIONER_CHECKER_EXTERNAL_SERVICE_TOKEN": validExternalCheckerToken},
+		{"PROVISIONER_CHECKER_SERVICE_TOKEN": validCheckerServiceToken, "PROVISIONER_CHECKER_INTERNAL_SERVICE_TOKEN": validInternalCheckerToken},
+	} {
+		values["PROVISIONER_SERVICE_TOKEN"] = validCurrentServiceToken
+		if _, err := loadServiceAuthConfig(environment(values)); err == nil {
+			t.Fatalf("conflicting checker tokens accepted: %+v", values)
+		}
+	}
+}
+
+func TestLoadServiceAuthConfigRequiresDedicatedCheckerToken(t *testing.T) {
+	config, err := loadServiceAuthConfig(environment(map[string]string{"PROVISIONER_SERVICE_TOKEN": validCurrentServiceToken, "PROVISIONER_CHECKER_SERVICE_TOKEN": validCheckerServiceToken}))
+	if err != nil || config.CheckerToken != validCheckerServiceToken {
+		t.Fatalf("checker token missing: %v", err)
+	}
+	if _, err := loadServiceAuthConfig(environment(map[string]string{"PROVISIONER_SERVICE_TOKEN": validCurrentServiceToken, "PROVISIONER_CHECKER_SERVICE_TOKEN": validCurrentServiceToken})); err == nil {
+		t.Fatal("full service token was reused for checker")
+	}
+}
 
 func TestLoadServiceAuthConfigReadsScopedCITokenFromFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ci-token")

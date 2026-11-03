@@ -94,6 +94,9 @@ func TestDeleteAdapterUsesNamespaceUIDAndResourceVersionPreconditions(t *testing
 	client := fake.NewSimpleClientset(namespace)
 	client.PrependReactor("delete", "namespaces", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		options := action.(k8stesting.DeleteAction).GetDeleteOptions()
+		if options.PropagationPolicy == nil || *options.PropagationPolicy != metav1.DeletePropagationBackground || options.GracePeriodSeconds != nil {
+			t.Fatalf("namespace cleanup must retain normal finalization and pod grace: %#v", options)
+		}
 		if options.Preconditions == nil || options.Preconditions.UID == nil ||
 			string(*options.Preconditions.UID) != binding.NamespaceUID ||
 			options.Preconditions.ResourceVersion == nil || *options.Preconditions.ResourceVersion != namespace.ResourceVersion {
