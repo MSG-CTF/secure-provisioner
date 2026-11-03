@@ -101,6 +101,19 @@ class PublicationTests(unittest.TestCase):
         p["workload_networks"] = []
         with self.assertRaises(sync.SyncError): sync.extend_policy(p, publication()[2])
 
+    def test_one_operator_template_supports_future_digests_with_conflicting_historical_profiles(self):
+        p=policy(); historical={**copy.deepcopy(p["images"][0]), "image": OLD[:-64]+"c"*64, "run_as_user": 31337}
+        p["images"].append(historical)
+        templates={OLD.split("@")[0]:OLD}
+        updated,added=sync.extend_policy(p,publication()[2],templates)
+        self.assertEqual(added,[NEW]);self.assertEqual(updated["images"][-1]["run_as_user"],10001)
+        self.assertEqual(updated["images"][1],historical)
+        second=copy.deepcopy(publication()[2]);second["workload"]["containers"][0]["image"]=OLD[:-64]+"d"*64
+        updated,added=sync.extend_policy(updated,second,templates)
+        self.assertEqual(added,[OLD[:-64]+"d"*64]);self.assertEqual(updated["images"][-1]["run_as_user"],10001)
+        templates[OLD.split("@")[0]]=OLD[:-64]+"e"*64
+        with self.assertRaises(sync.SyncError):sync.extend_policy(p,publication()[2],templates)
+
     def fixture(self, directory):
         p = Path(directory)
         config = {"repository": REPO, "branch": "main", "workflow": WORKFLOW, "policy_file": str(p/"policy.json"),
