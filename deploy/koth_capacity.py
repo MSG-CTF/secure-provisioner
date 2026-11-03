@@ -196,12 +196,85 @@ def kubectl(args, body=None):
     return result.stdout
 
 
+def dependency_plan(backend, coordinator, node, agent):
+    """Four fixed 1-CPU/640Mi runners fit the reviewed dedicated 4-CPU node."""
+    if (backend["metadata"].get("namespace") != "dependency-hell" or backend["metadata"]["name"] != "backend"
+            or coordinator["metadata"].get("namespace") != "dependency-hell-judge-control"
+            or coordinator["metadata"]["name"] != "dependency-hell-coordinator"):
+        raise ValueError("Unexpected Dependency Hell deployment")
+    allocation = node["status"]["allocatable"]
+    cpu = allocation["cpu"]
+    millicpu = int(cpu[:-1]) if cpu.endswith("m") else int(cpu) * 1000
+    memory = allocation["memory"]
+    factor = {"Ki": 1, "Mi": 1024, "Gi": 1024 * 1024}
+    memory_kib = next((int(memory[:-2]) * size for suffix, size in factor.items() if memory.endswith(suffix)), 0)
+    if millicpu < 4000 or memory_kib < 3584 * 1024:
+        raise ValueError("Four runners need the dedicated 4-CPU, 4-GB node")
+    conditions = {c["type"]: c["status"] for c in node["status"]["conditions"]}
+    if conditions.get("Ready") != "True" or any(conditions.get(k) == "True" for k in ("MemoryPressure", "DiskPressure", "PIDPressure")):
+        raise ValueError("Runner node is not healthy")
+    games = [g for g in agent["games"] if g["challenge_id"] == "323a66d7-c0e1-5263-965e-58319cb3a7f4"]
+    if len(games) != 1 or games[0].get("workloads", {}).get("backend", {}).get("max_replicas", 0) < 4:
+        raise ValueError("Environment agent must approve four backend replicas")
+    for deployment in (backend, coordinator):
+        for c in deployment["spec"]["template"]["spec"]["containers"]:
+            if not re.fullmatch(r"ghcr\.io/msg-ctf/challenges/koth-dependency-hell/[a-z0-9_-]+@sha256:[0-9a-f]{64}", c["image"]):
+                raise ValueError("Dependency Hell needs its approved immutable images")
+    template = copy.deepcopy(coordinator["spec"]["template"])
+    containers = template["spec"]["containers"]
+    if len(containers) != 1 or containers[0]["name"] != "judge-coordinator":
+        raise ValueError("Unexpected coordinator container layout")
+    c = containers[0]
+    c["env"] = [e for e in c.get("env", []) if e["name"] != "MAX_ACTIVE_EVALUATIONS"]
+    c["env"].append({"name": "MAX_ACTIVE_EVALUATIONS", "value": "4"})
+    if not 1 <= backend["spec"].get("replicas", 1) <= 4:
+        raise ValueError("Review the existing backend replica count")
+    return template
+
+
+def tune_dependency(state_dir, apply):
+    backend = json.loads(kubectl(["-n", "dependency-hell", "get", "deployment", "backend", "-o", "json"]))
+    coordinator = json.loads(kubectl(["-n", "dependency-hell-judge-control", "get", "deployment", "dependency-hell-coordinator", "-o", "json"]))
+    node = json.loads(kubectl(["get", "node", "msg-koth-dependency-hell-runner", "-o", "json"]))
+    agent = json.loads(Path("/etc/msgctf-koth-environment/agent.json").read_text())
+    template = dependency_plan(backend, coordinator, node, agent)
+    changed = template != coordinator["spec"]["template"] or backend["spec"].get("replicas", 1) != 4
+    if apply and changed:
+        jobs = json.loads(kubectl(["-n", "dependency-hell-judge-runners", "get", "jobs", "-o", "json"]))
+        if jobs["items"]:
+            raise ValueError("Wait for active runner jobs to be cleaned before capacity changes")
+        resident = json.loads(kubectl(["get", "pods", "-A", "--field-selector", "spec.nodeName=msg-koth-dependency-hell-runner", "-o", "json"]))
+        if any(p["status"]["phase"] not in ("Succeeded", "Failed") for p in resident["items"]):
+            raise ValueError("The four reserved CPU slots must be free on the dedicated runner node")
+        state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        backup = state_dir / "dependency-before.json"
+        if not backup.exists():
+            backup.write_text(json.dumps({"backend": backend, "coordinator": coordinator})); backup.chmod(0o600)
+        changes = [(coordinator, "/spec/template", template), (backend, "/spec/replicas", 4)]
+        for deployment, path, value in changes:
+            original = deployment["spec"]["template"] if path.endswith("template") else deployment["spec"].get("replicas", 1)
+            if original == value:
+                continue
+            meta = deployment["metadata"]
+            scoped = ["-n", meta["namespace"]]
+            kubectl(scoped + ["patch", "deployment", meta["name"], "--type=json", "--patch-file=/dev/stdin"],
+                [{"op": "test", "path": "/metadata/resourceVersion", "value": meta["resourceVersion"]},
+                 {"op": "replace", "path": path, "value": value}])
+            kubectl(scoped + ["rollout", "status", "deployment/" + meta["name"], "--timeout=180s"])
+    return {"game": "dependency-hell", "changes_needed": changed, "applied": bool(apply and changed),
+            "backend_replicas": 4, "coordinator_slots": 4, "runner_limits_unchanged": True,
+            "game_images_changed": False, "game_source_changed": False}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("game", choices=("jenga", "swanopoly"))
+    parser.add_argument("game", choices=("jenga", "swanopoly", "dependency-hell"))
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--state-dir", type=Path, default=Path("/var/lib/msgctf-koth-capacity"))
     args = parser.parse_args()
+    if args.game == "dependency-hell":
+        print(json.dumps(tune_dependency(args.state_dir, args.apply)))
+        return
     scoped = ["-n", "koth-" + args.game]
     deployment = json.loads(kubectl(scoped + ["get", "deployment", "game", "-o", "json"]))
     template = capacity_template(args.game, deployment)

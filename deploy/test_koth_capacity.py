@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
 
-from koth_capacity import capacity_template, SQLITE_INIT, jenga_gateway
+from koth_capacity import capacity_template, SQLITE_INIT, jenga_gateway, dependency_plan
 
 
 def deployment(game):
@@ -26,6 +26,22 @@ def deployment(game):
 
 
 class CapacityProfiles(unittest.TestCase):
+    def test_dependency_capacity_keeps_the_runner_contract_and_requires_a_healthy_sized_node(self):
+        backend=deployment('dependency-hell'); backend['metadata'].update(name='backend',namespace='dependency-hell'); backend['spec']['replicas']=2
+        backend['spec']['template']['spec']['containers']=[copy.deepcopy(backend['spec']['template']['spec']['containers'][1])]
+        coordinator=copy.deepcopy(backend);coordinator['metadata'].update(namespace='dependency-hell-judge-control',name='dependency-hell-coordinator')
+        c=coordinator['spec']['template']['spec']['containers'][0];c['name']='judge-coordinator';c['image']=c['image'].replace('/backend@','/judge-coordinator@')
+        node={'status':{'allocatable':{'cpu':'4','memory':'4001392Ki'},'conditions':[{'type':'Ready','status':'True'}]}}
+        agent={'games':[{'challenge_id':'323a66d7-c0e1-5263-965e-58319cb3a7f4','workloads':{'backend':{'max_replicas':8}}}]}
+        changed=dependency_plan(backend,coordinator,node,agent)
+        self.assertEqual(changed['spec']['containers'][0]['env'][-1],{'name':'MAX_ACTIVE_EVALUATIONS','value':'4'})
+        self.assertEqual(changed['spec']['containers'][0]['resources'],c['resources'])
+        self.assertEqual(changed['spec']['containers'][0]['image'],c['image'])
+        node['status']['allocatable']['cpu']='2'
+        with self.assertRaises(ValueError):dependency_plan(backend,coordinator,node,agent)
+        node['status']['allocatable']['cpu']='4';node['status']['conditions'].append({'type':'MemoryPressure','status':'True'})
+        with self.assertRaises(ValueError):dependency_plan(backend,coordinator,node,agent)
+
     def test_gateway_bounds_game_upstream_and_preserves_auth_and_release_routes(self):
         original='''game.example {
  @released expression `approved-time-window`
