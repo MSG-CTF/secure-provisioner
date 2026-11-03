@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
 
-from koth_capacity import capacity_template, SQLITE_INIT
+from koth_capacity import capacity_template, SQLITE_INIT, jenga_gateway
 
 
 def deployment(game):
@@ -26,6 +26,30 @@ def deployment(game):
 
 
 class CapacityProfiles(unittest.TestCase):
+    def test_gateway_bounds_game_upstream_and_preserves_auth_and_release_routes(self):
+        original='''game.example {
+ @released expression `approved-time-window`
+ reverse_proxy 10.0.0.1:8080 {
+  header_up Cookie protected
+  transport http {
+   response_header_timeout 160s
+  }
+ }
+ reverse_proxy https://msgctf.kr {
+  transport http {
+   response_header_timeout 3s
+  }
+ }
+}
+'''
+        changed=jenga_gateway(original,'10.0.0.1:8080')
+        self.assertEqual(changed.count('max_conns_per_host 8'),1)
+        self.assertEqual(changed.replace('  \tmax_conns_per_host 8\n',''),original)
+        self.assertEqual(jenga_gateway(changed,'10.0.0.1:8080'),changed)
+        unindented='\n'.join(line.lstrip() for line in original.splitlines())+'\n'
+        self.assertEqual(jenga_gateway(unindented,'10.0.0.1:8080').count('max_conns_per_host 8'),1)
+        with self.assertRaises(ValueError):jenga_gateway(original,'another-upstream:8080')
+
     def test_jenga_preserves_author_command_image_pvc_and_security(self):
         original = deployment("jenga")
         snapshot = copy.deepcopy(original)

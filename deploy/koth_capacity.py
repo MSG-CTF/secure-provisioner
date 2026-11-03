@@ -2,7 +2,9 @@
 """Apply reviewed KOTH capacity settings without replacing game code or images."""
 import argparse
 import copy
+import hashlib
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -78,6 +80,98 @@ def capacity_template(game, deployment):
     return builder(deployment["spec"]["template"])
 
 
+def jenga_gateway(text, upstream):
+    """Bound Python/SQLite concurrency; retain every existing gateway boundary."""
+    lines = text.splitlines(keepends=True)
+    def block_end(start):
+        depth = 1
+        for position in range(start + 1, len(lines)):
+            token = lines[position].strip()
+            if token == "}":
+                depth -= 1
+                if depth == 0:
+                    return position
+            elif token.endswith("{"):
+                depth += 1
+        raise ValueError("Unexpected gateway block")
+    found = 0
+    for index in reversed(range(len(lines))):
+        match = re.fullmatch(r"([ \t]*)reverse_proxy " + re.escape(upstream) + r" \{\s*\n?", lines[index])
+        if not match:
+            continue
+        indent = match[1]
+        end = block_end(index)
+        transport = next((i for i in range(index + 1, end) if lines[i].strip() == "transport http {"), None)
+        if transport is None:
+            lines[index + 1:index + 1] = [indent + "\ttransport http {\n", indent + "\t\tmax_conns_per_host 8\n", indent + "\t}\n"]
+        else:
+            prefix = re.match(r"[ \t]*", lines[transport])[0]
+            close = block_end(transport)
+            if close >= end:
+                raise ValueError("Unexpected HTTP transport block")
+            old = [i for i in range(transport + 1, close) if lines[i].strip().startswith("max_conns_per_host ")]
+            if old:
+                if len(old) != 1 or lines[old[0]].strip() != "max_conns_per_host 8":
+                    raise ValueError("Existing connection limit needs operator review")
+            else:
+                lines.insert(transport + 1, prefix + "\tmax_conns_per_host 8\n")
+        found += 1
+    if not 1 <= found <= 8:
+        raise ValueError("Expected the reviewed game upstream in the gateway")
+    return "".join(lines)
+
+
+def tune_jenga_gateway(state_dir, upstream):
+    target = Path("/etc/msgctf-koth/Caddyfile")
+    original = target.read_text(encoding="utf-8")
+    candidate = jenga_gateway(original, upstream)
+    if candidate == original:
+        return False
+    digest = lambda text: hashlib.sha256(text.encode()).hexdigest()
+    restores = []
+    for path in target.parent.glob("rehearsal-*/state.json"):
+        state = json.loads(path.read_text())
+        if state.get("candidate_hash") == digest(original):
+            restore_file = path.parent / "original.Caddyfile"
+            restore_original = restore_file.read_text()
+            if state.get("original_hash") != digest(restore_original):
+                raise ValueError("Scheduled gateway restore changed; do not overwrite")
+            restores.append((path, state, restore_file, jenga_gateway(restore_original, upstream)))
+    if len(restores) > 1:
+        raise ValueError("More than one active gateway restore")
+    state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    for name, text in [("jenga-gateway", candidate)] + [("jenga-event-gateway", row[3]) for row in restores]:
+        check = state_dir / (name + ".candidate")
+        check.write_text(text)
+        check.chmod(0o600)
+        result = subprocess.run(["/usr/local/bin/caddy", "validate", "--config", str(check), "--adapter", "caddyfile"], capture_output=True, timeout=20)
+        if result.returncode:
+            raise RuntimeError("Caddy rejected the capacity settings")
+    def replace(path, text):
+        meta = path.stat()
+        temporary = state_dir / (path.name + ".install")
+        temporary.write_text(text)
+        temporary.chmod(meta.st_mode & 0o777)
+        os.chown(temporary, meta.st_uid, meta.st_gid)
+        os.replace(temporary, path)
+    # Preserve both QA and event schedules; the existing close job checks these hashes.
+    for path, state, restore_file, restored in restores:
+        backup = state_dir / "jenga-rehearsal-state-before.json"
+        if not backup.exists():
+            backup.write_text(json.dumps(state)); backup.chmod(0o600)
+        replace(restore_file, restored)
+        state.update(candidate_hash=digest(candidate), original_hash=digest(restored))
+        replace(path, json.dumps(state))
+    backup = state_dir / "jenga-Caddyfile-before"
+    if not backup.exists():
+        backup.write_text(original); backup.chmod(0o600)
+    if target.read_text() != original:
+        raise ValueError("Gateway changed during capacity validation")
+    replace(target, candidate)
+    subprocess.run(["systemctl", "reload", "msg-koth-gateway"], check=True, capture_output=True, timeout=25)
+    return True
+
+
 def kubectl(args, body=None):
     result = subprocess.run(["/usr/local/bin/k3s", "kubectl", *args],
         input=json.dumps(body).encode() if body is not None else None, capture_output=True, timeout=210)
@@ -96,6 +190,11 @@ def main():
     deployment = json.loads(kubectl(scoped + ["get", "deployment", "game", "-o", "json"]))
     template = capacity_template(args.game, deployment)
     changed = template != deployment["spec"]["template"]
+    gateway_changed = False
+    if args.apply and args.game == "jenga":
+        service = json.loads(kubectl(scoped + ["get", "service", "game", "-o", "json"]))
+        upstream = service["spec"]["clusterIP"] + ":8080"
+        gateway_changed = tune_jenga_gateway(args.state_dir, upstream)
     if args.apply and changed:
         if args.game == "jenga":
             actual = kubectl(scoped + ["exec", "deployment/game", "-c", "jenga", "--", "python", "-c",
@@ -113,7 +212,7 @@ def main():
         kubectl(scoped + ["patch", "deployment", "game", "--type=json", "--patch-file=/dev/stdin"], patch)
         kubectl(scoped + ["rollout", "status", "deployment/game", "--timeout=180s"])
     print(json.dumps({"game": args.game, "changes_needed": changed, "applied": bool(args.apply and changed),
-                      "game_images_changed": False, "game_source_changed": False}))
+                      "gateway_updated": gateway_changed, "game_images_changed": False, "game_source_changed": False}))
 
 
 if __name__ == "__main__":
