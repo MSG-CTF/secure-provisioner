@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/MSG-CTF/secure-provisioner/internal/testpki"
 	"github.com/google/uuid"
 )
 
@@ -22,6 +23,10 @@ import (
 // Linux. The CLI requires the public VM address on port 443. All services in this
 // harness bind loopback, use dummy credentials, and never execute the fixture.
 func exerciseClient(t *testing.T, redirect, sharedCredential bool) (error, int32, []string) {
+	return exerciseClientAuth(t, redirect, sharedCredential, false)
+}
+
+func exerciseClientAuth(t *testing.T, redirect, sharedCredential, useMTLS bool) (error, int32, []string) {
 	t.Helper()
 	const brokerToken = "local-test-broker-only-token-0123456789"
 	const executorToken = "local-test-vm-only-executor-token-9876543210"
@@ -62,7 +67,12 @@ func exerciseClient(t *testing.T, redirect, sharedCredential bool) (error, int32
 		t.Fatalf("loopback port 443 is required for the CLI contract: %v", err)
 	}
 	vm := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer "+executorToken {
+		if useMTLS && (r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || r.Header.Get("Authorization") != "") {
+			t.Error("VM mTLS was not isolated from bearer authentication")
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if !useMTLS && r.Header.Get("Authorization") != "Bearer "+executorToken {
 			t.Error("VM received a credential other than its dedicated executor token")
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
@@ -85,6 +95,13 @@ func exerciseClient(t *testing.T, redirect, sharedCredential bool) (error, int32
 	}))
 	_ = vm.Listener.Close()
 	vm.Listener = listener
+	ca := testpki.NewClientCA(t)
+	_, clientPEM, clientKeyPEM := ca.Client(t)
+	if useMTLS {
+		pool := x509.NewCertPool()
+		pool.AddCert(ca.Certificate)
+		vm.TLS = &tls.Config{ClientCAs: pool, ClientAuth: tls.RequireAndVerifyClientCert, MinVersion: tls.VersionTLS12}
+	}
 	vm.StartTLS()
 	defer vm.Close()
 	roots := x509.NewCertPool()
@@ -100,6 +117,8 @@ func exerciseClient(t *testing.T, redirect, sharedCredential bool) (error, int32
 	certificate := filepath.Join(directory, "vm.pem")
 	brokerFile := filepath.Join(directory, "broker-token")
 	executorFile := filepath.Join(directory, "executor-token")
+	clientFile := filepath.Join(directory, "runtime-client.pem")
+	clientKeyFile := filepath.Join(directory, "runtime-client-key.pem")
 	binary := filepath.Join(directory, "fixture.exe")
 	vmCredential := executorToken
 	if sharedCredential {
@@ -108,17 +127,36 @@ func exerciseClient(t *testing.T, redirect, sharedCredential bool) (error, int32
 	files := map[string][]byte{
 		certificate: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: vm.Certificate().Raw}),
 		brokerFile:  []byte(brokerToken), executorFile: []byte(vmCredential), binary: []byte("MZ-local-harmless-fixture"),
+		clientFile: clientPEM, clientKeyFile: clientKeyPEM,
 	}
 	for path, data := range files {
 		if err := os.WriteFile(path, data, 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	err = run(vm.URL, broker.URL, uuid.NewString(), certificate, brokerFile, executorFile, binary, 2)
+	if useMTLS {
+		err = runWithMTLS(vm.URL, broker.URL, uuid.NewString(), certificate, brokerFile, "", clientFile, clientKeyFile, binary, 2)
+	} else {
+		err = run(vm.URL, broker.URL, uuid.NewString(), certificate, brokerFile, executorFile, binary, 2)
+	}
 	mu.Lock()
 	recorded := append([]string(nil), events...)
 	mu.Unlock()
 	return err, redirected.Load(), recorded
+}
+
+func TestClientMTLSDoesNotSendBrokerOrExecutorBearerToVM(t *testing.T) {
+	err, redirected, events := exerciseClientAuth(t, false, false, true)
+	if err != nil || redirected != 0 || strings.Join(events, ",") != "started,finished" {
+		t.Fatalf("mTLS flow failed: err=%v redirected=%d events=%v", err, redirected, events)
+	}
+}
+
+func TestClientRejectsMixedVMAuthenticationBeforeAnyBrokerEvent(t *testing.T) {
+	err := runWithMTLS("https://127.0.0.1", "https://127.0.0.1", uuid.NewString(), "server.pem", "broker-token", "vm-token", "client.pem", "client-key.pem", "fixture.exe", 2)
+	if err == nil || !strings.Contains(err.Error(), "exactly one complete VM authentication mode") {
+		t.Fatalf("mixed mode accepted: %v", err)
+	}
 }
 
 func TestClientUsesSeparateCredentialsAndCompletes(t *testing.T) {

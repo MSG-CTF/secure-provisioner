@@ -29,13 +29,15 @@ func main() {
 	certPath := flag.String("cert", "", "VM server certificate PEM file")
 	tokenPath := flag.String("token-file", "", "Runtime-to-Broker API token file, never sent to a VM")
 	executorTokenPath := flag.String("executor-token-file", "", "dedicated API token file for this Windows VM")
+	clientCertPath := flag.String("client-cert", "", "Runtime mTLS client certificate; exclusive with executor-token-file")
+	clientKeyPath := flag.String("client-key", "", "Runtime mTLS private key; kept on the Runtime host")
 	binaryPath := flag.String("exe", "", "compiled Windows EXE")
 	timeout := flag.Int("timeout", 30, "execution timeout in seconds (1-300)")
 	flag.Parse()
 	if flag.NArg() != 0 {
 		fail(errors.New("unexpected arguments"))
 	}
-	if err := run(*vmURL, *brokerURL, *target, *certPath, *tokenPath, *executorTokenPath, *binaryPath, *timeout); err != nil {
+	if err := runWithMTLS(*vmURL, *brokerURL, *target, *certPath, *tokenPath, *executorTokenPath, *clientCertPath, *clientKeyPath, *binaryPath, *timeout); err != nil {
 		fail(err)
 	}
 }
@@ -46,6 +48,10 @@ func fail(err error) {
 }
 
 func run(rawURL, brokerURL, target, certPath, tokenPath, executorTokenPath, binaryPath string, timeout int) (runErr error) {
+	return runWithMTLS(rawURL, brokerURL, target, certPath, tokenPath, executorTokenPath, "", "", binaryPath, timeout)
+}
+
+func runWithMTLS(rawURL, brokerURL, target, certPath, tokenPath, executorTokenPath, clientCertPath, clientKeyPath, binaryPath string, timeout int) (runErr error) {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Scheme != "https" || net.ParseIP(u.Hostname()) == nil || (u.Port() != "" && u.Port() != "443") || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
 		return errors.New("VM URL must be https://<public-ip>[:443]")
@@ -61,8 +67,9 @@ func run(rawURL, brokerURL, target, certPath, tokenPath, executorTokenPath, bina
 	if timeout < 1 || timeout > 300 {
 		return errors.New("timeout must be 1-300 seconds")
 	}
-	if tokenPath == "" || executorTokenPath == "" {
-		return errors.New("Broker and executor token files are required")
+	useMTLS := clientCertPath != "" || clientKeyPath != ""
+	if tokenPath == "" || useMTLS && (clientCertPath == "" || clientKeyPath == "" || executorTokenPath != "") || !useMTLS && executorTokenPath == "" {
+		return errors.New("Broker token and exactly one complete VM authentication mode are required")
 	}
 	certificate, err := os.ReadFile(certPath)
 	if err != nil {
@@ -80,16 +87,26 @@ func run(rawURL, brokerURL, target, certPath, tokenPath, executorTokenPath, bina
 	if len(token) < 32 || strings.ContainsAny(token, "\r\n\t ") {
 		return errors.New("invalid Runtime-to-Broker API token")
 	}
-	executorTokenBytes, err := os.ReadFile(executorTokenPath)
-	if err != nil {
-		return fmt.Errorf("read executor token: %w", err)
-	}
-	executorToken := strings.TrimSpace(string(executorTokenBytes))
-	if len(executorToken) < 32 || strings.ContainsAny(executorToken, "\r\n\t ") {
-		return errors.New("invalid Windows executor API token")
-	}
-	if executorToken == token {
-		return errors.New("Windows executor and Broker must use different API tokens")
+	var executorToken string
+	tlsConfig := &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
+	if useMTLS {
+		pair, err := tls.LoadX509KeyPair(clientCertPath, clientKeyPath)
+		if err != nil {
+			return errors.New("Runtime mTLS client certificate or key is invalid")
+		}
+		tlsConfig.Certificates = []tls.Certificate{pair}
+	} else {
+		executorTokenBytes, err := os.ReadFile(executorTokenPath)
+		if err != nil {
+			return fmt.Errorf("read executor token: %w", err)
+		}
+		executorToken = strings.TrimSpace(string(executorTokenBytes))
+		if len(executorToken) < 32 || strings.ContainsAny(executorToken, "\r\n\t \x00") {
+			return errors.New("invalid Windows executor API token")
+		}
+		if executorToken == token {
+			return errors.New("Windows executor and Broker must use different API tokens")
+		}
 	}
 	file, err := os.Open(binaryPath)
 	if err != nil {
@@ -108,7 +125,7 @@ func run(rawURL, brokerURL, target, certPath, tokenPath, executorTokenPath, bina
 		return err
 	}
 	client := &http.Client{
-		Transport:     &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}},
+		Transport:     &http.Transport{TLSClientConfig: tlsConfig},
 		Timeout:       3 * time.Minute,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
@@ -139,7 +156,7 @@ func run(rawURL, brokerURL, target, certPath, tokenPath, executorTokenPath, bina
 		return err
 	}
 	request.ContentLength = info.Size()
-	request.Header.Set("Authorization", "Bearer "+executorToken)
+	setExecutorAuthorization(request, executorToken)
 	request.Header.Set("Content-Type", "application/octet-stream")
 	request.Header.Set("X-Content-SHA256", hex.EncodeToString(hash.Sum(nil)))
 	request.Header.Set("X-Timeout-Seconds", fmt.Sprint(timeout))
@@ -160,7 +177,7 @@ func run(rawURL, brokerURL, target, certPath, tokenPath, executorTokenPath, bina
 		if err != nil {
 			return err
 		}
-		request.Header.Set("Authorization", "Bearer "+executorToken)
+		setExecutorAuthorization(request, executorToken)
 		response, err = client.Do(request)
 		if err != nil {
 			return err
@@ -205,7 +222,7 @@ func run(rawURL, brokerURL, target, certPath, tokenPath, executorTokenPath, bina
 		if err != nil {
 			return err
 		}
-		request.Header.Set("Authorization", "Bearer "+executorToken)
+		setExecutorAuthorization(request, executorToken)
 		response, err = client.Do(request)
 		if err != nil {
 			return err
@@ -217,6 +234,12 @@ func run(rawURL, brokerURL, target, certPath, tokenPath, executorTokenPath, bina
 			return fmt.Errorf("EXE finished with status %s", result.Status)
 		}
 		return nil
+	}
+}
+
+func setExecutorAuthorization(request *http.Request, token string) {
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
 	}
 }
 

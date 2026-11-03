@@ -84,23 +84,19 @@ func createServerCertificate(certPath, keyPath, address string) error {
 	return nil
 }
 
-func serveAPI(root, tokenPath, certPath, keyPath string) error {
-	if root == "" || tokenPath == "" || certPath == "" || keyPath == "" {
-		return errors.New("executor API requires root, token and TLS files")
+func serveAPI(root, tokenPath, certPath, keyPath, clientCAPath string) error {
+	if root == "" || certPath == "" || keyPath == "" {
+		return errors.New("executor API requires root and TLS files")
 	}
-	rawToken, err := os.ReadFile(tokenPath)
+	api, tlsConfig, err := executorAuthentication(tokenPath, clientCAPath)
 	if err != nil {
 		return err
-	}
-	token := strings.TrimSpace(string(rawToken))
-	if len(token) < 32 || strings.ContainsAny(token, "\r\n\t ") {
-		return errors.New("invalid Windows executor API token")
 	}
 	root, err = filepath.Abs(root)
 	if err != nil {
 		return err
 	}
-	api := &executorAPI{root: root, tokenHash: sha256.Sum256([]byte(token))}
+	api.root = root
 	mux := http.NewServeMux()
 	mux.HandleFunc("PUT /v1/executions/{id}", api.submit)
 	mux.HandleFunc("GET /v1/executions/{id}", api.get)
@@ -110,19 +106,28 @@ func serveAPI(root, tokenPath, certPath, keyPath string) error {
 		Addr: ":443", Handler: api.authorize(mux),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 2 * time.Minute,
 		WriteTimeout: 3 * time.Minute, IdleTimeout: 30 * time.Second,
-		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12},
+		TLSConfig: tlsConfig,
 	}
 	return server.ListenAndServeTLS(certPath, keyPath)
 }
 
 type executorAPI struct {
-	root      string
-	tokenHash [32]byte
-	mu        sync.Mutex
+	root        string
+	tokenHash   [32]byte
+	requireMTLS bool
+	mu          sync.Mutex
 }
 
 func (api *executorAPI) authorize(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if api.requireMTLS {
+			if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 {
+				http.Error(w, "client certificate required", http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
+		}
 		values := r.Header.Values("Authorization")
 		if len(values) != 1 || !strings.HasPrefix(values[0], "Bearer ") {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="windows-executor"`)

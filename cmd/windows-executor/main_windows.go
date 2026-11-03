@@ -84,6 +84,7 @@ func main() {
 	initServer := flag.Bool("init-server", false, "create the server certificate")
 	serverIP := flag.String("server-ip", "", "public IP address in the server certificate")
 	tokenFile := flag.String("token-file", "", "dedicated API token file for this Windows VM")
+	clientCA := flag.String("client-ca", "", "CA certificate for Runtime mTLS clients; exclusive with token-file")
 	tlsCert := flag.String("tls-cert", "", "server certificate PEM file")
 	tlsKey := flag.String("tls-key", "", "server private key PEM file")
 	flag.Parse()
@@ -101,7 +102,7 @@ func main() {
 		return
 	}
 	if *serve {
-		if err := serveAPI(*root, *tokenFile, *tlsCert, *tlsKey); err != nil {
+		if err := serveAPI(*root, *tokenFile, *tlsCert, *tlsKey, *clientCA); err != nil {
 			fail(err)
 		}
 		return
