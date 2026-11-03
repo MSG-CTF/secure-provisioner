@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import stat
 import tempfile
 import time
@@ -125,10 +126,12 @@ class GitHub:
 
 
 def verified_bundle(api, artifact, *, repository, branch, workflow):
+    require(isinstance(artifact, dict))
     require(type(artifact.get("id")) is int and artifact["id"] > 0 and artifact.get("expired") is False)
     run_id = (artifact.get("workflow_run") or {}).get("id")
     require(type(run_id) is int and run_id > 0)
     run = api.request("/actions/runs/" + str(run_id))
+    require(isinstance(run, dict))
     require(run.get("id") == run_id and run.get("status") == "completed" and run.get("conclusion") == "success", "CI_NOT_SUCCESSFUL")
     require(run.get("event") in {"push", "workflow_dispatch"} and run.get("head_branch") == branch, "UNTRUSTED_SOURCE")
     require(run.get("repository", {}).get("full_name", "").lower() == repository.lower(), "UNTRUSTED_REPOSITORY")
@@ -149,6 +152,7 @@ def verified_bundle(api, artifact, *, repository, branch, workflow):
             document = decode(archive.read(members[0]))
     except (zipfile.BadZipFile, OSError):
         raise SyncError("INVALID_ARCHIVE") from None
+    require(isinstance(document, dict))
     require(document.get("schema_version") == "2.0" and document.get("challenge_slug") == match[1])
     require(document.get("source_sha") == sha and document.get("source_ref") == "refs/heads/" + branch)
     require(document.get("registry_revision") == run.get("run_number") and document.get("scan_result") == "PASS")
@@ -157,9 +161,11 @@ def verified_bundle(api, artifact, *, repository, branch, workflow):
     require(isinstance(containers, list) and 1 <= len(containers) <= 32)
     seen = set()
     for container in containers:
-        require(isinstance(container, dict) and container.get("name") not in seen)
+        require(isinstance(container, dict) and isinstance(container.get("name"), str))
+        require(re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", container["name"]) is not None and container["name"] not in seen)
         seen.add(container["name"])
         image = container.get("image", "")
+        require(isinstance(image, str))
         reference = IMAGE.fullmatch(image)
         require(reference is not None and reference[1] == document["challenge_slug"])
         ports = container.get("ports")
@@ -275,8 +281,9 @@ def synchronize(config, api, state, reload_policy, *, plan_only=False):
             successful.append((key, {"source_sha": document["source_sha"], "revision": document["registry_revision"],
                                      "run_id": artifact["workflow_run"]["id"], "images": images}))
             outcomes.append({"artifact_id": artifact["id"], "slug": document["challenge_slug"], "status": "VERIFIED", "new_images": len(images)})
-        except (SyncError, OSError, ValueError, KeyError, urllib.error.URLError) as error:
-            code = error.code if isinstance(error, SyncError) else "GITHUB_UNAVAILABLE"
+        except (SyncError, OSError, ValueError, KeyError, TypeError, AttributeError, urllib.error.URLError) as error:
+            code = error.code if isinstance(error, SyncError) else (
+                "GITHUB_UNAVAILABLE" if isinstance(error, OSError) else "INVALID_PUBLICATION")
             slug = re.sub(r"-[0-9]+-[0-9]+-[a-f0-9]+-publish-bundle$", "", artifact.get("name", ""))[:100]
             records[key] = {"status": "WAITING", "error_code": code, "next_check_at": time.time() + (30 if code == "CI_NOT_SUCCESSFUL" else 300)}
             outcomes.append({"artifact_id": artifact["id"], "slug": slug, "status": "WAITING", "error_code": code})
@@ -315,6 +322,10 @@ def load_config(path):
 
 
 def main():
+    def stop(signum, frame):
+        # Let the deployment helper finish its guarded rollback on service stop.
+        raise SystemExit(1)
+    signal.signal(signal.SIGTERM, stop)
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="/etc/secure-provisioner-publications/config.json")
     parser.add_argument("--plan", action="store_true")

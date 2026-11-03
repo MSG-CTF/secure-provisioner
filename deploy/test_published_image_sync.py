@@ -60,6 +60,7 @@ class PublicationTests(unittest.TestCase):
         mutations = [lambda a: a.run.update(conclusion="failure"), lambda a: a.run.update(head_branch="attacker"),
                      lambda a: a.run.update(event="pull_request"), lambda a: a.run.update(path="unreviewed.yml"),
                      lambda a: a.run.update(repository={"full_name": "elsewhere/fork"}),
+                     lambda a: a.run.update(head_repository={"full_name": "elsewhere/fork"}),
                      lambda a: a.document.update(source_sha="b" * 40), lambda a: a.document.update(scan_result="FAIL"),
                      lambda a: a.document.update(registry_revision=41), lambda a: a.artifact.update(expired=True),
                      lambda a: a.document["workload"]["containers"][0].update(image=NEW.replace("web-demo", "web-other"))]
@@ -140,6 +141,16 @@ class PublicationTests(unittest.TestCase):
             config = self.fixture(directory); state = {}
             with self.assertRaises(sync.SyncError): sync.synchronize(config, API(), state, lambda *a: None)
             self.assertNotIn("123", state["artifacts"])
+
+    def test_rejected_artifacts_back_off_without_repeated_downloads(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = self.fixture(directory); state = {}; api = API()
+            api.document["workload"]["containers"][0]["ports"] = [{"port": 9090}]
+            sync.synchronize(config, api, state, lambda *a: self.fail("no reload for rejected artifact"))
+            downloads = sum(path.endswith("/zip") for path in api.calls)
+            sync.synchronize(config, api, state, lambda *a: self.fail("no reload for rejected artifact"))
+            self.assertEqual(sum(path.endswith("/zip") for path in api.calls), downloads)
+            self.assertEqual(state["artifacts"]["123"]["status"], "WAITING")
 
 
 class PolicyHandoffTests(unittest.TestCase):
