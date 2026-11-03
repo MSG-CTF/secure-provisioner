@@ -175,7 +175,7 @@ def verified_bundle(api, artifact, *, repository, branch, workflow):
     return document
 
 
-def extend_policy(policy, document):
+def extend_policy(policy, document, templates=None):
     """Clone matching operator profiles, including the whole reviewed network set."""
     candidate = copy.deepcopy(policy)
     existing = {entry["image"]: entry for entry in policy["images"]}
@@ -184,6 +184,7 @@ def extend_policy(policy, document):
     reserved = set(policy.get("vm_required_repositories", []))
     replacements = {}
     added = []
+    templates = templates or {}
     for name, container in requested.items():
         image = container["image"]
         repo = image.split("@", 1)[0]
@@ -191,6 +192,8 @@ def extend_policy(policy, document):
         ports = sorted(p["port"] for p in container["ports"])
         profiles = [p for p in policy["images"] if p["image"].split("@", 1)[0] == repo and p["status"] == "create_enabled"
                     and p["container"] == name and p["isolation_profile"] == document["isolation_profile"] and sorted(p["ports"]) == ports]
+        if repo in templates:
+            profiles = [p for p in profiles if p["image"] == templates[repo]]
         require(bool(profiles), "EXECUTION_PROFILE_CHANGED")
         # A digest must not choose between conflicting operator requirements.
         forms = {json.dumps({k: v for k, v in p.items() if k != "image"}, sort_keys=True) for p in profiles}
@@ -277,7 +280,7 @@ def synchronize(config, api, state, reload_policy, *, plan_only=False):
             continue
         try:
             document = verified_bundle(api, artifact, repository=config["repository"], branch=config["branch"], workflow=config["workflow"])
-            candidate, images = extend_policy(candidate, document)
+            candidate, images = extend_policy(candidate, document, config.get("profile_templates"))
             successful.append((key, {"source_sha": document["source_sha"], "revision": document["registry_revision"],
                                      "run_id": artifact["workflow_run"]["id"], "images": images}))
             outcomes.append({"artifact_id": artifact["id"], "slug": document["challenge_slug"], "status": "VERIFIED", "new_images": len(images)})
@@ -312,12 +315,17 @@ def synchronize(config, api, state, reload_policy, *, plan_only=False):
 
 def load_config(path):
     config = decode(read_private(path))
-    require(set(config) == {"repository", "branch", "workflow", "token_file", "policy_file", "state_file", "max_pages"}, "INVALID_CONFIG")
+    required = {"repository", "branch", "workflow", "token_file", "policy_file", "state_file", "max_pages"}
+    require(required <= set(config) <= required | {"profile_templates"}, "INVALID_CONFIG")
     require(config["repository"] == "MSG-CTF/2026_MSG_CTF" and config["branch"] == "main", "INVALID_CONFIG")
     require(re.fullmatch(r"\.github/workflows/[-a-zA-Z0-9_.]+\.ya?ml", config["workflow"]) is not None, "INVALID_CONFIG")
     require(config["policy_file"] == "/etc/secure-provisioner/image-policies.json", "INVALID_CONFIG")
     require(config["state_file"] == "/var/lib/secure-provisioner-publications/state.json", "INVALID_CONFIG")
     require(type(config["max_pages"]) is int and 1 <= config["max_pages"] <= 20, "INVALID_CONFIG")
+    templates = config.get("profile_templates", {})
+    require(isinstance(templates, dict), "INVALID_CONFIG")
+    for repository, image in templates.items():
+        require(isinstance(image, str) and IMAGE.fullmatch(image) is not None and repository == image.split("@", 1)[0], "INVALID_CONFIG")
     return config
 
 

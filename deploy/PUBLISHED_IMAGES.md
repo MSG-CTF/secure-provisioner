@@ -18,6 +18,15 @@ profiles, explicitly blocked images and VM-required workloads remain fail closed
 These are execution-contract changes, not routine image updates. KOTH retains
 its existing publication/environment-agent path.
 
+If a repository has several intentionally different historical operator
+profiles, set an optional `profile_templates` object in the root configuration.
+Each key is a managed GHCR repository and its value is one existing approved
+image in that repository. Select the profile used by the site's current release
+once. All future digests copy that profile; historical digests are not rewritten.
+An absent, blocked or mismatched template remains fail closed. Update the template
+only when the operator intentionally changes the execution profile, not on each
+CI publication.
+
 ## One-time installation
 
 Install the reviewed release.py at /usr/local/lib/msgctf-deploy/release.py and a
