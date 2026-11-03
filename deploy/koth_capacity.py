@@ -263,7 +263,7 @@ def tune_dependency(state_dir, apply):
     hpa = json.loads(kubectl(["-n", "dependency-hell", "get", "hpa", "backend", "--ignore-not-found", "-o", "json"]) or b"null")
     hpa_spec = dependency_hpa_spec(hpa) if hpa else None
     changed = (template != coordinator["spec"]["template"] or backend["spec"].get("replicas", 1) < 4
-               or backend_template != backend["spec"]["template"] or hpa and hpa_spec != hpa["spec"])
+               or backend_template != backend["spec"]["template"] or bool(hpa and hpa_spec != hpa["spec"]))
     if apply and changed:
         jobs = json.loads(kubectl(["-n", "dependency-hell-judge-runners", "get", "jobs", "-o", "json"]))
         if jobs["items"]:
