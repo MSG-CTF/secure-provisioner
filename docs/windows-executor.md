@@ -1,10 +1,12 @@
 # Azure Windows executor
 
-Terraform installs `cmd/windows-executor` in each Azure Windows VM. Its HTTPS API
-listens on the VM public IP, port 443. The same `RUNTIME_API_TOKEN` used between
-Runtime and Broker is accepted as `Authorization: Bearer <token>`. The token is
-installed after Terraform with an Azure Managed Run Command protected parameter;
-it is not placed in Terraform state. The API certificate is self-signed for the
+The Windows executor HTTPS API listens on the VM public IP, port 443. Install it
+with a random credential dedicated to that VM, accepted as
+`Authorization: Bearer <token>`. Provision this executor credential through an
+Azure Managed Run Command protected parameter, outside Terraform state. Keep the
+Runtime-to-Broker credential on the trusted Runtime host; never install it in a
+participant VM. The client requires two token files and rejects equal values.
+The API certificate is self-signed for the
 VM public IP. Runtime must trust the certificate retrieved through Azure's
 control plane and must verify the IP address; do not disable TLS verification.
 
@@ -21,7 +23,7 @@ The VM accepts one execution at a time. `PUT /v1/executions/{uuid}` uploads a ra
 EXE of 1 to 64 MiB with these headers:
 
 ```text
-Authorization: Bearer <RUNTIME_API_TOKEN>
+Authorization: Bearer <VM_EXECUTOR_API_TOKEN>
 Content-Type: application/octet-stream
 X-Content-SHA256: <64 lowercase hexadecimal characters>
 X-Timeout-Seconds: <1..300>
@@ -36,18 +38,19 @@ at 64 KiB combined. `DELETE` removes a finished result and allows the next job.
 The same `PUT` ID and digest is accepted for an ambiguous retry; another job
 gets `409` until the result is deleted.
 
-Runtime can call the VM API with the client command. Use the Runtime's existing
-Broker token file, the Broker resource target UUID for the VM, its public IP,
-and the certificate fetched from that VM:
+Runtime can call the VM API with the client command. Use its Broker token file
+and this VM's separate executor token file, the Broker resource target UUID,
+the public IP, and the certificate fetched from that VM:
 
 ```powershell
-go run ./cmd/windows-executor-client -vm https://<VM_PUBLIC_IP> -broker https://broker.mjsec.kr/api -target <RESOURCE_TARGET_UUID> -cert <VM_SERVER_CERT_PEM> -token-file <RUNTIME_BROKER_TOKEN_FILE> -exe <COMPILED_WINDOWS_EXE> -timeout 30
+go run ./cmd/windows-executor-client -vm https://<VM_PUBLIC_IP> -broker https://broker.mjsec.kr/api -target <RESOURCE_TARGET_UUID> -cert <VM_SERVER_CERT_PEM> -token-file <RUNTIME_BROKER_TOKEN_FILE> -executor-token-file <VM_EXECUTOR_TOKEN_FILE> -exe <COMPILED_WINDOWS_EXE> -timeout 30
 ```
 
 The client first reports `started` to Broker. If Broker rejects the VM, it does
 not upload the EXE. It verifies the VM TLS certificate, uploads the EXE, polls
 the result, reports `finished` to Broker, checks that Broker returned
 `RESET_REQUIRED`, prints the result JSON, and deletes the finished VM job.
+Neither the VM client nor the Broker client follows HTTP redirects.
 If the VM call fails after `started`, it reports `finished` with `unreachable`
 so Broker still requires a clean reset. Broker state alone does not reset the
 VM; only confirm a reset with the completed execution ID after restoring a
@@ -59,3 +62,10 @@ code can access the VM network and may leave child processes after a timeout.
 Do not reuse a VM for another participant until it has been restored from a
 clean image. Backend upload, job ownership, and image restoration are not yet
 implemented.
+
+Before deployment, update the VM provisioner to deliver distinct executor
+credentials and verify the entire Azure run and clean-image reset with those
+credentials. If a VM previously received the Broker credential, replace it with
+a dedicated executor credential and revoke the exposed Broker credential through
+a coordinated rotation. These local client and server tests do not prove the
+Azure provisioning or reset path.

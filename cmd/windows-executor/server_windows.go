@@ -94,7 +94,7 @@ func serveAPI(root, tokenPath, certPath, keyPath string) error {
 	}
 	token := strings.TrimSpace(string(rawToken))
 	if len(token) < 32 || strings.ContainsAny(token, "\r\n\t ") {
-		return errors.New("invalid Runtime API token")
+		return errors.New("invalid Windows executor API token")
 	}
 	root, err = filepath.Abs(root)
 	if err != nil {

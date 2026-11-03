@@ -83,7 +83,7 @@ func main() {
 	serve := flag.Bool("serve", false, "serve the executor API")
 	initServer := flag.Bool("init-server", false, "create the server certificate")
 	serverIP := flag.String("server-ip", "", "public IP address in the server certificate")
-	tokenFile := flag.String("token-file", "", "Runtime API token file")
+	tokenFile := flag.String("token-file", "", "dedicated API token file for this Windows VM")
 	tlsCert := flag.String("tls-cert", "", "server certificate PEM file")
 	tlsKey := flag.String("tls-key", "", "server private key PEM file")
 	flag.Parse()
