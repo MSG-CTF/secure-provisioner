@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | Jenga | 동시 50팀 로그인 중 SQLite 잠금으로 500 6건 발생, WAL·CPU 증설 후에도 동시 조회·제출에서 잠금 재현 | 기존 SQLite 파일을 WAL로 열고 CPU 상한 1코어·메모리 상한 512Mi 적용, Caddy에서 게임 연결을 8개로 제한 |
 | Swanopoly | 75팀 동시 공식 봇 제출 중 대기열 64개 상한으로 7건이 QUEUE_FULL 응답 | test·submit의 RUNNER_MAX_WAIT_QUEUE를 각각 128로 설정 |
-| Dependency Hell | 75개 미캐시 실행은 모두 PASS했지만 두 실행 슬롯에서 마지막 결과까지 870초 소요 | 기존 4코어 실행 노드에서 coordinator 슬롯 4개·public backend replica 4개 사용 |
+| Dependency Hell | 두 실행 슬롯에서 75개 채점에 최대 870초 소요, replica만 늘리면 CPU 기반 HPA가 대기 중에도 다시 2개로 축소 | coordinator 슬롯 4개·backend HPA 하한 4개, 대기 작업을 한 건씩 확보 |
 
 게임 이미지와 출제자 코드는 바꾸지 않는다
 Jenga의 기존 실행 명령 앞에 게임과 같은 승인 이미지의 초기화 컨테이너를 추가한다
@@ -31,6 +31,10 @@ Swanopoly는 관리자 환경변수 버전에도 test·submit의 RUNNER_MAX_WAIT
 이후 환경변수 버전 전환에도 같은 값을 사용할 수 있도록 운영 설정을 함께 관리한다
 게임 소스의 기본값과 관리자 운영값은 별도로 유지한다
 Dependency Hell은 관리자 환경변수 버전의 judge-coordinator MAX_ACTIVE_EVALUATIONS도 4로 저장한다
+backend의 RECOVERY_BATCH_SIZE와 RECOVERY_INTERVAL_SECONDS도 각각 1로 저장한다
+HPA의 기존 최대 8개와 CPU 기준은 유지하고 최소 replica만 4개로 올린다
+작업자가 채점을 기다릴 때 CPU 사용량이 낮아져도 대기열 처리 인원이 줄지 않게 한다
+각 작업자가 대기 항목 16개를 먼저 임대하고 순서대로 처리하던 설정도 한 건씩 확보하도록 바꾼다
 실행 중인 Job이 없고 전용 실행 노드가 4코어·4GB이며 환경변수 에이전트가 backend 4개를 허용할 때만 확장한다
 기존 실행 파일·Hidden Test·20초 응답 패딩·Job별 1코어/640Mi 제한·gVisor·admission 정책은 유지한다
 

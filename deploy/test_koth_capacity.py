@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
 
-from koth_capacity import capacity_template, SQLITE_INIT, jenga_gateway, dependency_plan
+from koth_capacity import capacity_template, SQLITE_INIT, jenga_gateway, dependency_plan, dependency_hpa_spec, dependency_backend_template
 
 
 def deployment(game):
@@ -26,6 +26,24 @@ def deployment(game):
 
 
 class CapacityProfiles(unittest.TestCase):
+    def test_dependency_hpa_cannot_scale_waiting_workers_below_four(self):
+        hpa={'metadata':{'name':'backend','namespace':'dependency-hell'},'spec':{
+            'minReplicas':2,'maxReplicas':8,'scaleTargetRef':{'apiVersion':'apps/v1','kind':'Deployment','name':'backend'},
+            'metrics':[{'type':'Resource','resource':{'name':'cpu','target':{'type':'Utilization','averageUtilization':65}}}],
+            'behavior':{'scaleDown':{'stabilizationWindowSeconds':300}}}}
+        after=dependency_hpa_spec(hpa)
+        self.assertEqual(after['minReplicas'],4)
+        self.assertEqual(after['maxReplicas'],8)
+        self.assertEqual(after['metrics'],hpa['spec']['metrics'])
+        self.assertEqual(after['behavior'],hpa['spec']['behavior'])
+        self.assertEqual(hpa['spec']['minReplicas'],2)
+        backend=deployment('dependency-hell');backend['spec']['template']['spec']['containers']=[backend['spec']['template']['spec']['containers'][1]]
+        after_template=dependency_backend_template(backend)
+        entries={e['name']:e.get('value') for e in after_template['spec']['containers'][0]['env']}
+        self.assertEqual(entries['RECOVERY_BATCH_SIZE'],'1')
+        self.assertEqual(entries['RECOVERY_INTERVAL_SECONDS'],'1')
+        self.assertEqual(after_template['spec']['containers'][0]['resources'],backend['spec']['template']['spec']['containers'][0]['resources'])
+
     def test_dependency_capacity_keeps_the_runner_contract_and_requires_a_healthy_sized_node(self):
         backend=deployment('dependency-hell'); backend['metadata'].update(name='backend',namespace='dependency-hell'); backend['spec']['replicas']=2
         backend['spec']['template']['spec']['containers']=[copy.deepcopy(backend['spec']['template']['spec']['containers'][1])]

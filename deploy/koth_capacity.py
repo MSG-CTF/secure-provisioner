@@ -227,9 +227,30 @@ def dependency_plan(backend, coordinator, node, agent):
     c = containers[0]
     c["env"] = [e for e in c.get("env", []) if e["name"] != "MAX_ACTIVE_EVALUATIONS"]
     c["env"].append({"name": "MAX_ACTIVE_EVALUATIONS", "value": "4"})
-    if not 1 <= backend["spec"].get("replicas", 1) <= 4:
+    if not 1 <= backend["spec"].get("replicas", 1) <= 8:
         raise ValueError("Review the existing backend replica count")
     return template
+
+
+def dependency_backend_template(backend):
+    template = copy.deepcopy(backend["spec"]["template"])
+    containers = template["spec"]["containers"]
+    if len(containers) != 1 or containers[0]["name"] != "backend":
+        raise ValueError("Unexpected public backend container layout")
+    values = {"RECOVERY_BATCH_SIZE": "1", "RECOVERY_INTERVAL_SECONDS": "1"}
+    containers[0]["env"] = [e for e in containers[0].get("env", []) if e["name"] not in values]
+    containers[0]["env"].extend({"name": key, "value": value} for key, value in values.items())
+    return template
+
+
+def dependency_hpa_spec(hpa):
+    spec = copy.deepcopy(hpa["spec"])
+    if (hpa["metadata"].get("namespace") != "dependency-hell" or hpa["metadata"]["name"] != "backend"
+            or spec["scaleTargetRef"] != {"apiVersion": "apps/v1", "kind": "Deployment", "name": "backend"}
+            or spec["maxReplicas"] < 4):
+        raise ValueError("Review the backend autoscaler before tuning its minimum")
+    spec["minReplicas"] = max(4, spec.get("minReplicas", 1))
+    return spec
 
 
 def tune_dependency(state_dir, apply):
@@ -238,7 +259,11 @@ def tune_dependency(state_dir, apply):
     node = json.loads(kubectl(["get", "node", "msg-koth-dependency-hell-runner", "-o", "json"]))
     agent = json.loads(Path("/etc/msgctf-koth-environment/agent.json").read_text())
     template = dependency_plan(backend, coordinator, node, agent)
-    changed = template != coordinator["spec"]["template"] or backend["spec"].get("replicas", 1) != 4
+    backend_template = dependency_backend_template(backend)
+    hpa = json.loads(kubectl(["-n", "dependency-hell", "get", "hpa", "backend", "--ignore-not-found", "-o", "json"]) or b"null")
+    hpa_spec = dependency_hpa_spec(hpa) if hpa else None
+    changed = (template != coordinator["spec"]["template"] or backend["spec"].get("replicas", 1) < 4
+               or backend_template != backend["spec"]["template"] or hpa and hpa_spec != hpa["spec"])
     if apply and changed:
         jobs = json.loads(kubectl(["-n", "dependency-hell-judge-runners", "get", "jobs", "-o", "json"]))
         if jobs["items"]:
@@ -250,19 +275,34 @@ def tune_dependency(state_dir, apply):
         backup = state_dir / "dependency-before.json"
         if not backup.exists():
             backup.write_text(json.dumps({"backend": backend, "coordinator": coordinator})); backup.chmod(0o600)
-        changes = [(coordinator, "/spec/template", template), (backend, "/spec/replicas", 4)]
-        for deployment, path, value in changes:
-            original = deployment["spec"]["template"] if path.endswith("template") else deployment["spec"].get("replicas", 1)
+        if hpa:
+            hpa_backup = state_dir / "dependency-hpa-before.json"
+            if not hpa_backup.exists():
+                hpa_backup.write_text(json.dumps(hpa)); hpa_backup.chmod(0o600)
+            if hpa_spec != hpa["spec"]:
+                kubectl(["-n", "dependency-hell", "patch", "hpa", "backend", "--type=json", "--patch-file=/dev/stdin"],
+                    [{"op": "test", "path": "/spec", "value": hpa["spec"]}, {"op": "replace", "path": "/spec", "value": hpa_spec}])
+        changes = [(coordinator, template), (backend, backend_template)]
+        for deployment, value in changes:
+            original = deployment["spec"]["template"]
             if original == value:
                 continue
             meta = deployment["metadata"]
             scoped = ["-n", meta["namespace"]]
             kubectl(scoped + ["patch", "deployment", meta["name"], "--type=json", "--patch-file=/dev/stdin"],
-                [{"op": "test", "path": "/metadata/resourceVersion", "value": meta["resourceVersion"]},
-                 {"op": "replace", "path": path, "value": value}])
+                [{"op": "test", "path": "/spec/template", "value": original},
+                 {"op": "replace", "path": "/spec/template", "value": value}])
             kubectl(scoped + ["rollout", "status", "deployment/" + meta["name"], "--timeout=180s"])
+        current = json.loads(kubectl(["-n", "dependency-hell", "get", "deployment", "backend", "-o", "json"]))
+        if current["spec"].get("replicas", 1) < 4:
+            kubectl(["-n", "dependency-hell", "patch", "deployment", "backend", "--type=json", "--patch-file=/dev/stdin"],
+                [{"op": "test", "path": "/spec/template", "value": backend_template},
+                 {"op": "test", "path": "/spec/replicas", "value": current["spec"]["replicas"]},
+                 {"op": "replace", "path": "/spec/replicas", "value": 4}])
+        kubectl(["-n", "dependency-hell", "rollout", "status", "deployment/backend", "--timeout=180s"])
     return {"game": "dependency-hell", "changes_needed": changed, "applied": bool(apply and changed),
-            "backend_replicas": 4, "coordinator_slots": 4, "runner_limits_unchanged": True,
+            "minimum_backend_replicas": 4, "hpa_minimum": hpa_spec["minReplicas"] if hpa_spec else None,
+            "recovery_batch_size": 1, "recovery_interval_seconds": 1, "coordinator_slots": 4, "runner_limits_unchanged": True,
             "game_images_changed": False, "game_source_changed": False}
 
 
