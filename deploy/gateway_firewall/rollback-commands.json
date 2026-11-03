@@ -1,0 +1,82 @@
+[
+  {
+    "step": "Stop Runtime and independently confirm all Gateway routes and live bindings have drained/been cleaned",
+    "argv": [
+      "/usr/bin/systemctl",
+      "stop",
+      "secure-provisioner.service"
+    ]
+  },
+  {
+    "step": "Confirm Runtime is stopped; expected output is inactive/failed (the command returns nonzero)",
+    "argv": [
+      "/usr/bin/systemctl",
+      "is-active",
+      "secure-provisioner.service"
+    ]
+  },
+  {
+    "step": "After cleanup confirmation, remove only our exact Runtime dependency drop-in; compare its checksum first",
+    "argv": [
+      "/usr/bin/rm",
+      "--",
+      "/etc/systemd/system/secure-provisioner.service.d/80-gateway-nodeport-firewall.conf"
+    ]
+  },
+  {
+    "step": "After cleanup confirmation, remove only our exact K3s dependency drop-in; compare its checksum first",
+    "argv": [
+      "/usr/bin/rm",
+      "--",
+      "/etc/systemd/system/k3s.service.d/80-gateway-nodeport-firewall.conf"
+    ]
+  },
+  {
+    "step": "Reload definitions",
+    "argv": [
+      "/usr/bin/systemctl",
+      "daemon-reload"
+    ]
+  },
+  {
+    "step": "Prevent reapplication at next boot and stop the oneshot; existing rules deliberately remain",
+    "argv": [
+      "/usr/bin/systemctl",
+      "disable",
+      "--now",
+      "msgctf-gateway-nodeport-firewall.service"
+    ]
+  },
+  {
+    "step": "Explicit guarded removal ONLY after operator proves routes clean and no live bindings; mismatched rules cause refusal",
+    "argv": [
+      "/usr/bin/python3",
+      "-I",
+      "/usr/local/sbin/msgctf-gateway-nodeport-firewall.py",
+      "remove",
+      "--operator-confirm-routes-clean-and-no-live-bindings"
+    ]
+  },
+  {
+    "step": "Review that unrelated IPv4 rules remain and owned jump/chains are absent",
+    "argv": [
+      "/usr/sbin/iptables",
+      "-w",
+      "5",
+      "-t",
+      "raw",
+      "-S"
+    ]
+  },
+  {
+    "step": "Review that unrelated IPv6 rules remain and owned jump/chains are absent",
+    "argv": [
+      "/usr/sbin/ip6tables",
+      "-w",
+      "5",
+      "-t",
+      "raw",
+      "-S"
+    ]
+  }
+]

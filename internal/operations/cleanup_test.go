@@ -66,6 +66,18 @@ type interruptedCleanupExecutor struct {
 	cancel context.CancelFunc
 }
 
+func TestFencedReclaimedCreateStillRequiresActualCleanupProof(t *testing.T) {
+	op := Operation{Type: OperationTypeCreate, CreateLeaseReclaimed: true, CreateCleanupFenced: true}
+	unknown := executionFailure(op, NewExecutionError("ROLLBACK_FAILED", false, nil))
+	if unknown.Result(op).CreateCleanupCompleted {
+		t.Fatal("execution exclusion was used as proof of resource absence")
+	}
+	confirmed := executionFailure(op, provisioner.WithCreateCleanupCompleted(NewExecutionError("RESOURCE_APPLY_FAILED", false, nil)))
+	if !confirmed.Result(op).CreateCleanupCompleted {
+		t.Fatal("fenced execution dropped actual rollback proof")
+	}
+}
+
 func (e interruptedCleanupExecutor) Execute(context.Context, Operation) (OperationResult, error) {
 	e.cancel()
 	return OperationResult{}, provisioner.WithCreateCleanupPending(

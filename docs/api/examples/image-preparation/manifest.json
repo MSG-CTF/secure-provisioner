@@ -1,0 +1,14 @@
+{
+  "query.json": "ReadinessQuery",
+  "response.json": "ReadinessResponse",
+  "response-empty.json": "ReadinessResponse",
+  "response-unobserved.json": "ReadinessResponse",
+  "response-stale.json": "ReadinessResponse",
+  "prepare.json": "PreparationRequest",
+  "accepted.json": "PreparationAccepted",
+  "operation-partial.json": "PreparationOperation",
+  "retry.json": "RetryRequest",
+  "retry-accepted.json": "PreparationAccepted",
+  "create-tracing.json": "CreateTracingExtension",
+  "error.json": "Error"
+}

@@ -1,5 +1,21 @@
 {
   "schema_version": 1,
+  "endpoint_protocols": [
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web3-infinite-pack/server@sha256:43cc32512af5ce6a06d5a1541be1f9ca2397a1dab744d37580d4bfc4a04b437b",
+      "container": "server",
+      "ports": [{"port": 31337, "protocol": "TCP"}]
+    }
+  ],
+  "vm_required_repositories": [
+    "ghcr.io/msg-ctf/challenges/web-afterimage/portal",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/core",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/bot",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/exporter",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/inventory-metadata",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/indexer",
+    "ghcr.io/msg-ctf/challenges/web-afterimage/case-vault"
+  ],
   "managed_repositories": [
     "ghcr.io/msg-ctf/challenges/web-grade-tampering/web",
     "ghcr.io/msg-ctf/challenges/web-daily-point/web",
@@ -18,7 +34,10 @@
     "ghcr.io/msg-ctf/challenges/web3-split-brain-oracle/challenge",
     "ghcr.io/msg-ctf/challenges/crypto-reused-seal/chall",
     "ghcr.io/msg-ctf/challenges/pwn-price-tag/price-tag",
-    "ghcr.io/msg-ctf/challenges/rev-tinyvm/tinyvm"
+    "ghcr.io/msg-ctf/challenges/rev-tinyvm/tinyvm",
+    "ghcr.io/msg-ctf/challenges/crypto-nerves/web",
+    "ghcr.io/msg-ctf/challenges/misc-cashout/web",
+    "ghcr.io/msg-ctf/challenges/osint-the-past-has-an-address/web"
   ],
   "images": [
     {
@@ -53,6 +72,9 @@
     },
     {
       "image": "ghcr.io/msg-ctf/challenges/web-grade-tampering/web@sha256:3a3de9c6c3670eed8e4e771ae4d4ad981825144796b80f1d523fba2403652fdb",
+      "shutdown_strategy": "python_sigint_child",
+      "steady_cpu_millicores": 300,
+      "startup_cpu_millicores": 1000,
       "container": "web",
       "isolation_profile": "WEB",
       "status": "create_enabled",
@@ -68,6 +90,7 @@
     },
     {
       "image": "ghcr.io/msg-ctf/challenges/web-daily-point/web@sha256:98c98088662fd5ff538ae9e163fb4a68ad73580e0f4f703624b0650d4a2b499a",
+      "termination_grace_period_seconds": 5,
       "container": "web",
       "isolation_profile": "WEB",
       "status": "create_enabled",
@@ -186,6 +209,7 @@
     },
     {
       "image": "ghcr.io/msg-ctf/challenges/web-daily-point/web@sha256:6640cad2d5e9c83cc6ba6bb86f38ccd7ce6317a9eaeab715e2dea74773994489",
+      "termination_grace_period_seconds": 5,
       "container": "web",
       "isolation_profile": "WEB",
       "status": "create_enabled",
@@ -215,6 +239,7 @@
     },
     {
       "image": "ghcr.io/msg-ctf/challenges/web-daily-point/web@sha256:fc7c762ba95b154c2b00154ed89aedd1ba5f86020408a5300d06a9f8d92a4816",
+      "termination_grace_period_seconds": 5,
       "container": "web",
       "isolation_profile": "WEB",
       "status": "create_enabled",
@@ -287,6 +312,8 @@
     },
     {
       "image": "ghcr.io/msg-ctf/challenges/web-open-house/web@sha256:8d8492c1746836790691930c3ae937f01705f9a824ebc821fd939da80b3b5ea7",
+      "steady_cpu_millicores": 500,
+      "startup_cpu_millicores": 2000,
       "container": "web",
       "isolation_profile": "WEB",
       "status": "create_enabled",
@@ -398,6 +425,18 @@
       "tcp_startup_only": true
     },
     {
+      "image": "ghcr.io/msg-ctf/challenges/rev-tinyvm/tinyvm@sha256:3d1dff5cfa702f76bbfd8d244f20ea6e465f57a39e1d87576de55910562e31c1",
+      "container": "tinyvm",
+      "isolation_profile": "PWN",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 10001,
+      "ports": [1337],
+      "exposed_ports": [1337],
+      "writable_paths": [{"path": "/tmp", "size_mib": 64}],
+      "tcp_startup_only": true
+    },
+    {
       "image": "ghcr.io/msg-ctf/challenges/crypto-reused-seal/chall@sha256:9a6b14660f113ffc98e8efd81c3c9cfe8cab081b994708688b179ba0ca749878",
       "container": "chall",
       "isolation_profile": "PWN",
@@ -429,6 +468,111 @@
       "ports": [31337],
       "exposed_ports": [31337],
       "writable_paths": [{"path": "/tmp", "size_mib": 64}]
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/crypto-nerves/web@sha256:1f2a669681bd3de70abae41de7adebb581510dbfb4fed9462ce8a23757927eb8",
+      "container": "web",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "ci_smoke_enabled": false,
+      "requires_flag": true,
+      "run_as_user": 10001,
+      "ports": [
+        8080
+      ],
+      "exposed_ports": [
+        8080
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 64
+        }
+      ],
+      "readiness_http": {
+        "path": "/healthz",
+        "port": 8080
+      }
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/misc-cashout/web@sha256:5ba579e0b8636abc93cf7afe6defbe2a85076fd1bb2725418157aa23f7f9b185",
+      "steady_cpu_millicores": 250,
+      "startup_cpu_millicores": 1000,
+      "container": "web",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "ci_smoke_enabled": false,
+      "requires_flag": false,
+      "run_as_user": 10001,
+      "ports": [
+        18419
+      ],
+      "exposed_ports": [
+        18419
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 64
+        }
+      ],
+      "readiness_http": {
+        "path": "/healthz",
+        "port": 18419
+      },
+      "shutdown_strategy": "python_sigint_pid1"
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/osint-the-past-has-an-address/web@sha256:0a605f7c337e544a6f869daedb5f835c7a6e944d811cdae46aa1358fe66c5bfb",
+      "container": "web",
+      "isolation_profile": "WEB",
+      "status": "blocked",
+      "ci_smoke_enabled": false,
+      "requires_flag": false,
+      "run_as_user": 65534,
+      "ports": [
+        8080
+      ],
+      "exposed_ports": [
+        8080
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 64
+        }
+      ],
+      "readiness_http": {
+        "path": "/healthz",
+        "port": 8080
+      },
+      "blocked_reason": "Original active revision593 uses development/auto and generates an HTTP hidden URL behind TLS Gateway. Requires production root HTTPS origin binding and same-origin public navigation verification before create or preparation approval."
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/web-logout-please/service@sha256:5e5c1c0ea5e72e21d6154520dcd79aa9fb894fbf8a05d0d2e1a59d74afe393e5",
+      "container": "service",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "ci_smoke_enabled": false,
+      "requires_flag": true,
+      "run_as_user": 10001,
+      "ports": [
+        8080,
+        9090
+      ],
+      "exposed_ports": [
+        8080
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 64
+        }
+      ],
+      "readiness_http": {
+        "path": "/healthz",
+        "port": 9090
+      }
     }
   ]
 }

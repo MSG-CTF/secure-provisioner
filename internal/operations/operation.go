@@ -49,7 +49,10 @@ type Operation struct {
 	Result               OperationResult
 	LastErrorCode        string
 	CreateLeaseReclaimed bool
-	NextRetryAt          time.Time
+	// CreateCleanupFenced is transient and valid only within execution exclusion
+	// covering every prior create attempt, including a reclaimed lease.
+	CreateCleanupFenced bool
+	NextRetryAt         time.Time
 }
 
 func validCreateWorkloadResult(result provisioner.CreateWorkloadResult) bool {
@@ -134,6 +137,9 @@ func copyCreateCommand(command provisioner.CreateWorkloadCommand) provisioner.Cr
 }
 
 func sameCreateCommand(first, second provisioner.CreateWorkloadCommand) bool {
+	if first.ReleaseID != second.ReleaseID || first.Architecture != second.Architecture {
+		return false
+	}
 	if first.RequestFingerprint != "" && second.RequestFingerprint != "" {
 		return first.RequestID == second.RequestID &&
 			first.InstanceID == second.InstanceID && first.TeamID == second.TeamID &&
@@ -158,6 +164,7 @@ func sameCreateCommand(first, second provisioner.CreateWorkloadCommand) bool {
 			firstContainer.SecretRef != secondContainer.SecretRef ||
 			firstContainer.RequiresFlag != secondContainer.RequiresFlag ||
 			firstContainer.TCPStartupOnly != secondContainer.TCPStartupOnly ||
+			firstContainer.ShutdownStrategy != secondContainer.ShutdownStrategy ||
 			!maps.Equal(firstContainer.Env, secondContainer.Env) ||
 			firstContainer.Image != secondContainer.Image ||
 			firstContainer.Expose != secondContainer.Expose ||
@@ -173,6 +180,7 @@ func sameCreateCommand(first, second provisioner.CreateWorkloadCommand) bool {
 func copyPolicyRequest(request isolation.Request) isolation.Request {
 	copied := request
 	copied.Containers = copyContainerRequirements(request.Containers)
+	copied.WorkloadNetwork = isolation.CloneWorkloadNetwork(request.WorkloadNetwork)
 	copied.InternalConnections = append([]isolation.InternalConnection(nil), request.InternalConnections...)
 	return copied
 }
@@ -180,6 +188,7 @@ func copyPolicyRequest(request isolation.Request) isolation.Request {
 func copyResolvedPolicy(policy isolation.ResolvedPolicy) isolation.ResolvedPolicy {
 	copied := policy
 	copied.Containers = copyContainerRequirements(policy.Containers)
+	copied.WorkloadNetwork = isolation.CloneWorkloadNetwork(policy.WorkloadNetwork)
 	copied.InternalConnections = append([]isolation.InternalConnection(nil), policy.InternalConnections...)
 	return copied
 }
@@ -194,6 +203,7 @@ func copyContainerRequirements(containers []isolation.ContainerRequirement) []is
 		copied[index].Ports = slices.Clone(container.Ports)
 		copied[index].ExposedPorts = slices.Clone(container.ExposedPorts)
 		copied[index].WritablePaths = slices.Clone(container.WritablePaths)
+		copied[index].ServiceAliases = slices.Clone(container.ServiceAliases)
 	}
 	return copied
 }

@@ -28,6 +28,7 @@ type RuntimeStatusResponse struct {
 	RuntimeWorkloadID string                    `json:"runtime_workload_id"`
 	Phase             string                    `json:"phase"`
 	EndpointReady     bool                      `json:"endpoint_ready"`
+	CleanupPending    bool                      `json:"cleanup_pending,omitempty"`
 	MetricsAvailable  bool                      `json:"metrics_available"`
 	ObservedAt        time.Time                 `json:"observed_at"`
 	Node              NodeStatusResponse        `json:"node"`
@@ -86,17 +87,22 @@ type OperationResponse struct {
 }
 
 type OperationResultResponse struct {
-	RuntimeWorkloadID string                     `json:"runtime_workload_id"`
-	ServiceURL        string                     `json:"service_url,omitempty"`
-	Endpoints         []WorkloadEndpointResponse `json:"endpoints,omitempty"`
-	Status            string                     `json:"status,omitempty"`
+	SteadyCPUMillicores int                        `json:"steady_cpu_millicores,omitempty"`
+	RuntimeWorkloadID   string                     `json:"runtime_workload_id"`
+	ServiceURL          string                     `json:"service_url,omitempty"`
+	Endpoints           []WorkloadEndpointResponse `json:"endpoints,omitempty"`
+	Status              string                     `json:"status,omitempty"`
 }
 
 type WorkloadEndpointResponse struct {
-	ContainerName string `json:"container_name"`
-	Port          int    `json:"port"`
-	Protocol      string `json:"protocol"`
-	ServiceURL    string `json:"service_url"`
+	ContainerName  string `json:"container_name"`
+	Port           int    `json:"port"`
+	Protocol       string `json:"protocol"`
+	ServiceURL     string `json:"service_url"`
+	Hostname       string `json:"hostname,omitempty"`
+	ConnectionPort int    `json:"connection_port,omitempty"`
+	TLS            *bool  `json:"tls,omitempty"`
+	ServerName     string `json:"server_name,omitempty"`
 }
 
 func (api *API) handleRuntimeStatus(writer http.ResponseWriter, request *http.Request) {
@@ -233,6 +239,7 @@ func newRuntimeStatusResponse(status k3s.RuntimeStatus) RuntimeStatusResponse {
 		RuntimeWorkloadID: status.RuntimeWorkloadID,
 		Phase:             status.Phase,
 		EndpointReady:     status.EndpointReady,
+		CleanupPending:    status.CleanupPending,
 		MetricsAvailable:  status.MetricsAvailable,
 		ObservedAt:        status.ObservedAt,
 		Node: NodeStatusResponse{
@@ -295,7 +302,7 @@ func newOperationResponse(operation operations.Operation) OperationResponse {
 		Attempt:          operation.Attempt,
 		MaxAttempts:      operation.MaxAttempts,
 		LastErrorCode:    operation.LastErrorCode,
-		CleanupCompleted: operation.Type == operations.OperationTypeCreate && operation.Status == operations.OperationStatusFailed && operation.Result.CreateCleanupCompleted,
+		CleanupCompleted: (operation.Type == operations.OperationTypeCreate && operation.Status == operations.OperationStatusFailed && operation.Result.CreateCleanupCompleted) || (operation.Type == operations.OperationTypeDelete && operation.Status == operations.OperationStatusSucceeded && operation.Result.DeleteCompleted),
 		Result:           newOperationResultResponse(operation),
 	}
 }
@@ -310,9 +317,10 @@ func newOperationResultResponse(operation operations.Operation) *OperationResult
 			return nil
 		}
 		response := &OperationResultResponse{
-			RuntimeWorkloadID: operation.Result.Create.RuntimeWorkloadID,
-			ServiceURL:        operation.Result.Create.ServiceURL,
-			Endpoints:         make([]WorkloadEndpointResponse, 0, len(operation.Result.Create.Endpoints)),
+			SteadyCPUMillicores: operation.Result.Create.SteadyCPUMillicores,
+			RuntimeWorkloadID:   operation.Result.Create.RuntimeWorkloadID,
+			ServiceURL:          operation.Result.Create.ServiceURL,
+			Endpoints:           make([]WorkloadEndpointResponse, 0, len(operation.Result.Create.Endpoints)),
 		}
 		for _, endpoint := range operation.Result.Create.Endpoints {
 			response.Endpoints = append(response.Endpoints, newWorkloadEndpointResponse(endpoint))
@@ -332,10 +340,15 @@ func newOperationResultResponse(operation operations.Operation) *OperationResult
 }
 
 func newWorkloadEndpointResponse(endpoint provisioner.WorkloadEndpoint) WorkloadEndpointResponse {
+	var transportTLS *bool
+	if endpoint.Hostname != "" || endpoint.ConnectionPort != 0 || endpoint.ServerName != "" || endpoint.TLS {
+		transportTLS = &endpoint.TLS
+	}
 	return WorkloadEndpointResponse{
 		ContainerName: endpoint.ContainerName,
 		Port:          endpoint.Port,
 		Protocol:      string(endpoint.Protocol),
 		ServiceURL:    endpoint.ServiceURL,
+		Hostname:      endpoint.Hostname, ConnectionPort: endpoint.ConnectionPort, TLS: transportTLS, ServerName: endpoint.ServerName,
 	}
 }

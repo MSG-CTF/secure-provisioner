@@ -17,7 +17,10 @@ import (
 const createPriority = 10
 const deletePriority = 100
 
-type OperationStore struct{ db *sql.DB }
+type OperationStore struct {
+	db             *sql.DB
+	executionLocks *sql.DB
+}
 
 func (store *OperationStore) EnqueueCreate(command provisioner.CreateWorkloadCommand, maxAttempts int) (operations.Operation, bool, error) {
 	operation, err := operations.NewCreateOperation(randomOperationID(), command, maxAttempts)
@@ -66,11 +69,18 @@ func (store *OperationStore) GetByRequestID(requestID string) (operations.Operat
 }
 
 func (store *OperationStore) Claim(ctx context.Context, options operations.ClaimOptions) (operations.ClaimedOperation, bool, error) {
-	row := store.db.QueryRowContext(ctx, `WITH candidate AS (
+	row := store.db.QueryRowContext(ctx, `WITH held AS MATERIALIZED (
+        SELECT classid,objid FROM pg_locks
+        WHERE locktype='advisory' AND granted AND objsubid=1
+          AND database=(SELECT oid FROM pg_database WHERE datname=current_database())
+    ), candidate AS (
         SELECT operation_id FROM runtime_operations
-        WHERE status='QUEUED'
+        WHERE (status='QUEUED'
            OR (status='RETRYING' AND (next_retry_at IS NULL OR next_retry_at <= $1))
-           OR (status='RUNNING' AND (lease_until IS NULL OR lease_until <= $1))
+           OR (status='RUNNING' AND (lease_until IS NULL OR lease_until <= $1)))
+          AND NOT EXISTS (SELECT 1 FROM held
+              WHERE held.classid=((hashtextextended(operation_id,83)>>32)&4294967295)::oid
+                AND held.objid=(hashtextextended(operation_id,83)&4294967295)::oid)
         ORDER BY priority DESC, created_at ASC
         FOR UPDATE SKIP LOCKED LIMIT 1
     )
@@ -80,6 +90,7 @@ func (store *OperationStore) Claim(ctx context.Context, options operations.Claim
            lease_until=$3, lease_version=operation.lease_version+1,
            updated_at=$1, started_at=COALESCE(operation.started_at,$1)
       FROM candidate WHERE operation.operation_id=candidate.operation_id
+       AND pg_try_advisory_xact_lock(hashtextextended(candidate.operation_id,83))
     RETURNING operation.operation_id,operation.request_id,operation.operation_type,operation.status,
       operation.command_snapshot,operation.create_checkpoint,operation.result,operation.attempt,
       operation.max_attempts,operation.next_retry_at,operation.lease_owner,operation.lease_until,

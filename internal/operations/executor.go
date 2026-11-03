@@ -31,7 +31,7 @@ func executionFailure(operation Operation, err error) Failure {
 	return Failure{
 		CreateCleanup: target,
 		Code:          code,
-		CreateCleanupCompleted: operation.Type == OperationTypeCreate && !operation.CreateLeaseReclaimed &&
+		CreateCleanupCompleted: operation.Type == OperationTypeCreate && createCleanupCanBeConfirmed(operation) &&
 			errors.As(err, &cleanup) && cleanup.CreateCleanupCompleted(),
 	}
 }
@@ -45,8 +45,12 @@ func (f Failure) result(operationType OperationType) OperationResult {
 
 func (f Failure) Result(operation Operation) OperationResult {
 	result := f.result(operation.Type)
-	result.CreateCleanupCompleted = result.CreateCleanupCompleted && !operation.CreateLeaseReclaimed
+	result.CreateCleanupCompleted = result.CreateCleanupCompleted && createCleanupCanBeConfirmed(operation)
 	return result
+}
+
+func createCleanupCanBeConfirmed(operation Operation) bool {
+	return !operation.CreateLeaseReclaimed || operation.CreateCleanupFenced
 }
 
 type RuntimeExecutor interface {
@@ -61,6 +65,31 @@ type ExecutionError struct {
 	code      string
 	retryable bool
 	cause     error
+}
+
+// HeldExecutionError retains ownership of resources whose remote cleanup or
+// mutation is uncertain. Attempt exhaustion is not evidence of absence.
+type HeldExecutionError struct{ cause *ExecutionError }
+
+// ProgressPendingError means remote cleanup is advancing normally. Ownership
+// remains held, but observing progress must not inherit failure backoff.
+type ProgressPendingError struct{ *HeldExecutionError }
+
+func NewProgressPendingError(code string, cause error) *ProgressPendingError {
+	return &ProgressPendingError{NewHeldExecutionError(code, cause)}
+}
+
+func (e *ProgressPendingError) ProgressPending() bool { return true }
+
+func NewHeldExecutionError(code string, cause error) *HeldExecutionError {
+	return &HeldExecutionError{NewExecutionError(code, true, cause)}
+}
+func (e *HeldExecutionError) Error() string   { return e.cause.Error() }
+func (e *HeldExecutionError) Unwrap() error   { return e.cause }
+func (e *HeldExecutionError) HoldRetry() bool { return true }
+func heldRetry(err error) bool {
+	var held interface{ HoldRetry() bool }
+	return errors.As(err, &held) && held.HoldRetry()
 }
 
 func NewExecutionError(code string, retryable bool, cause error) *ExecutionError {

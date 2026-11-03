@@ -40,6 +40,7 @@
     },
     {
       "image": "ghcr.io/msg-ctf/challenges/pwn-note/service@sha256:c449da75a6a3eb0560b1d43034771749338897219afc560104da5c9b6c6a5471",
+      "termination_grace_period_seconds": 5,
       "container": "service",
       "isolation_profile": "PWN",
       "status": "create_enabled",
@@ -103,6 +104,7 @@
     },
     {
       "image": "ghcr.io/msg-ctf/challenges/pwn-note/service@sha256:3c1dcb4478d82564ad298b1cddee770f5d786a6d1052b1f842a538f91439868e",
+      "termination_grace_period_seconds": 5,
       "container": "service",
       "isolation_profile": "PWN",
       "status": "create_enabled",
@@ -115,6 +117,18 @@
     },
     {
       "image": "ghcr.io/msg-ctf/challenges/pwn-ghost-file/chall@sha256:59bdd9111ad77a9a682f0e862eade12193b62d9fd6fd77b9ee810cd7e06460bc",
+      "container": "chall",
+      "isolation_profile": "PWN",
+      "status": "create_enabled",
+      "requires_flag": true,
+      "run_as_user": 1000,
+      "ports": [31337],
+      "exposed_ports": [31337],
+      "writable_paths": [{"path": "/tmp", "size_mib": 32}],
+      "flag_file_path": "/flag"
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/pwn-ghost-file/chall@sha256:d9d2a07ebfcea332f49b07273a8ac64a0665b49995c892a147c31d99e9c7eba8",
       "container": "chall",
       "isolation_profile": "PWN",
       "status": "create_enabled",

@@ -1,5 +1,9 @@
 # Runtime → Gateway v1 연동 검토
 
+이 문서는 구현 전 설계 검토 기록입니다 현재 지원 경로·설정·복구 절차는
+[Gateway 운영 안내](../operations/gateway-v1.md)를 기준으로 확인합니다
+
+
 상태: **사용자 범위 확정(A안), 구현은 별도 feature 브랜치에서 진행. 이 PR은 문서만 포함.**
 
 추적: [Runtime issue #73](https://github.com/MSG-CTF/secure-provisioner/issues/73).

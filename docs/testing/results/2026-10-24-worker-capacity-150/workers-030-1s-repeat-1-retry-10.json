@@ -1,0 +1,1560 @@
+{
+  "scope": "real HTTP + approved policy + PostgreSQL + leased worker; CONTROLLED EXECUTION ADAPTER, NO KUBERNETES",
+  "started_at": "2026-10-23T19:51:08.298624652Z",
+  "go_version": "go1.26.5",
+  "os": "linux/amd64",
+  "logical_cpus": 16,
+  "gomaxprocs": 16,
+  "postgres_version": "PostgreSQL 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+  "workers": 30,
+  "controlled_execution": "1s",
+  "first_attempt_retry_every": 10,
+  "accepted": 150,
+  "succeeded": 150,
+  "failed": 0,
+  "bindings": 150,
+  "attempts": 165,
+  "peak_active_adapter_calls": 30,
+  "http_operation_polls": 150,
+  "http_poll_failures": 0,
+  "acceptance": {
+    "p50_ms": 106.434212,
+    "p95_ms": 185.616206,
+    "max_ms": 191.687121
+  },
+  "queue": {
+    "p50_ms": 2144.571,
+    "p95_ms": 5285.581,
+    "max_ms": 5292.813
+  },
+  "first_claim_to_terminal": {
+    "p50_ms": 1021.39,
+    "p95_ms": 3140.133,
+    "max_ms": 3353.624
+  },
+  "completion": {
+    "p50_ms": 3355.30425,
+    "p95_ms": 6478.649853,
+    "max_ms": 8490.251849
+  },
+  "all_150_logical_terminal_ms": 8490.312348,
+  "all_150_persisted_terminal_observed_ms": 8570.595194,
+  "logical_clock_inversions": 3,
+  "samples": [
+    {
+      "request_id": "capacity-000",
+      "submitted_at": "2026-10-23T19:51:08.298626952Z",
+      "acceptance_ms": 18.992534,
+      "queue_ms": -6.473,
+      "first_claim_to_terminal_ms": 1127.687,
+      "completion_ms": 1128.203048,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-001",
+      "submitted_at": "2026-10-23T19:51:08.298646652Z",
+      "acceptance_ms": 178.306507,
+      "queue_ms": 4290.392,
+      "first_claim_to_terminal_ms": 1007.979,
+      "completion_ms": 5475.637348,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-002",
+      "submitted_at": "2026-10-23T19:51:08.298653452Z",
+      "acceptance_ms": 96.582349,
+      "queue_ms": 2148.411,
+      "first_claim_to_terminal_ms": 1111.415,
+      "completion_ms": 3355.486548,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-003",
+      "submitted_at": "2026-10-23T19:51:08.298657852Z",
+      "acceptance_ms": 169.047236,
+      "queue_ms": 4298.428,
+      "first_claim_to_terminal_ms": 1017.571,
+      "completion_ms": 5484.038148,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-004",
+      "submitted_at": "2026-10-23T19:51:08.298662051Z",
+      "acceptance_ms": 97.716935,
+      "queue_ms": 2147.378,
+      "first_claim_to_terminal_ms": 1111.405,
+      "completion_ms": 3355.411949,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-005",
+      "submitted_at": "2026-10-23T19:51:08.298665851Z",
+      "acceptance_ms": 130.643674,
+      "queue_ms": 3228.006,
+      "first_claim_to_terminal_ms": 1105.107,
+      "completion_ms": 4462.793149,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-006",
+      "submitted_at": "2026-10-23T19:51:08.298670651Z",
+      "acceptance_ms": 119.770826,
+      "queue_ms": 3237.777,
+      "first_claim_to_terminal_ms": 1105.264,
+      "completion_ms": 4461.582349,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-007",
+      "submitted_at": "2026-10-23T19:51:08.298675751Z",
+      "acceptance_ms": 43.864787,
+      "queue_ms": 173.35,
+      "first_claim_to_terminal_ms": 1010.209,
+      "completion_ms": 1226.399249,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-008",
+      "submitted_at": "2026-10-23T19:51:08.298679951Z",
+      "acceptance_ms": 57.793792,
+      "queue_ms": 171.132,
+      "first_claim_to_terminal_ms": 1004.777,
+      "completion_ms": 1232.680049,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-009",
+      "submitted_at": "2026-10-23T19:51:08.298685151Z",
+      "acceptance_ms": 189.196555,
+      "queue_ms": 5285.581,
+      "first_claim_to_terminal_ms": 3016.549,
+      "completion_ms": 8490.251849,
+      "status": "SUCCEEDED",
+      "attempts": 2,
+      "error_code": "CONTROLLED_TRANSIENT"
+    },
+    {
+      "request_id": "capacity-010",
+      "submitted_at": "2026-10-23T19:51:08.298688851Z",
+      "acceptance_ms": 129.637388,
+      "queue_ms": 3229.946,
+      "first_claim_to_terminal_ms": 1104.026,
+      "completion_ms": 4462.556149,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-011",
+      "submitted_at": "2026-10-23T19:51:08.298702251Z",
+      "acceptance_ms": 170.017123,
+      "queue_ms": 4297.358,
+      "first_claim_to_terminal_ms": 1015.394,
+      "completion_ms": 5481.727749,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-012",
+      "submitted_at": "2026-10-23T19:51:08.298708051Z",
+      "acceptance_ms": 105.426326,
+      "queue_ms": 2140.839,
+      "first_claim_to_terminal_ms": 1110.362,
+      "completion_ms": 3355.474949,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-013",
+      "submitted_at": "2026-10-23T19:51:08.298711651Z",
+      "acceptance_ms": 143.850989,
+      "queue_ms": 3216.86,
+      "first_claim_to_terminal_ms": 1103.137,
+      "completion_ms": 4462.725349,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-014",
+      "submitted_at": "2026-10-23T19:51:08.298716151Z",
+      "acceptance_ms": 95.563764,
+      "queue_ms": 2149.401,
+      "first_claim_to_terminal_ms": 1111.151,
+      "completion_ms": 3355.077849,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-015",
+      "submitted_at": "2026-10-23T19:51:08.298719851Z",
+      "acceptance_ms": 66.914364,
+      "queue_ms": 1151.505,
+      "first_claim_to_terminal_ms": 1023.493,
+      "completion_ms": 2240.900149,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-016",
+      "submitted_at": "2026-10-23T19:51:08.298724451Z",
+      "acceptance_ms": 60.935648,
+      "queue_ms": 1070.306,
+      "first_claim_to_terminal_ms": 1110.535,
+      "completion_ms": 2240.795549,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-017",
+      "submitted_at": "2026-10-23T19:51:08.298729051Z",
+      "acceptance_ms": 133.865628,
+      "queue_ms": 3225.548,
+      "first_claim_to_terminal_ms": 1104.198,
+      "completion_ms": 4462.584949,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-018",
+      "submitted_at": "2026-10-23T19:51:08.29873305Z",
+      "acceptance_ms": 121.949296,
+      "queue_ms": 3236.552,
+      "first_claim_to_terminal_ms": 1104.009,
+      "completion_ms": 4461.47595,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-019",
+      "submitted_at": "2026-10-23T19:51:08.29873705Z",
+      "acceptance_ms": 44.865973,
+      "queue_ms": 172.263,
+      "first_claim_to_terminal_ms": 3139.226,
+      "completion_ms": 3355.30895,
+      "status": "SUCCEEDED",
+      "attempts": 2,
+      "error_code": "CONTROLLED_TRANSIENT"
+    },
+    {
+      "request_id": "capacity-020",
+      "submitted_at": "2026-10-23T19:51:08.29874085Z",
+      "acceptance_ms": 107.939092,
+      "queue_ms": 2138.639,
+      "first_claim_to_terminal_ms": 1110.043,
+      "completion_ms": 3355.47115,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-021",
+      "submitted_at": "2026-10-23T19:51:08.29874515Z",
+      "acceptance_ms": 88.01777,
+      "queue_ms": 1146.754,
+      "first_claim_to_terminal_ms": 1008.368,
+      "completion_ms": 2242.07485,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-022",
+      "submitted_at": "2026-10-23T19:51:08.29874925Z",
+      "acceptance_ms": 85.764701,
+      "queue_ms": 1147.427,
+      "first_claim_to_terminal_ms": 1010.515,
+      "completion_ms": 2242.64975,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-023",
+      "submitted_at": "2026-10-23T19:51:08.29875425Z",
+      "acceptance_ms": 68.942936,
+      "queue_ms": 1151.397,
+      "first_claim_to_terminal_ms": 1021.39,
+      "completion_ms": 2240.75175,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-024",
+      "submitted_at": "2026-10-23T19:51:08.29875795Z",
+      "acceptance_ms": 135.988799,
+      "queue_ms": 3223.563,
+      "first_claim_to_terminal_ms": 1103.888,
+      "completion_ms": 4462.33505,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-025",
+      "submitted_at": "2026-10-23T19:51:08.29876375Z",
+      "acceptance_ms": 99.756406,
+      "queue_ms": 2146.188,
+      "first_claim_to_terminal_ms": 1110.463,
+      "completion_ms": 3355.30425,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-026",
+      "submitted_at": "2026-10-23T19:51:08.29876855Z",
+      "acceptance_ms": 75.016851,
+      "queue_ms": 1150.104,
+      "first_claim_to_terminal_ms": 1017.55,
+      "completion_ms": 2241.69145,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-027",
+      "submitted_at": "2026-10-23T19:51:08.29877385Z",
+      "acceptance_ms": 89.140954,
+      "queue_ms": 1146.271,
+      "first_claim_to_terminal_ms": 1008.322,
+      "completion_ms": 2242.59015,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-028",
+      "submitted_at": "2026-10-23T19:51:08.29877895Z",
+      "acceptance_ms": 72.97628,
+      "queue_ms": 1151.495,
+      "first_claim_to_terminal_ms": 1017.403,
+      "completion_ms": 2240.88705,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-029",
+      "submitted_at": "2026-10-23T19:51:08.29878285Z",
+      "acceptance_ms": 38.485362,
+      "queue_ms": 177.315,
+      "first_claim_to_terminal_ms": 3140.133,
+      "completion_ms": 3354.89715,
+      "status": "SUCCEEDED",
+      "attempts": 2,
+      "error_code": "CONTROLLED_TRANSIENT"
+    },
+    {
+      "request_id": "capacity-030",
+      "submitted_at": "2026-10-23T19:51:08.29878695Z",
+      "acceptance_ms": 116.154276,
+      "queue_ms": 2131.037,
+      "first_claim_to_terminal_ms": 1109.073,
+      "completion_ms": 3355.07605,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-031",
+      "submitted_at": "2026-10-23T19:51:08.29879045Z",
+      "acceptance_ms": 47.92433,
+      "queue_ms": 169.175,
+      "first_claim_to_terminal_ms": 1006.944,
+      "completion_ms": 1222.97955,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-032",
+      "submitted_at": "2026-10-23T19:51:08.29879445Z",
+      "acceptance_ms": 48.970415,
+      "queue_ms": 170.817,
+      "first_claim_to_terminal_ms": 1004.254,
+      "completion_ms": 1222.99555,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-033",
+      "submitted_at": "2026-10-23T19:51:08.29879955Z",
+      "acceptance_ms": 176.080938,
+      "queue_ms": 4291.237,
+      "first_claim_to_terminal_ms": 1018.562,
+      "completion_ms": 5484.85745,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-034",
+      "submitted_at": "2026-10-23T19:51:08.298804949Z",
+      "acceptance_ms": 46.829346,
+      "queue_ms": 170.157,
+      "first_claim_to_terminal_ms": 1006.083,
+      "completion_ms": 1222.030051,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-035",
+      "submitted_at": "2026-10-23T19:51:08.298631552Z",
+      "acceptance_ms": 177.243922,
+      "queue_ms": 4290.815,
+      "first_claim_to_terminal_ms": 1018.818,
+      "completion_ms": 5485.904448,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-036",
+      "submitted_at": "2026-10-23T19:51:08.298832249Z",
+      "acceptance_ms": 40.554333,
+      "queue_ms": 175.199,
+      "first_claim_to_terminal_ms": 1006.654,
+      "completion_ms": 1221.400751,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-037",
+      "submitted_at": "2026-10-23T19:51:08.298837149Z",
+      "acceptance_ms": 136.977485,
+      "queue_ms": 3222.646,
+      "first_claim_to_terminal_ms": 1104.115,
+      "completion_ms": 4462.669851,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-038",
+      "submitted_at": "2026-10-23T19:51:08.298844749Z",
+      "acceptance_ms": 191.038829,
+      "queue_ms": 5286.904,
+      "first_claim_to_terminal_ms": 1005.615,
+      "completion_ms": 6482.564251,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-039",
+      "submitted_at": "2026-10-23T19:51:08.298853149Z",
+      "acceptance_ms": 29.014894,
+      "queue_ms": 177.251,
+      "first_claim_to_terminal_ms": 3151.225,
+      "completion_ms": 3355.154851,
+      "status": "SUCCEEDED",
+      "attempts": 2,
+      "error_code": "CONTROLLED_TRANSIENT"
+    },
+    {
+      "request_id": "capacity-040",
+      "submitted_at": "2026-10-23T19:51:08.298860049Z",
+      "acceptance_ms": 52.23597,
+      "queue_ms": 171.124,
+      "first_claim_to_terminal_ms": 1008.047,
+      "completion_ms": 1230.327951,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-041",
+      "submitted_at": "2026-10-23T19:51:08.298867549Z",
+      "acceptance_ms": 160.130761,
+      "queue_ms": 4306.815,
+      "first_claim_to_terminal_ms": 1014.887,
+      "completion_ms": 5480.694451,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-042",
+      "submitted_at": "2026-10-23T19:51:08.298875649Z",
+      "acceptance_ms": 110.061161,
+      "queue_ms": 2136.424,
+      "first_claim_to_terminal_ms": 1109.992,
+      "completion_ms": 3355.279351,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-043",
+      "submitted_at": "2026-10-23T19:51:08.298883148Z",
+      "acceptance_ms": 45.709061,
+      "queue_ms": 171.255,
+      "first_claim_to_terminal_ms": 1011.502,
+      "completion_ms": 1227.480852,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-044",
+      "submitted_at": "2026-10-23T19:51:08.298891648Z",
+      "acceptance_ms": 111.443642,
+      "queue_ms": 2135.261,
+      "first_claim_to_terminal_ms": 1109.923,
+      "completion_ms": 3355.262352,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-045",
+      "submitted_at": "2026-10-23T19:51:08.298898448Z",
+      "acceptance_ms": 139.156755,
+      "queue_ms": 3220.286,
+      "first_claim_to_terminal_ms": 1104.182,
+      "completion_ms": 4462.493552,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-046",
+      "submitted_at": "2026-10-23T19:51:08.298905448Z",
+      "acceptance_ms": 153.582353,
+      "queue_ms": 4310.616,
+      "first_claim_to_terminal_ms": 1007.591,
+      "completion_ms": 5470.692552,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-047",
+      "submitted_at": "2026-10-23T19:51:08.298911948Z",
+      "acceptance_ms": 41.46782,
+      "queue_ms": 174.159,
+      "first_claim_to_terminal_ms": 1006.866,
+      "completion_ms": 1221.527052,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-048",
+      "submitted_at": "2026-10-23T19:51:08.298918048Z",
+      "acceptance_ms": 55.398525,
+      "queue_ms": 172.141,
+      "first_claim_to_terminal_ms": 1003.863,
+      "completion_ms": 1230.260952,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-049",
+      "submitted_at": "2026-10-23T19:51:08.298925948Z",
+      "acceptance_ms": 117.104763,
+      "queue_ms": 2131.855,
+      "first_claim_to_terminal_ms": 3220.4,
+      "completion_ms": 5468.261052,
+      "status": "SUCCEEDED",
+      "attempts": 2,
+      "error_code": "CONTROLLED_TRANSIENT"
+    },
+    {
+      "request_id": "capacity-050",
+      "submitted_at": "2026-10-23T19:51:08.298932748Z",
+      "acceptance_ms": 163.277417,
+      "queue_ms": 4302.876,
+      "first_claim_to_terminal_ms": 1013.587,
+      "completion_ms": 5478.670252,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-051",
+      "submitted_at": "2026-10-23T19:51:08.298940348Z",
+      "acceptance_ms": 64.629296,
+      "queue_ms": 1152.567,
+      "first_claim_to_terminal_ms": 1025.203,
+      "completion_ms": 2241.456652,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-052",
+      "submitted_at": "2026-10-23T19:51:08.298947048Z",
+      "acceptance_ms": 98.502323,
+      "queue_ms": 2147.733,
+      "first_claim_to_terminal_ms": 1110.065,
+      "completion_ms": 3355.218952,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-053",
+      "submitted_at": "2026-10-23T19:51:08.298953247Z",
+      "acceptance_ms": 84.500319,
+      "queue_ms": 1145.895,
+      "first_claim_to_terminal_ms": 1012.534,
+      "completion_ms": 2241.859753,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-054",
+      "submitted_at": "2026-10-23T19:51:08.298960547Z",
+      "acceptance_ms": 56.54691,
+      "queue_ms": 172.193,
+      "first_claim_to_terminal_ms": 1004.134,
+      "completion_ms": 1231.721453,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-055",
+      "submitted_at": "2026-10-23T19:51:08.298967947Z",
+      "acceptance_ms": 82.231251,
+      "queue_ms": 1148.689,
+      "first_claim_to_terminal_ms": 1012.201,
+      "completion_ms": 2241.947053,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-056",
+      "submitted_at": "2026-10-23T19:51:08.298975547Z",
+      "acceptance_ms": 89.949543,
+      "queue_ms": 1146.661,
+      "first_claim_to_terminal_ms": 1009.602,
+      "completion_ms": 2245.223453,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-057",
+      "submitted_at": "2026-10-23T19:51:08.298982747Z",
+      "acceptance_ms": 148.720221,
+      "queue_ms": 3212.986,
+      "first_claim_to_terminal_ms": 1101.491,
+      "completion_ms": 4462.158253,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-058",
+      "submitted_at": "2026-10-23T19:51:08.298989747Z",
+      "acceptance_ms": 78.949496,
+      "queue_ms": 1149.939,
+      "first_claim_to_terminal_ms": 1014.049,
+      "completion_ms": 2241.810253,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-059",
+      "submitted_at": "2026-10-23T19:51:08.298995747Z",
+      "acceptance_ms": 189.892645,
+      "queue_ms": 5284.694,
+      "first_claim_to_terminal_ms": 3015.411,
+      "completion_ms": 8488.993253,
+      "status": "SUCCEEDED",
+      "attempts": 2,
+      "error_code": "CONTROLLED_TRANSIENT"
+    },
+    {
+      "request_id": "capacity-060",
+      "submitted_at": "2026-10-23T19:51:08.299003147Z",
+      "acceptance_ms": 123.853868,
+      "queue_ms": 3234.475,
+      "first_claim_to_terminal_ms": 1103.993,
+      "completion_ms": 4461.247853,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-061",
+      "submitted_at": "2026-10-23T19:51:08.299010647Z",
+      "acceptance_ms": 108.70288,
+      "queue_ms": 2137.327,
+      "first_claim_to_terminal_ms": 1110.218,
+      "completion_ms": 3355.224353,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-062",
+      "submitted_at": "2026-10-23T19:51:08.299016647Z",
+      "acceptance_ms": 120.613513,
+      "queue_ms": 3237.702,
+      "first_claim_to_terminal_ms": 1104.092,
+      "completion_ms": 4461.247353,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-063",
+      "submitted_at": "2026-10-23T19:51:08.299035146Z",
+      "acceptance_ms": 59.609867,
+      "queue_ms": 1068.803,
+      "first_claim_to_terminal_ms": 1112.172,
+      "completion_ms": 2239.582854,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-064",
+      "submitted_at": "2026-10-23T19:51:08.299043046Z",
+      "acceptance_ms": 167.673356,
+      "queue_ms": 4299.4,
+      "first_claim_to_terminal_ms": 1009.26,
+      "completion_ms": 5475.224954,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-065",
+      "submitted_at": "2026-10-23T19:51:08.299049746Z",
+      "acceptance_ms": 71.707798,
+      "queue_ms": 1152.372,
+      "first_claim_to_terminal_ms": 1018.277,
+      "completion_ms": 2241.319254,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-066",
+      "submitted_at": "2026-10-23T19:51:08.299056046Z",
+      "acceptance_ms": 118.152448,
+      "queue_ms": 2133.692,
+      "first_claim_to_terminal_ms": 1104.469,
+      "completion_ms": 3355.164954,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-067",
+      "submitted_at": "2026-10-23T19:51:08.299063746Z",
+      "acceptance_ms": 73.70727,
+      "queue_ms": 1151.121,
+      "first_claim_to_terminal_ms": 1017.675,
+      "completion_ms": 2241.518254,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-068",
+      "submitted_at": "2026-10-23T19:51:08.299070746Z",
+      "acceptance_ms": 164.413301,
+      "queue_ms": 4302.844,
+      "first_claim_to_terminal_ms": 1011.754,
+      "completion_ms": 5477.757254,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-069",
+      "submitted_at": "2026-10-23T19:51:08.299077446Z",
+      "acceptance_ms": 100.558194,
+      "queue_ms": 2145.708,
+      "first_claim_to_terminal_ms": 3221.853,
+      "completion_ms": 5467.011554,
+      "status": "SUCCEEDED",
+      "attempts": 2,
+      "error_code": "CONTROLLED_TRANSIENT"
+    },
+    {
+      "request_id": "capacity-070",
+      "submitted_at": "2026-10-23T19:51:08.299085746Z",
+      "acceptance_ms": 58.530181,
+      "queue_ms": 171.304,
+      "first_claim_to_terminal_ms": 1005.188,
+      "completion_ms": 1233.884254,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-071",
+      "submitted_at": "2026-10-23T19:51:08.299093645Z",
+      "acceptance_ms": 171.656101,
+      "queue_ms": 4295.171,
+      "first_claim_to_terminal_ms": 1016.907,
+      "completion_ms": 5482.745355,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-072",
+      "submitted_at": "2026-10-23T19:51:08.299101145Z",
+      "acceptance_ms": 62.493527,
+      "queue_ms": 1146.764,
+      "first_claim_to_terminal_ms": 1032.25,
+      "completion_ms": 2240.525855,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-073",
+      "submitted_at": "2026-10-23T19:51:08.299112245Z",
+      "acceptance_ms": 137.812974,
+      "queue_ms": 3221.586,
+      "first_claim_to_terminal_ms": 1103.73,
+      "completion_ms": 4462.022755,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-074",
+      "submitted_at": "2026-10-23T19:51:08.299120245Z",
+      "acceptance_ms": 113.411815,
+      "queue_ms": 2132.664,
+      "first_claim_to_terminal_ms": 1109.871,
+      "completion_ms": 3354.798755,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-075",
+      "submitted_at": "2026-10-23T19:51:08.299127045Z",
+      "acceptance_ms": 114.587598,
+      "queue_ms": 2132.151,
+      "first_claim_to_terminal_ms": 1109.299,
+      "completion_ms": 3354.845955,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-076",
+      "submitted_at": "2026-10-23T19:51:08.299135145Z",
+      "acceptance_ms": 63.454613,
+      "queue_ms": 1151.269,
+      "first_claim_to_terminal_ms": 1026.669,
+      "completion_ms": 2240.421855,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-077",
+      "submitted_at": "2026-10-23T19:51:08.299143145Z",
+      "acceptance_ms": 187.655377,
+      "queue_ms": 5286.288,
+      "first_claim_to_terminal_ms": 1005.624,
+      "completion_ms": 6478.508855,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-078",
+      "submitted_at": "2026-10-23T19:51:08.299149245Z",
+      "acceptance_ms": 158.711881,
+      "queue_ms": 4306.788,
+      "first_claim_to_terminal_ms": 1007.046,
+      "completion_ms": 5471.494755,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-079",
+      "submitted_at": "2026-10-23T19:51:08.299177644Z",
+      "acceptance_ms": 125.886041,
+      "queue_ms": 3233.338,
+      "first_claim_to_terminal_ms": 3119.58,
+      "completion_ms": 6477.685356,
+      "status": "SUCCEEDED",
+      "attempts": 2,
+      "error_code": "CONTROLLED_TRANSIENT"
+    },
+    {
+      "request_id": "capacity-080",
+      "submitted_at": "2026-10-23T19:51:08.299185944Z",
+      "acceptance_ms": 179.802587,
+      "queue_ms": 5291.286,
+      "first_claim_to_terminal_ms": 1008.358,
+      "completion_ms": 6478.424056,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-081",
+      "submitted_at": "2026-10-23T19:51:08.299193344Z",
+      "acceptance_ms": 53.961546,
+      "queue_ms": 170.108,
+      "first_claim_to_terminal_ms": 1004.895,
+      "completion_ms": 1227.933656,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-082",
+      "submitted_at": "2026-10-23T19:51:08.299206344Z",
+      "acceptance_ms": 76.613029,
+      "queue_ms": 1149.06,
+      "first_claim_to_terminal_ms": 1016.58,
+      "completion_ms": 2241.218656,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-083",
+      "submitted_at": "2026-10-23T19:51:08.299198444Z",
+      "acceptance_ms": 30.915568,
+      "queue_ms": 178.365,
+      "first_claim_to_terminal_ms": 1004.176,
+      "completion_ms": 1211.642556,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-084",
+      "submitted_at": "2026-10-23T19:51:08.299200844Z",
+      "acceptance_ms": 34.701315,
+      "queue_ms": 176.085,
+      "first_claim_to_terminal_ms": 1005.304,
+      "completion_ms": 1214.983156,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-085",
+      "submitted_at": "2026-10-23T19:51:08.299164244Z",
+      "acceptance_ms": 140.116442,
+      "queue_ms": 3219.368,
+      "first_claim_to_terminal_ms": 1103.662,
+      "completion_ms": 4461.920756,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-086",
+      "submitted_at": "2026-10-23T19:51:08.299155845Z",
+      "acceptance_ms": 93.017099,
+      "queue_ms": 2151.646,
+      "first_claim_to_terminal_ms": 1111.478,
+      "completion_ms": 3355.063155,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-087",
+      "submitted_at": "2026-10-23T19:51:08.299161944Z",
+      "acceptance_ms": 132.40495,
+      "queue_ms": 3226.766,
+      "first_claim_to_terminal_ms": 1103.1,
+      "completion_ms": 4461.179056,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-088",
+      "submitted_at": "2026-10-23T19:51:08.299167644Z",
+      "acceptance_ms": 145.356168,
+      "queue_ms": 3214.689,
+      "first_claim_to_terminal_ms": 1103.186,
+      "completion_ms": 4462.301356,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-089",
+      "submitted_at": "2026-10-23T19:51:08.299184244Z",
+      "acceptance_ms": 154.372442,
+      "queue_ms": 4309.526,
+      "first_claim_to_terminal_ms": 3019.783,
+      "completion_ms": 7482.595756,
+      "status": "SUCCEEDED",
+      "attempts": 2,
+      "error_code": "CONTROLLED_TRANSIENT"
+    },
+    {
+      "request_id": "capacity-090",
+      "submitted_at": "2026-10-23T19:51:08.299179144Z",
+      "acceptance_ms": 83.149238,
+      "queue_ms": 1147.589,
+      "first_claim_to_terminal_ms": 1011.728,
+      "completion_ms": 2241.325856,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-091",
+      "submitted_at": "2026-10-23T19:51:08.299174444Z",
+      "acceptance_ms": 101.555581,
+      "queue_ms": 2144.571,
+      "first_claim_to_terminal_ms": 1109.422,
+      "completion_ms": 3354.445556,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-092",
+      "submitted_at": "2026-10-23T19:51:08.298820349Z",
+      "acceptance_ms": 65.81698,
+      "queue_ms": 1151.606,
+      "first_claim_to_terminal_ms": 1025.401,
+      "completion_ms": 2241.765651,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-093",
+      "submitted_at": "2026-10-23T19:51:08.298892348Z",
+      "acceptance_ms": 61.699138,
+      "queue_ms": 1070.097,
+      "first_claim_to_terminal_ms": 1109.745,
+      "completion_ms": 2240.632652,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-094",
+      "submitted_at": "2026-10-23T19:51:08.298900048Z",
+      "acceptance_ms": 53.201356,
+      "queue_ms": 171.101,
+      "first_claim_to_terminal_ms": 1004.87,
+      "completion_ms": 1228.152952,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-095",
+      "submitted_at": "2026-10-23T19:51:08.298907248Z",
+      "acceptance_ms": 91.149426,
+      "queue_ms": 2153.416,
+      "first_claim_to_terminal_ms": 1111.347,
+      "completion_ms": 3354.809752,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-096",
+      "submitted_at": "2026-10-23T19:51:08.298914648Z",
+      "acceptance_ms": 161.171947,
+      "queue_ms": 4305.732,
+      "first_claim_to_terminal_ms": 1014.008,
+      "completion_ms": 5479.874352,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-097",
+      "submitted_at": "2026-10-23T19:51:08.298921848Z",
+      "acceptance_ms": 165.589885,
+      "queue_ms": 4301.579,
+      "first_claim_to_terminal_ms": 1012.676,
+      "completion_ms": 5478.816152,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-098",
+      "submitted_at": "2026-10-23T19:51:08.298929148Z",
+      "acceptance_ms": 128.346606,
+      "queue_ms": 3230.237,
+      "first_claim_to_terminal_ms": 1105.014,
+      "completion_ms": 4462.456852,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-099",
+      "submitted_at": "2026-10-23T19:51:08.298939248Z",
+      "acceptance_ms": 36.180294,
+      "queue_ms": 178.436,
+      "first_claim_to_terminal_ms": 3141.718,
+      "completion_ms": 3355.161752,
+      "status": "SUCCEEDED",
+      "attempts": 2,
+      "error_code": "CONTROLLED_TRANSIENT"
+    },
+    {
+      "request_id": "capacity-100",
+      "submitted_at": "2026-10-23T19:51:08.298949347Z",
+      "acceptance_ms": 172.746986,
+      "queue_ms": 4294.151,
+      "first_claim_to_terminal_ms": 1017.844,
+      "completion_ms": 5483.822653,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-101",
+      "submitted_at": "2026-10-23T19:51:08.298956647Z",
+      "acceptance_ms": 131.480162,
+      "queue_ms": 3227.774,
+      "first_claim_to_terminal_ms": 1103.222,
+      "completion_ms": 4461.372353,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-102",
+      "submitted_at": "2026-10-23T19:51:08.298964647Z",
+      "acceptance_ms": 185.616206,
+      "queue_ms": 5292.813,
+      "first_claim_to_terminal_ms": 1005.81,
+      "completion_ms": 6478.643353,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-103",
+      "submitted_at": "2026-10-23T19:51:08.298972947Z",
+      "acceptance_ms": 170.765513,
+      "queue_ms": 4296.303,
+      "first_claim_to_terminal_ms": 1009.21,
+      "completion_ms": 5475.285053,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-104",
+      "submitted_at": "2026-10-23T19:51:08.298980647Z",
+      "acceptance_ms": 103.960047,
+      "queue_ms": 2142.132,
+      "first_claim_to_terminal_ms": 1112.287,
+      "completion_ms": 3357.316353,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-105",
+      "submitted_at": "2026-10-23T19:51:08.298987247Z",
+      "acceptance_ms": 94.261982,
+      "queue_ms": 2150.001,
+      "first_claim_to_terminal_ms": 1111.929,
+      "completion_ms": 3355.103753,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-106",
+      "submitted_at": "2026-10-23T19:51:08.298995147Z",
+      "acceptance_ms": 186.746789,
+      "queue_ms": 5287.464,
+      "first_claim_to_terminal_ms": 1005.608,
+      "completion_ms": 6478.649853,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-107",
+      "submitted_at": "2026-10-23T19:51:08.299003147Z",
+      "acceptance_ms": 49.845903,
+      "queue_ms": 170.903,
+      "first_claim_to_terminal_ms": 1005.613,
+      "completion_ms": 1225.249853,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-108",
+      "submitted_at": "2026-10-23T19:51:08.299009547Z",
+      "acceptance_ms": 67.701353,
+      "queue_ms": 1150.419,
+      "first_claim_to_terminal_ms": 1024.283,
+      "completion_ms": 2241.356453,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-109",
+      "submitted_at": "2026-10-23T19:51:08.299016447Z",
+      "acceptance_ms": 122.725584,
+      "queue_ms": 3235.541,
+      "first_claim_to_terminal_ms": 3121.451,
+      "completion_ms": 6478.656553,
+      "status": "SUCCEEDED",
+      "attempts": 2,
+      "error_code": "CONTROLLED_TRANSIENT"
+    },
+    {
+      "request_id": "capacity-110",
+      "submitted_at": "2026-10-23T19:51:08.299023746Z",
+      "acceptance_ms": 144.55398,
+      "queue_ms": 3215.814,
+      "first_claim_to_terminal_ms": 1103.02,
+      "completion_ms": 4462.353254,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-111",
+      "submitted_at": "2026-10-23T19:51:08.299052746Z",
+      "acceptance_ms": 112.28253,
+      "queue_ms": 2133.9,
+      "first_claim_to_terminal_ms": 1109.579,
+      "completion_ms": 3354.766254,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-112",
+      "submitted_at": "2026-10-23T19:51:08.299059846Z",
+      "acceptance_ms": 80.937269,
+      "queue_ms": 1148.582,
+      "first_claim_to_terminal_ms": 1012.902,
+      "completion_ms": 2241.347154,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-113",
+      "submitted_at": "2026-10-23T19:51:08.299067946Z",
+      "acceptance_ms": 26.252133,
+      "queue_ms": -23.432,
+      "first_claim_to_terminal_ms": 1128.526,
+      "completion_ms": 1128.649054,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-114",
+      "submitted_at": "2026-10-23T19:51:08.299074746Z",
+      "acceptance_ms": 106.434212,
+      "queue_ms": 2139.794,
+      "first_claim_to_terminal_ms": 1110.207,
+      "completion_ms": 3355.098254,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-115",
+      "submitted_at": "2026-10-23T19:51:08.299083546Z",
+      "acceptance_ms": 42.387607,
+      "queue_ms": 174.425,
+      "first_claim_to_terminal_ms": 1011.56,
+      "completion_ms": 1227.289454,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-116",
+      "submitted_at": "2026-10-23T19:51:08.299090645Z",
+      "acceptance_ms": 173.713072,
+      "queue_ms": 4293.379,
+      "first_claim_to_terminal_ms": 1009.158,
+      "completion_ms": 5475.167355,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-117",
+      "submitted_at": "2026-10-23T19:51:08.299097945Z",
+      "acceptance_ms": 79.816585,
+      "queue_ms": 1150.121,
+      "first_claim_to_terminal_ms": 1012.43,
+      "completion_ms": 2241.362055,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-118",
+      "submitted_at": "2026-10-23T19:51:08.299170244Z",
+      "acceptance_ms": 147.486839,
+      "queue_ms": 3212.916,
+      "first_claim_to_terminal_ms": 1101.829,
+      "completion_ms": 4461.137756,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-119",
+      "submitted_at": "2026-10-23T19:51:08.299183444Z",
+      "acceptance_ms": 191.687121,
+      "queue_ms": 5287.082,
+      "first_claim_to_terminal_ms": 3011.862,
+      "completion_ms": 8489.663556,
+      "status": "SUCCEEDED",
+      "attempts": 2,
+      "error_code": "CONTROLLED_TRANSIENT"
+    },
+    {
+      "request_id": "capacity-120",
+      "submitted_at": "2026-10-23T19:51:08.299179444Z",
+      "acceptance_ms": 178.758201,
+      "queue_ms": 4289.349,
+      "first_claim_to_terminal_ms": 1019.299,
+      "completion_ms": 5486.415556,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-121",
+      "submitted_at": "2026-10-23T19:51:08.298875948Z",
+      "acceptance_ms": 166.801269,
+      "queue_ms": 4300.602,
+      "first_claim_to_terminal_ms": 1015.326,
+      "completion_ms": 5481.580052,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-122",
+      "submitted_at": "2026-10-23T19:51:08.299217144Z",
+      "acceptance_ms": 174.659558,
+      "queue_ms": 4293.49,
+      "first_claim_to_terminal_ms": 1015.434,
+      "completion_ms": 5482.510856,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-123",
+      "submitted_at": "2026-10-23T19:51:08.300744722Z",
+      "acceptance_ms": 140.670134,
+      "queue_ms": 3217.851,
+      "first_claim_to_terminal_ms": 1102.855,
+      "completion_ms": 4460.274278,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-124",
+      "submitted_at": "2026-10-23T19:51:08.299230544Z",
+      "acceptance_ms": 141.060928,
+      "queue_ms": 3217.951,
+      "first_claim_to_terminal_ms": 1104.413,
+      "completion_ms": 4462.391456,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-125",
+      "submitted_at": "2026-10-23T19:51:08.299237643Z",
+      "acceptance_ms": 33.510632,
+      "queue_ms": 175.187,
+      "first_claim_to_terminal_ms": 1006.776,
+      "completion_ms": 1214.252357,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-126",
+      "submitted_at": "2026-10-23T19:51:08.30022363Z",
+      "acceptance_ms": 38.121967,
+      "queue_ms": 176.285,
+      "first_claim_to_terminal_ms": 1006.74,
+      "completion_ms": 1220.08837,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-127",
+      "submitted_at": "2026-10-23T19:51:08.300254329Z",
+      "acceptance_ms": 35.970897,
+      "queue_ms": 178.408,
+      "first_claim_to_terminal_ms": 1004.607,
+      "completion_ms": 1217.867671,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-128",
+      "submitted_at": "2026-10-23T19:51:08.300410827Z",
+      "acceptance_ms": 31.024466,
+      "queue_ms": 176.617,
+      "first_claim_to_terminal_ms": 1006.73,
+      "completion_ms": 1213.043173,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-129",
+      "submitted_at": "2026-10-23T19:51:08.300556425Z",
+      "acceptance_ms": 21.754796,
+      "queue_ms": -19.793,
+      "first_claim_to_terminal_ms": 3353.624,
+      "completion_ms": 3352.274575,
+      "status": "SUCCEEDED",
+      "attempts": 2,
+      "error_code": "CONTROLLED_TRANSIENT"
+    },
+    {
+      "request_id": "capacity-130",
+      "submitted_at": "2026-10-23T19:51:08.308204918Z",
+      "acceptance_ms": 143.164099,
+      "queue_ms": 4311.826,
+      "first_claim_to_terminal_ms": 1007.603,
+      "completion_ms": 5461.362082,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-131",
+      "submitted_at": "2026-10-23T19:51:08.302494898Z",
+      "acceptance_ms": 158.589583,
+      "queue_ms": 4303.882,
+      "first_claim_to_terminal_ms": 1015.566,
+      "completion_ms": 5477.054102,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-132",
+      "submitted_at": "2026-10-23T19:51:08.303256087Z",
+      "acceptance_ms": 87.860972,
+      "queue_ms": 2152.503,
+      "first_claim_to_terminal_ms": 1111.436,
+      "completion_ms": 3350.741913,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-133",
+      "submitted_at": "2026-10-23T19:51:08.300593824Z",
+      "acceptance_ms": 49.41771,
+      "queue_ms": 171.221,
+      "first_claim_to_terminal_ms": 1005.067,
+      "completion_ms": 1224.526176,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-134",
+      "submitted_at": "2026-10-23T19:51:08.300653524Z",
+      "acceptance_ms": 191.127228,
+      "queue_ms": 5286.116,
+      "first_claim_to_terminal_ms": 1005.397,
+      "completion_ms": 6481.730476,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-135",
+      "submitted_at": "2026-10-23T19:51:08.299209944Z",
+      "acceptance_ms": 86.461691,
+      "queue_ms": 1146.425,
+      "first_claim_to_terminal_ms": 1009.802,
+      "completion_ms": 2241.578056,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-136",
+      "submitted_at": "2026-10-23T19:51:08.299220844Z",
+      "acceptance_ms": 102.651165,
+      "queue_ms": 2143.12,
+      "first_claim_to_terminal_ms": 1110.626,
+      "completion_ms": 3355.253156,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-137",
+      "submitted_at": "2026-10-23T19:51:08.303342886Z",
+      "acceptance_ms": 146.765448,
+      "queue_ms": 4312.714,
+      "first_claim_to_terminal_ms": 1007.301,
+      "completion_ms": 5465.550114,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-138",
+      "submitted_at": "2026-10-23T19:51:08.300754522Z",
+      "acceptance_ms": 148.166529,
+      "queue_ms": 4314.13,
+      "first_claim_to_terminal_ms": 1007.756,
+      "completion_ms": 5468.832478,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-139",
+      "submitted_at": "2026-10-23T19:51:08.309543699Z",
+      "acceptance_ms": 60.155059,
+      "queue_ms": 1152.148,
+      "first_claim_to_terminal_ms": 3238.369,
+      "completion_ms": 4449.701301,
+      "status": "SUCCEEDED",
+      "attempts": 2,
+      "error_code": "CONTROLLED_TRANSIENT"
+    },
+    {
+      "request_id": "capacity-140",
+      "submitted_at": "2026-10-23T19:51:08.299228444Z",
+      "acceptance_ms": 157.608196,
+      "queue_ms": 4306.495,
+      "first_claim_to_terminal_ms": 1006.553,
+      "completion_ms": 5469.634556,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-141",
+      "submitted_at": "2026-10-23T19:51:08.299235443Z",
+      "acceptance_ms": 134.416321,
+      "queue_ms": 3224.674,
+      "first_claim_to_terminal_ms": 1103.666,
+      "completion_ms": 4461.707557,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-142",
+      "submitted_at": "2026-10-23T19:51:08.299214244Z",
+      "acceptance_ms": 155.483326,
+      "queue_ms": 4308.4,
+      "first_claim_to_terminal_ms": 1010.303,
+      "completion_ms": 5473.085756,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-143",
+      "submitted_at": "2026-10-23T19:51:08.302867893Z",
+      "acceptance_ms": 121.075907,
+      "queue_ms": 3233.943,
+      "first_claim_to_terminal_ms": 1103.45,
+      "completion_ms": 4457.403107,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-144",
+      "submitted_at": "2026-10-23T19:51:08.300272229Z",
+      "acceptance_ms": 125.858341,
+      "queue_ms": 3231.065,
+      "first_claim_to_terminal_ms": 1105.252,
+      "completion_ms": 4461.149771,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-145",
+      "submitted_at": "2026-10-23T19:51:08.300394127Z",
+      "acceptance_ms": 68.309245,
+      "queue_ms": 1153.212,
+      "first_claim_to_terminal_ms": 1018.655,
+      "completion_ms": 2239.173873,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-146",
+      "submitted_at": "2026-10-23T19:51:08.3023705Z",
+      "acceptance_ms": 74.423359,
+      "queue_ms": 1150.022,
+      "first_claim_to_terminal_ms": 1014.694,
+      "completion_ms": 2238.1855,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-147",
+      "submitted_at": "2026-10-23T19:51:08.300508726Z",
+      "acceptance_ms": 155.345328,
+      "queue_ms": 4307.35,
+      "first_claim_to_terminal_ms": 1007.499,
+      "completion_ms": 5469.059274,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-148",
+      "submitted_at": "2026-10-23T19:51:08.300498126Z",
+      "acceptance_ms": 145.043372,
+      "queue_ms": 3213.724,
+      "first_claim_to_terminal_ms": 1103.219,
+      "completion_ms": 4460.993874,
+      "status": "SUCCEEDED",
+      "attempts": 1
+    },
+    {
+      "request_id": "capacity-149",
+      "submitted_at": "2026-10-23T19:51:08.300414227Z",
+      "acceptance_ms": 74.341761,
+      "queue_ms": 1149.818,
+      "first_claim_to_terminal_ms": 3236.491,
+      "completion_ms": 4459.706773,
+      "status": "SUCCEEDED",
+      "attempts": 2,
+      "error_code": "CONTROLLED_TRANSIENT"
+    }
+  ]
+}

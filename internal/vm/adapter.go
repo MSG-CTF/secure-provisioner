@@ -145,6 +145,14 @@ func (r *Router) Apply(req *httpapi.CreateWorkloadRequest) error {
 		if ok {
 			return errors.New("VM target requires VM type")
 		}
+		if r.RequiresVMImage(req.Workload.Image) {
+			return errors.New("image requires a dedicated VM target")
+		}
+		for _, c := range req.Workload.Containers {
+			if r.RequiresVMImage(c.Image) {
+				return errors.New("image requires a dedicated VM target")
+			}
+		}
 		return nil
 	}
 	if !ok || req.IsolationProfile != "WEB" || req.Workload.ResourceLimits != t.Limits || len(req.Workload.Containers) != len(t.Containers) {
@@ -169,6 +177,23 @@ func (r *Router) Apply(req *httpapi.CreateWorkloadRequest) error {
 	}
 	req.VMProfile = t.Profile
 	return nil
+}
+
+// RequiresVMImage reserves every repository in the trusted VM catalog, including
+// future digests. It never treats an image-name prefix as a repository match.
+func (r *Router) RequiresVMImage(image string) bool {
+	if r == nil || image == "" {
+		return false
+	}
+	repository := provisioner.ImageRepository(image)
+	for _, t := range r.targets {
+		for _, c := range t.Containers {
+			if provisioner.ImageRepository(c.Image) == repository {
+				return true
+			}
+		}
+	}
+	return false
 }
 func (r *Router) Resolve(req isolation.Request) (isolation.ResolvedPolicy, error) {
 	if req.VMProfile == "" {
@@ -313,10 +338,27 @@ func (r *Router) CreateWorkloadForOperation(ctx context.Context, c provisioner.C
 	return provisioner.CreateWorkloadResult{RuntimeWorkloadID: workID(t.ID, c.InstanceID), NamespaceUID: uid, ServiceURL: t.PublicURL, Endpoints: endpoints}, nil
 }
 func (r *Router) DeleteWorkload(ctx context.Context, c provisioner.DeleteWorkloadCommand, b runtimebinding.Binding) error {
+	return r.deleteWorkload(ctx, c, b, false)
+}
+
+// Preserve Gateway's acknowledged-stop capability through the VM router. VM
+// targets keep their own generation-checked deletion protocol.
+func (r *Router) DeleteStoppedWorkload(ctx context.Context, c provisioner.DeleteWorkloadCommand, b runtimebinding.Binding) error {
+	return r.deleteWorkload(ctx, c, b, true)
+}
+
+func (r *Router) deleteWorkload(ctx context.Context, c provisioner.DeleteWorkloadCommand, b runtimebinding.Binding, stopped bool) error {
 	t, ok := r.targets[b.TargetID]
 	if !ok {
 		if c.RuntimeType == provisioner.RuntimeTypeVM {
 			return operations.NewExecutionError("TARGET_NOT_FOUND", true, nil)
+		}
+		if stopped {
+			if prepared, ok := r.delete.(interface {
+				DeleteStoppedWorkload(context.Context, provisioner.DeleteWorkloadCommand, runtimebinding.Binding) error
+			}); ok {
+				return prepared.DeleteStoppedWorkload(ctx, c, b)
+			}
 		}
 		return r.delete.DeleteWorkload(ctx, c, b)
 	}

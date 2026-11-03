@@ -33,13 +33,32 @@ type WritablePath struct {
 	SizeMiB int
 }
 
+// ShutdownStrategy selects a fixed, operator-reviewed lifecycle action.
+type ShutdownStrategy string
+
+const (
+	ShutdownStrategyPythonSIGINTPID1  ShutdownStrategy = "python_sigint_pid1"
+	ShutdownStrategyPythonSIGINTChild ShutdownStrategy = "python_sigint_child"
+)
+
+func ValidShutdownStrategy(profile WorkloadProfile, strategy ShutdownStrategy) bool {
+	return strategy == "" || (profile == WorkloadProfileWeb &&
+		(strategy == ShutdownStrategyPythonSIGINTPID1 || strategy == ShutdownStrategyPythonSIGINTChild))
+}
+
+// Zero preserves the Kubernetes default for existing durable commands.
+func ValidTerminationGracePeriod(seconds int64) bool { return seconds >= 0 && seconds <= 300 }
+
 type ContainerRequirement struct {
-	Name          string
-	Ports         []int
-	Expose        bool
-	RunAsUser     int64
-	WritablePaths []WritablePath
-	ExposedPorts  []int `json:",omitempty"`
+	Name                          string
+	Ports                         []int
+	Expose                        bool
+	RunAsUser                     int64
+	WritablePaths                 []WritablePath
+	ExposedPorts                  []int            `json:",omitempty"`
+	ShutdownStrategy              ShutdownStrategy `json:",omitempty"`
+	TerminationGracePeriodSeconds int64            `json:",omitempty"`
+	ServiceAliases                []string         `json:",omitempty"`
 }
 
 func (container ContainerRequirement) PublicPorts() []int {
@@ -105,6 +124,7 @@ type Request struct {
 	VMProfile       string `json:",omitempty"`
 	WorkloadProfile WorkloadProfile
 	Containers      []ContainerRequirement
+	WorkloadNetwork *WorkloadNetwork `json:",omitempty"`
 	// 기존 v1 Operation snapshot 복원 전용. 신규 요청에서는 사용하지 않는다.
 	InternalConnections []InternalConnection `json:",omitempty"`
 	ResourceLimits      ResourceLimits
@@ -118,6 +138,7 @@ type ResolvedPolicy struct {
 	EndpointProtocol    EndpointProtocol
 	ExposureRequirement ExposureRequirement
 	Containers          []ContainerRequirement
+	WorkloadNetwork     *WorkloadNetwork `json:",omitempty"`
 	// 기존 STANDARD@v1 승인 정책 재생 전용.
 	InternalConnections []InternalConnection `json:",omitempty"`
 	OutboundMode        OutboundMode

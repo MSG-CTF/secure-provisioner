@@ -2,6 +2,10 @@
 
 The VM adapter runs a pinned multi-container release on an **operator-prepared, exclusive VM**. The scheduler's existing VM target and reservation flow is used. This change does not provision cloud VMs on demand. Kubernetes targets continue through the existing adapter.
 
+For Afterimage's per-role privileges, repository admission guard, K3s diagnostic
+evidence and rollout/rollback requirements, see
+[Afterimage execution policy](afterimage-execution-policy.md).
+
 ## Register a target
 
 1. Prepare one VM per concurrently runnable instance. Install Docker with `overlay2` on XFS with `pquota`; mount the Docker data root before Docker starts. Create a systemd slice that enforces the aggregate CPU and memory limit. Prefetch the seven approved image digests. The guest must not hold registry credentials.

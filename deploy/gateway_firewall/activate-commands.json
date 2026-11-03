@@ -1,0 +1,151 @@
+[
+  {
+    "step": "ACTIVATION GATE: maintenance admission closed; registry Gateway target ON and consumer readiness confirmed; drain/delete all legacy bindings and routes first, then stop Runtime. Never run on the old OFF target.",
+    "argv": [
+      "/usr/bin/systemctl",
+      "stop",
+      "secure-provisioner.service"
+    ],
+    "preconditions": [
+      "Operator verified target is productionGateway ON in registry",
+      "Maintenance admission prevents concurrent new allocations",
+      "No challenge Pods/live bindings/direct NodePort consumers remain on this node",
+      "Gateway source 34.172.6.196 and application routes/configuration validated",
+      "Consumer deployments and target reachability are ready"
+    ]
+  },
+  {
+    "step": "Create Runtime drop-in directory",
+    "argv": [
+      "/usr/bin/install",
+      "-d",
+      "-o",
+      "root",
+      "-g",
+      "root",
+      "-m",
+      "0755",
+      "/etc/systemd/system/secure-provisioner.service.d"
+    ]
+  },
+  {
+    "step": "Install Gateway-only startup dependency",
+    "argv": [
+      "/usr/bin/install",
+      "-o",
+      "root",
+      "-g",
+      "root",
+      "-m",
+      "0644",
+      "/root/msgctf-gateway-nodeport-firewall/80-gateway-nodeport-firewall.conf",
+      "/etc/systemd/system/secure-provisioner.service.d/80-gateway-nodeport-firewall.conf"
+    ]
+  },
+  {
+    "step": "Create K3s drop-in directory",
+    "argv": [
+      "/usr/bin/install",
+      "-d",
+      "-o",
+      "root",
+      "-g",
+      "root",
+      "-m",
+      "0755",
+      "/etc/systemd/system/k3s.service.d"
+    ]
+  },
+  {
+    "step": "Install K3s fail-closed boot/start dependency",
+    "argv": [
+      "/usr/bin/install",
+      "-o",
+      "root",
+      "-g",
+      "root",
+      "-m",
+      "0644",
+      "/root/msgctf-gateway-nodeport-firewall/80-gateway-nodeport-firewall-k3s.conf",
+      "/etc/systemd/system/k3s.service.d/80-gateway-nodeport-firewall.conf"
+    ]
+  },
+  {
+    "step": "Validate actual existing Runtime and K3s units plus early firewall unit; stop if an ordering cycle or invalid directive appears",
+    "argv": [
+      "/usr/bin/systemd-analyze",
+      "verify",
+      "/etc/systemd/system/msgctf-gateway-nodeport-firewall.service",
+      "/etc/systemd/system/secure-provisioner.service",
+      "/etc/systemd/system/k3s.service"
+    ]
+  },
+  {
+    "step": "Reload service definitions",
+    "argv": [
+      "/usr/bin/systemctl",
+      "daemon-reload"
+    ]
+  },
+  {
+    "step": "Apply now and persist across boot; stop on any failure",
+    "argv": [
+      "/usr/bin/systemctl",
+      "enable",
+      "--now",
+      "msgctf-gateway-nodeport-firewall.service"
+    ]
+  },
+  {
+    "step": "Verify both families before Runtime startup",
+    "argv": [
+      "/usr/bin/python3",
+      "-I",
+      "/usr/local/sbin/msgctf-gateway-nodeport-firewall.py",
+      "verify"
+    ]
+  },
+  {
+    "step": "Start Runtime only when the separately reviewed productionGateway configuration/routes are ready",
+    "argv": [
+      "/usr/bin/systemctl",
+      "start",
+      "secure-provisioner.service"
+    ]
+  },
+  {
+    "step": "Check both units",
+    "argv": [
+      "/usr/bin/systemctl",
+      "--no-pager",
+      "--full",
+      "status",
+      "msgctf-gateway-nodeport-firewall.service",
+      "secure-provisioner.service"
+    ]
+  },
+  {
+    "step": "Show IPv4 return/drop counters",
+    "argv": [
+      "/usr/sbin/iptables",
+      "-w",
+      "5",
+      "-t",
+      "raw",
+      "-nvxL",
+      "MSGCTF_GWNP4"
+    ]
+  },
+  {
+    "step": "Show IPv6 deny counters",
+    "argv": [
+      "/usr/sbin/ip6tables",
+      "-w",
+      "5",
+      "-t",
+      "raw",
+      "-nvxL",
+      "MSGCTF_GWNP6"
+    ]
+  }
+]

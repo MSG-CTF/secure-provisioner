@@ -1,0 +1,41 @@
+name: Afterimage K3s profile verification
+on:
+  push:
+    branches: [codex/afterimage-k3s-runtime-config-20261028]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify-and-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Unit and compatibility checks without production credentials
+        run: |
+          gofmt -w internal/httpapi/create.go internal/httpapi/image_policy.go internal/httpapi/service_aliases_test.go internal/isolation/profile.go internal/isolation/static_resolver.go internal/isolation/service_aliases.go internal/isolation/service_aliases_test.go internal/k3s/resources.go internal/k3s/security_resources.go internal/k3s/service_aliases_test.go internal/operations/operation.go internal/runtimebinding/binding.go cmd/afterimage-plan-check/main.go
+          git diff > afterimage-gofmt.patch
+          go test -p 1 ./internal/isolation ./internal/httpapi ./internal/k3s ./internal/operations ./internal/runtimebinding ./internal/runtimeops ./internal/windowsruntime -timeout 5m
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: afterimage-gofmt
+          path: afterimage-gofmt.patch
+      - name: Validate approved image catalog and render eight non-root Pods offline
+        run: |
+          go run ./cmd/afterimage-plan-check config/afterimage-k3s-image-policies.json config/afterimage-k3s-request.json > afterimage-plan-check.json
+          CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o secure-provisioner ./cmd/provisioner
+          sha256sum secure-provisioner > secure-provisioner.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: afterimage-k3s-runtime
+          path: |
+            secure-provisioner
+            secure-provisioner.sha256
+            afterimage-plan-check.json

@@ -1,0 +1,58 @@
+{
+  "operation_id": "prep-example-001",
+  "request_id": "prepare-example-001",
+  "release_id": "c181d657-1bd8-4aad-ad99-cbc8c6119750",
+  "image_set_id": "sha256:a96c344635195e2a40715531e3d420180ab28ce838ab88130364ad51bbb7c4c1",
+  "architecture": "AMD64",
+  "status": "PARTIAL",
+  "nodes": [
+    {
+      "target_id": "target-a",
+      "node_uid": "node-uid-a",
+      "node_name": "node-a",
+      "architecture": "AMD64",
+      "status": "READY",
+      "observed_at": "2026-10-24T00:00:00Z",
+      "images": [
+        {
+          "image": "ghcr.io/msg-ctf/challenges/example/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "status": "READY",
+          "attempts": 1,
+          "observed_at": "2026-10-24T00:00:00Z",
+          "resolved_manifest_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "image": "ghcr.io/msg-ctf/challenges/example/db@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "status": "READY",
+          "attempts": 1,
+          "observed_at": "2026-10-24T00:00:00Z",
+          "resolved_manifest_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      ]
+    },
+    {
+      "target_id": "target-a",
+      "node_uid": "node-uid-b",
+      "node_name": "node-b",
+      "architecture": "AMD64",
+      "status": "FAILED",
+      "observed_at": "2026-10-24T00:00:00Z",
+      "images": [
+        {
+          "image": "ghcr.io/msg-ctf/challenges/example/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "status": "READY",
+          "attempts": 1,
+          "observed_at": "2026-10-24T00:00:00Z",
+          "resolved_manifest_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "image": "ghcr.io/msg-ctf/challenges/example/db@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "status": "FAILED",
+          "attempts": 3,
+          "observed_at": "2026-10-24T00:00:00Z",
+          "error_code": "REGISTRY_UNAVAILABLE"
+        }
+      ]
+    }
+  ]
+}

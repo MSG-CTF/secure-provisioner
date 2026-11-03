@@ -533,6 +533,7 @@ func TestRuntimeWorkloadIDAndServiceURL(t *testing.T) {
 
 func validCluster(targetID string) Cluster {
 	return Cluster{Config: ClusterConfig{
+		Architecture:  "AMD64",
 		TargetID:      targetID,
 		PublicGateway: "https://gateway.example.invalid",
 		IngressClass:  "nginx",

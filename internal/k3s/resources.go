@@ -33,19 +33,20 @@ const (
 )
 
 type ResourceSet struct {
-	Namespace          *corev1.Namespace
-	ServiceAccount     *corev1.ServiceAccount
-	ResourceQuota      *corev1.ResourceQuota
-	LimitRange         *corev1.LimitRange
-	NetworkPolicies    []*networkingv1.NetworkPolicy
-	EnvSecret          *corev1.Secret
-	Deployments        []*appsv1.Deployment
-	Services           []*corev1.Service
-	Ingress            *networkingv1.Ingress
-	ExpectedSpecHashes map[string]string
-	RuntimeWorkloadID  string
-	ServiceURL         string
-	Endpoints          []provisioner.WorkloadEndpoint
+	Namespace                *corev1.Namespace
+	ServiceAccount           *corev1.ServiceAccount
+	ResourceQuota            *corev1.ResourceQuota
+	LimitRange               *corev1.LimitRange
+	NetworkPolicies          []*networkingv1.NetworkPolicy
+	ExclusiveNetworkPolicies bool
+	EnvSecret                *corev1.Secret
+	Deployments              []*appsv1.Deployment
+	Services                 []*corev1.Service
+	Ingress                  *networkingv1.Ingress
+	ExpectedSpecHashes       map[string]string
+	RuntimeWorkloadID        string
+	ServiceURL               string
+	Endpoints                []provisioner.WorkloadEndpoint
 
 	// Deprecated single-resource aliases are retained until the Adapter is
 	// migrated to iterate over Deployments and Services.
@@ -70,7 +71,14 @@ func BuildResourceSet(cluster Cluster, command provisioner.CreateWorkloadCommand
 }
 
 func buildResourceSetForOperation(cluster Cluster, command provisioner.CreateWorkloadCommand, operationID string) (ResourceSet, error) {
+	architecture := strings.ToLower(cluster.Config.Architecture)
+	if (architecture != "amd64" && architecture != "arm64") || (command.Architecture != "" && strings.ToLower(command.Architecture) != architecture) {
+		return ResourceSet{}, newRuntimeError("PLATFORM_MISMATCH", false, nil)
+	}
 	containers := normalizedCommandContainers(command)
+	if command.SteadyCPUMillicores != 0 && (command.SteadyCPUMillicores < 1 || command.SteadyCPUMillicores >= command.ResourceLimits.CPUMillicores || len(containers) != 1) {
+		return ResourceSet{}, newRuntimeError("INVALID_CREATE_COMMAND", false, nil)
+	}
 	if !validWorkloadCommand(cluster, command, containers) {
 		return ResourceSet{}, newRuntimeError("INVALID_CREATE_COMMAND", false, nil)
 	}
@@ -101,15 +109,16 @@ func buildResourceSetForOperation(cluster Cluster, command provisioner.CreateWor
 	pathType := networkingv1.PathTypePrefix
 	replicas := int32(1)
 	resources := ResourceSet{
-		Namespace:          buildNamespace(command, namespace, operationID),
-		ServiceAccount:     buildRuntimeServiceAccount(namespace, labels),
-		ResourceQuota:      buildRuntimeResourceQuota(namespace, labels, command.Policy, len(containers), nodePortQuota(cluster.Config.ExposureMode, containers)),
-		LimitRange:         buildRuntimeLimitRange(namespace, labels, command.Policy, len(containers)),
-		NetworkPolicies:    networkPolicies,
-		Deployments:        make([]*appsv1.Deployment, 0, len(containers)),
-		Services:           make([]*corev1.Service, 0, len(containers)),
-		ExpectedSpecHashes: make(map[string]string, len(containers)),
-		Endpoints:          make([]provisioner.WorkloadEndpoint, 0),
+		Namespace:                buildNamespace(command, namespace, operationID),
+		ServiceAccount:           buildRuntimeServiceAccount(namespace, labels),
+		ResourceQuota:            buildRuntimeResourceQuota(namespace, labels, command.Policy, len(containers), nodePortQuota(cluster.Config.ExposureMode, containers)),
+		LimitRange:               buildRuntimeLimitRange(namespace, labels, command.Policy, len(containers)),
+		NetworkPolicies:          networkPolicies,
+		ExclusiveNetworkPolicies: command.Policy.WorkloadNetwork != nil,
+		Deployments:              make([]*appsv1.Deployment, 0, len(containers)),
+		Services:                 make([]*corev1.Service, 0, len(containers)),
+		ExpectedSpecHashes:       make(map[string]string, len(containers)),
+		Endpoints:                make([]provisioner.WorkloadEndpoint, 0),
 	}
 	if cluster.Config.ExposureMode != ExposureModeNodePort {
 		resources.Ingress = &networkingv1.Ingress{
@@ -130,6 +139,10 @@ func buildResourceSetForOperation(cluster Cluster, command provisioner.CreateWor
 	for index, container := range containers {
 		requirement := policyContainers[container.Name]
 		limits := distributedResourceLimits(resolvedResourceLimits(command.Policy.ResourceLimits), len(containers), index)
+		if command.SteadyCPUMillicores > 0 {
+			// Replacement Pods inherit steady CPU, never an unreserved startup peak.
+			limits.CPUMillicores = command.SteadyCPUMillicores
+		}
 		specHash, hashErr := createContainerSpecHash(command, container, requirement, limits)
 		if hashErr != nil {
 			return ResourceSet{}, newRuntimeError("INVALID_CREATE_COMMAND", false, nil)
@@ -158,6 +171,13 @@ func buildResourceSetForOperation(cluster Cluster, command provisioner.CreateWor
 				Requests: quantities,
 				Limits:   quantities.DeepCopy(),
 			},
+		}
+		if hook := reviewedShutdownCommand(requirement.ShutdownStrategy); hook != nil {
+			podContainer.Lifecycle = &corev1.Lifecycle{
+				PreStop: &corev1.LifecycleHandler{
+					Exec: &corev1.ExecAction{Command: hook},
+				},
+			}
 		}
 		names := make([]string, 0, len(container.Env))
 		for name := range container.Env {
@@ -203,8 +223,13 @@ func buildResourceSetForOperation(cluster Cluster, command provisioner.CreateWor
 		}
 		// Service-link variables can collide with challenge settings such as SERVICE_PORT.
 		podSpec := corev1.PodSpec{
+			NodeSelector:       map[string]string{"kubernetes.io/os": "linux", "kubernetes.io/arch": architecture},
 			Containers:         []corev1.Container{podContainer},
 			EnableServiceLinks: boolPointer(false),
+		}
+		if requirement.TerminationGracePeriodSeconds > 0 {
+			seconds := requirement.TerminationGracePeriodSeconds
+			podSpec.TerminationGracePeriodSeconds = &seconds
 		}
 		applyPodSecurityBaseline(&podSpec, &podSpec.Containers[0], requirement)
 		if command.Policy.RuntimeClassName != "" {
@@ -243,6 +268,11 @@ func buildResourceSetForOperation(cluster Cluster, command provisioner.CreateWor
 				Selector: copyLabels(podLabels),
 				Ports:    servicePorts,
 			},
+		}
+		for _, alias := range requirement.ServiceAliases {
+			privateAlias := service.DeepCopy()
+			privateAlias.Name = alias
+			resources.Services = append(resources.Services, privateAlias)
 		}
 		publicService := service
 		publicPorts := requirement.PublicPorts()
@@ -370,6 +400,36 @@ func BuildNodePortEndpoints(
 	return endpoints, nil
 }
 
+func applyEndpointProtocols(endpoints []provisioner.WorkloadEndpoint, containers []provisioner.WorkloadContainer) ([]provisioner.WorkloadEndpoint, error) {
+	for index := range endpoints {
+		endpoint := &endpoints[index]
+		for _, container := range containers {
+			if container.Name != endpoint.ContainerName {
+				continue
+			}
+			for _, hint := range container.EndpointProtocols {
+				if hint.Port != endpoint.Port {
+					continue
+				}
+				if hint.Protocol != isolation.EndpointProtocolHTTP && hint.Protocol != isolation.EndpointProtocolTCP {
+					return nil, newRuntimeError("INVALID_CREATE_COMMAND", false, nil)
+				}
+				parsed, err := url.Parse(endpoint.ServiceURL)
+				if err != nil {
+					return nil, newRuntimeError("INVALID_CREATE_COMMAND", false, err)
+				}
+				if hint.Protocol == isolation.EndpointProtocolTCP {
+					parsed.Scheme = "tcp"
+				} else if parsed.Scheme == "tcp" {
+					parsed.Scheme = "http"
+				}
+				endpoint.Protocol, endpoint.ServiceURL = hint.Protocol, parsed.String()
+			}
+		}
+	}
+	return endpoints, nil
+}
+
 func normalizedCommandContainers(command provisioner.CreateWorkloadCommand) []provisioner.WorkloadContainer {
 	return command.Containers
 }
@@ -407,34 +467,40 @@ func createContainerSpecHash(
 	requirement isolation.ContainerRequirement,
 	limits provisioner.ResourceLimits,
 ) (string, error) {
+	startupCPU := 0
+	if command.SteadyCPUMillicores > 0 {
+		startupCPU = command.ResourceLimits.CPUMillicores
+	}
 	spec := struct {
-		InstanceID          string                         `json:"instance_id"`
-		TeamID              provisioner.TeamID             `json:"team_id"`
-		RuntimeType         provisioner.RuntimeType        `json:"runtime_type"`
-		TargetID            string                         `json:"target_id"`
-		Container           provisioner.WorkloadContainer  `json:"container"`
-		Requirement         isolation.ContainerRequirement `json:"requirement"`
-		IsolationRef        isolation.ProfileRef           `json:"isolation_ref"`
-		WorkloadProfileRef  isolation.ProfileRef           `json:"workload_profile_ref"`
-		RuntimeClassName    string                         `json:"runtime_class_name"`
-		EndpointProtocol    isolation.EndpointProtocol     `json:"endpoint_protocol"`
-		ExposureRequirement isolation.ExposureRequirement  `json:"exposure_requirement"`
-		Baseline            isolation.Baseline             `json:"baseline"`
-		ResourceLimits      provisioner.ResourceLimits     `json:"resource_limits"`
+		StartupCPUMillicores int                            `json:"startup_cpu_millicores,omitempty"`
+		InstanceID           string                         `json:"instance_id"`
+		TeamID               provisioner.TeamID             `json:"team_id"`
+		RuntimeType          provisioner.RuntimeType        `json:"runtime_type"`
+		TargetID             string                         `json:"target_id"`
+		Container            provisioner.WorkloadContainer  `json:"container"`
+		Requirement          isolation.ContainerRequirement `json:"requirement"`
+		IsolationRef         isolation.ProfileRef           `json:"isolation_ref"`
+		WorkloadProfileRef   isolation.ProfileRef           `json:"workload_profile_ref"`
+		RuntimeClassName     string                         `json:"runtime_class_name"`
+		EndpointProtocol     isolation.EndpointProtocol     `json:"endpoint_protocol"`
+		ExposureRequirement  isolation.ExposureRequirement  `json:"exposure_requirement"`
+		Baseline             isolation.Baseline             `json:"baseline"`
+		ResourceLimits       provisioner.ResourceLimits     `json:"resource_limits"`
 	}{
-		InstanceID:          command.InstanceID,
-		TeamID:              command.TeamID,
-		RuntimeType:         command.RuntimeType,
-		TargetID:            command.TargetID,
-		Container:           container,
-		Requirement:         requirement,
-		IsolationRef:        command.Policy.IsolationRef,
-		WorkloadProfileRef:  command.Policy.WorkloadProfileRef,
-		RuntimeClassName:    command.Policy.RuntimeClassName,
-		EndpointProtocol:    command.Policy.EndpointProtocol,
-		ExposureRequirement: command.Policy.ExposureRequirement,
-		Baseline:            command.Policy.Baseline,
-		ResourceLimits:      limits,
+		StartupCPUMillicores: startupCPU,
+		InstanceID:           command.InstanceID,
+		TeamID:               command.TeamID,
+		RuntimeType:          command.RuntimeType,
+		TargetID:             command.TargetID,
+		Container:            container,
+		Requirement:          requirement,
+		IsolationRef:         command.Policy.IsolationRef,
+		WorkloadProfileRef:   command.Policy.WorkloadProfileRef,
+		RuntimeClassName:     command.Policy.RuntimeClassName,
+		EndpointProtocol:     command.Policy.EndpointProtocol,
+		ExposureRequirement:  command.Policy.ExposureRequirement,
+		Baseline:             command.Policy.Baseline,
+		ResourceLimits:       limits,
 	}
 	encoded, err := json.Marshal(spec)
 	if err != nil {
@@ -475,6 +541,8 @@ func validWorkloadCommand(
 	hasExposed := false
 	for _, container := range containers {
 		if provisioner.ValidateEnvironment(container.Env, false) != nil ||
+			!isolation.ValidTerminationGracePeriod(container.TerminationGracePeriodSeconds) ||
+			!isolation.ValidShutdownStrategy(isolation.WorkloadProfile(command.Policy.WorkloadProfileRef.Name), container.ShutdownStrategy) ||
 			!provisioner.ValidSecretReference(container.SecretRef) ||
 			(container.RequiresFlag && container.SecretRef == "") {
 			return false
@@ -512,6 +580,15 @@ func validWorkloadCommand(
 			return false
 		}
 		publicPorts := container.PublicPorts()
+		seenProtocols := make(map[int]bool)
+		for _, hint := range container.EndpointProtocols {
+			if _, declared := ports[hint.Port]; !declared || seenProtocols[hint.Port] ||
+				(hint.Protocol != isolation.EndpointProtocolHTTP && hint.Protocol != isolation.EndpointProtocolTCP) ||
+				(hint.Protocol == isolation.EndpointProtocolTCP && cluster.Config.ExposureMode != ExposureModeNodePort) {
+				return false
+			}
+			seenProtocols[hint.Port] = true
+		}
 		hasExposed = hasExposed || len(publicPorts) > 0
 	}
 	return hasExposed
