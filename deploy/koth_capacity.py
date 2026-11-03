@@ -43,14 +43,17 @@ def jenga_template(template):
     annotations = changed.setdefault("metadata", {}).setdefault("annotations", {})
     if any(c["name"] == INIT_NAME for c in old) and annotations.get(PROFILE) != "jenga-v1":
         raise ValueError("An unrecognized SQLite init container already exists")
-    init = {
+    init = copy.deepcopy(next((c for c in old if c["name"] == INIT_NAME), {}))
+    if init.get("env") or init.get("envFrom"):
+        raise ValueError("SQLite init must not inherit game secrets")
+    init.update({
         "name": INIT_NAME, "image": game["image"], "imagePullPolicy": "IfNotPresent",
         "command": ["python", "-c", SQLITE_INIT],
         "volumeMounts": [copy.deepcopy(mounts[0])],
         "resources": {"requests": {"cpu": "50m", "memory": "32Mi"},
                       "limits": {"cpu": "100m", "memory": "64Mi", "ephemeral-storage": "64Mi"}},
         "securityContext": copy.deepcopy(game.get("securityContext", {})),
-    }
+    })
     spec["initContainers"] = [c for c in old if c["name"] != INIT_NAME] + [init]
     annotations[PROFILE] = "jenga-v1"
     return changed
@@ -125,9 +128,23 @@ def tune_jenga_gateway(state_dir, upstream):
     target = Path("/etc/msgctf-koth/Caddyfile")
     original = target.read_text(encoding="utf-8")
     candidate = jenga_gateway(original, upstream)
-    if candidate == original:
-        return False
     digest = lambda text: hashlib.sha256(text.encode()).hexdigest()
+    state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    receipt = state_dir / "jenga-gateway-applied-sha256"
+    def reload_gateway():
+        result = subprocess.run(["systemctl", "show", "msg-koth-gateway", "--property=CanReload", "--value"],
+                                capture_output=True, text=True, check=True, timeout=10)
+        operation = "reload" if result.stdout.strip() == "yes" else "restart"
+        subprocess.run(["systemctl", operation, "msg-koth-gateway"], check=True, capture_output=True, timeout=25)
+        receipt.write_text(digest(candidate)); receipt.chmod(0o600)
+    if candidate == original:
+        if not receipt.exists() or receipt.read_text() != digest(candidate):
+            # Recover if config replacement succeeded but the service update failed.
+            subprocess.run(["/usr/local/bin/caddy", "validate", "--config", str(target), "--adapter", "caddyfile"],
+                           check=True, capture_output=True, timeout=20)
+            reload_gateway()
+            return True
+        return False
     restores = []
     for path in target.parent.glob("rehearsal-*/state.json"):
         state = json.loads(path.read_text())
@@ -139,7 +156,6 @@ def tune_jenga_gateway(state_dir, upstream):
             restores.append((path, state, restore_file, jenga_gateway(restore_original, upstream)))
     if len(restores) > 1:
         raise ValueError("More than one active gateway restore")
-    state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     for name, text in [("jenga-gateway", candidate)] + [("jenga-event-gateway", row[3]) for row in restores]:
         check = state_dir / (name + ".candidate")
         check.write_text(text)
@@ -168,7 +184,7 @@ def tune_jenga_gateway(state_dir, upstream):
     if target.read_text() != original:
         raise ValueError("Gateway changed during capacity validation")
     replace(target, candidate)
-    subprocess.run(["systemctl", "reload", "msg-koth-gateway"], check=True, capture_output=True, timeout=25)
+    reload_gateway()
     return True
 
 

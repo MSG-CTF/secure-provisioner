@@ -65,6 +65,8 @@ class CapacityProfiles(unittest.TestCase):
         self.assertNotIn("envFrom", after["spec"]["initContainers"][0])
         original["spec"]["template"] = after
         self.assertEqual(after, capacity_template("jenga", original))
+        after["spec"]["initContainers"][0].update(terminationMessagePath='/dev/termination-log',terminationMessagePolicy='File')
+        self.assertEqual(after, capacity_template("jenga", original))
 
     def test_rejects_shared_sqlite_replicas_and_wrong_game_or_storage(self):
         for change in (lambda d: d["spec"].update(replicas=2),
