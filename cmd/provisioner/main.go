@@ -63,6 +63,14 @@ type application struct {
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
+	if len(os.Args) == 3 && os.Args[1] == "--validate-image-policies" {
+		if _, err := httpapi.LoadImagePolicies(os.Args[2]); err != nil {
+			logger.Error("image policy validation failed")
+			os.Exit(1)
+		}
+		fmt.Println(`{"valid":true}`)
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "--validate-registry" {
 		if err := validateRegistryCommand(os.Args[2:], os.Stdout); err != nil {
 			logger.Error("registry validation failed")
