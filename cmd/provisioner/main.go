@@ -290,6 +290,7 @@ func newApplication(config appConfig, factory k3s.ClientFactory) (*application, 
 		Secrets:            secretResolver,
 		RequiredFlagImages: imagePolicies.RequiredFlagImages(),
 		RequiredFlagFiles:  imagePolicies.RequiredFlagFiles(),
+		StartupCPUProfiles: imagePolicies.StartupCPUProfiles(),
 		RequiresVMImage: func(image string) bool {
 			return imagePolicies.RequiresVMImage(image) || vmRoute.RequiresVMImage(image)
 		},

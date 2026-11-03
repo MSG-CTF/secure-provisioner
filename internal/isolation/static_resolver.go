@@ -146,6 +146,9 @@ func validateWorkloadProfile(ref ProfileRef, containers []ContainerRequirement) 
 		if !ValidShutdownStrategy(WorkloadProfile(ref.Name), container.ShutdownStrategy) {
 			return rejected("unsupported shutdown strategy for workload profile")
 		}
+		if !ValidTerminationGracePeriod(container.TerminationGracePeriodSeconds) {
+			return rejected("unsupported termination grace period")
+		}
 		if len(container.PublicPorts()) > 0 {
 			exposedContainers++
 			if ref == (ProfileRef{Name: "PWN", Version: "v1"}) && len(container.Ports) != 1 {

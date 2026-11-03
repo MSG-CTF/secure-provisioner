@@ -29,6 +29,12 @@ type ResourceLimits struct {
 	EphemeralStorageMiB int
 }
 
+// StartupCPUProfile is an exact-image operator approval, not a client-selected limit.
+type StartupCPUProfile struct {
+	Steady int
+	Peak   int
+}
+
 type WorkloadContainer struct {
 	Name   string
 	Image  string
@@ -36,15 +42,16 @@ type WorkloadContainer struct {
 	Expose bool
 	// ExposedPorts is used for a partial selection. Omitted legacy payloads keep
 	// their original Expose semantics and serialized spec hashes.
-	ExposedPorts      []int                      `json:",omitempty"`
-	ReadinessHTTP     *HTTPReadiness             `json:",omitempty"`
-	TCPStartupOnly    bool                       `json:",omitempty"`
-	Env               map[string]string          `json:",omitempty"`
-	SecretRef         string                     `json:",omitempty"`
-	RequiresFlag      bool                       `json:",omitempty"`
-	FlagFilePath      string                     `json:",omitempty"`
-	EndpointProtocols []PortProtocol             `json:",omitempty"`
-	ShutdownStrategy  isolation.ShutdownStrategy `json:",omitempty"`
+	ExposedPorts                  []int                      `json:",omitempty"`
+	ReadinessHTTP                 *HTTPReadiness             `json:",omitempty"`
+	TCPStartupOnly                bool                       `json:",omitempty"`
+	Env                           map[string]string          `json:",omitempty"`
+	SecretRef                     string                     `json:",omitempty"`
+	RequiresFlag                  bool                       `json:",omitempty"`
+	FlagFilePath                  string                     `json:",omitempty"`
+	EndpointProtocols             []PortProtocol             `json:",omitempty"`
+	ShutdownStrategy              isolation.ShutdownStrategy `json:",omitempty"`
+	TerminationGracePeriodSeconds int64                      `json:",omitempty"`
 	// PublicOriginEnv is populated only by the operator image policy, never the request.
 	PublicOriginEnv string `json:"public_origin_env,omitempty"`
 }
@@ -76,23 +83,25 @@ type CreateWorkloadCommand struct {
 	Architecture string
 	// RequestFingerprint identifies the caller input before server-owned policy
 	// overrides. Legacy snapshots decode this field to an empty string.
-	RequestFingerprint string
-	RequestID          string
-	InstanceID         string
-	TeamID             TeamID
-	RuntimeType        RuntimeType
-	TargetID           string
-	Containers         []WorkloadContainer
-	ResourceLimits     ResourceLimits
-	PolicyRequest      isolation.Request
-	Policy             isolation.ResolvedPolicy
+	RequestFingerprint  string
+	RequestID           string
+	InstanceID          string
+	TeamID              TeamID
+	RuntimeType         RuntimeType
+	TargetID            string
+	Containers          []WorkloadContainer
+	ResourceLimits      ResourceLimits
+	SteadyCPUMillicores int `json:",omitempty"`
+	PolicyRequest       isolation.Request
+	Policy              isolation.ResolvedPolicy
 }
 
 type CreateWorkloadResult struct {
-	RuntimeWorkloadID string
-	NamespaceUID      string
-	ServiceURL        string
-	Endpoints         []WorkloadEndpoint
+	SteadyCPUMillicores int `json:",omitempty"`
+	RuntimeWorkloadID   string
+	NamespaceUID        string
+	ServiceURL          string
+	Endpoints           []WorkloadEndpoint
 }
 
 type WorkloadEndpoint struct {

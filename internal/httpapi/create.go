@@ -27,11 +27,39 @@ type RuntimeTarget struct {
 }
 
 type RuntimeWorkload struct {
-	Image          string              `json:"image,omitempty"`
-	ContainerPort  int                 `json:"container_port,omitempty"`
-	Containers     []RuntimeContainer  `json:"containers,omitempty"`
-	Healthcheck    *RuntimeHealthcheck `json:"healthcheck,omitempty"`
-	ResourceLimits ResourceLimits      `json:"resource_limits"`
+	SteadyCPUMillicores int                 `json:"steady_cpu_millicores,omitempty"`
+	Image               string              `json:"image,omitempty"`
+	ContainerPort       int                 `json:"container_port,omitempty"`
+	Containers          []RuntimeContainer  `json:"containers,omitempty"`
+	Healthcheck         *RuntimeHealthcheck `json:"healthcheck,omitempty"`
+	ResourceLimits      ResourceLimits      `json:"resource_limits"`
+}
+
+func (workload *RuntimeWorkload) UnmarshalJSON(data []byte) error {
+	type wireWorkload RuntimeWorkload
+	var decoded wireWorkload
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	for name, value := range fields {
+		switch name {
+		case "steady_cpu_millicores":
+			if bytes.Equal(bytes.TrimSpace(value), []byte("null")) || decoded.SteadyCPUMillicores < 1 {
+				return fmt.Errorf("steady_cpu_millicores must be a positive integer when supplied")
+			}
+		case "image", "container_port", "containers", "healthcheck", "resource_limits":
+		default:
+			return fmt.Errorf("unknown workload field %q", name)
+		}
+	}
+	*workload = RuntimeWorkload(decoded)
+	return nil
 }
 
 type RuntimeHealthcheck struct {
@@ -41,23 +69,24 @@ type RuntimeHealthcheck struct {
 }
 
 type RuntimeContainer struct {
-	Name              string            `json:"name"`
-	Image             string            `json:"image"`
-	Ports             []int             `json:"ports"`
-	Expose            bool              `json:"expose"`
-	ExposedPorts      []int             `json:"exposed_ports,omitempty"`
-	RunAsUser         int64             `json:"run_as_user"`
-	WritablePaths     []WritablePath    `json:"writable_paths,omitempty"`
-	Env               map[string]string `json:"env,omitempty"`
-	SecretRef         string            `json:"secret_ref,omitempty"`
-	readinessHTTP     *provisioner.HTTPReadiness
-	tcpStartupOnly    bool
-	requiresFlag      bool
-	flagFilePath      string
-	endpointProtocols []provisioner.PortProtocol
-	shutdownStrategy  isolation.ShutdownStrategy
-	publicOriginEnv   string
-	serviceAliases    []string
+	Name                          string            `json:"name"`
+	Image                         string            `json:"image"`
+	Ports                         []int             `json:"ports"`
+	Expose                        bool              `json:"expose"`
+	ExposedPorts                  []int             `json:"exposed_ports,omitempty"`
+	RunAsUser                     int64             `json:"run_as_user"`
+	WritablePaths                 []WritablePath    `json:"writable_paths,omitempty"`
+	Env                           map[string]string `json:"env,omitempty"`
+	SecretRef                     string            `json:"secret_ref,omitempty"`
+	readinessHTTP                 *provisioner.HTTPReadiness
+	tcpStartupOnly                bool
+	requiresFlag                  bool
+	flagFilePath                  string
+	endpointProtocols             []provisioner.PortProtocol
+	shutdownStrategy              isolation.ShutdownStrategy
+	terminationGracePeriodSeconds int64
+	publicOriginEnv               string
+	serviceAliases                []string
 }
 
 func (container *RuntimeContainer) UnmarshalJSON(data []byte) error {
@@ -257,9 +286,10 @@ func scanJSONValue(decoder *json.Decoder) error {
 }
 
 type CreateWorkloadResponse struct {
-	RuntimeWorkloadID string                     `json:"runtime_workload_id"`
-	ServiceURL        string                     `json:"service_url"`
-	Endpoints         []WorkloadEndpointResponse `json:"endpoints"`
+	SteadyCPUMillicores int                        `json:"steady_cpu_millicores,omitempty"`
+	RuntimeWorkloadID   string                     `json:"runtime_workload_id"`
+	ServiceURL          string                     `json:"service_url"`
+	Endpoints           []WorkloadEndpointResponse `json:"endpoints"`
 }
 
 func (request *CreateWorkloadRequest) Validate() error {
@@ -289,6 +319,11 @@ func (request *CreateWorkloadRequest) Validate() error {
 	if request.Workload.ResourceLimits.CPUMillicores <= 0 {
 		return fmt.Errorf("cpu_millicores must be positive")
 	}
+	if request.Workload.SteadyCPUMillicores != 0 &&
+		(request.Workload.SteadyCPUMillicores < 1 || request.Workload.SteadyCPUMillicores >= request.Workload.ResourceLimits.CPUMillicores ||
+			request.IsolationProfile != "WEB" || request.Target.RuntimeType != RuntimeTypeKubernetes || len(containers) != 1) {
+		return fmt.Errorf("steady_cpu_millicores requires a smaller positive CPU for a single WEB Kubernetes container")
+	}
 	if request.Workload.ResourceLimits.MemoryMiB <= 0 {
 		return fmt.Errorf("memory_mib must be positive")
 	}
@@ -312,14 +347,15 @@ func (request *CreateWorkloadRequest) Validate() error {
 func (request CreateWorkloadRequest) ToCommand() provisioner.CreateWorkloadCommand {
 	containers, _ := request.normalizedContainers()
 	return provisioner.CreateWorkloadCommand{
-		ReleaseID:    request.ReleaseID,
-		Architecture: request.Architecture,
-		RequestID:    request.RequestID,
-		InstanceID:   request.InstanceID,
-		TeamID:       request.TeamID,
-		RuntimeType:  provisioner.RuntimeType(request.Target.RuntimeType),
-		TargetID:     request.Target.TargetID,
-		Containers:   containers,
+		ReleaseID:           request.ReleaseID,
+		Architecture:        request.Architecture,
+		RequestID:           request.RequestID,
+		InstanceID:          request.InstanceID,
+		TeamID:              request.TeamID,
+		RuntimeType:         provisioner.RuntimeType(request.Target.RuntimeType),
+		TargetID:            request.Target.TargetID,
+		Containers:          containers,
+		SteadyCPUMillicores: request.Workload.SteadyCPUMillicores,
 		ResourceLimits: provisioner.ResourceLimits{
 			CPUMillicores:       request.Workload.ResourceLimits.CPUMillicores,
 			MemoryMiB:           request.Workload.ResourceLimits.MemoryMiB,
@@ -401,11 +437,12 @@ func (request CreateWorkloadRequest) normalizedContainers() ([]provisioner.Workl
 		normalized := provisioner.WorkloadContainer{
 			Name: container.Name, Image: container.Image, Ports: ports, Expose: container.Expose,
 			Env: maps.Clone(container.Env), SecretRef: container.SecretRef, RequiresFlag: container.requiresFlag,
-			FlagFilePath:      container.flagFilePath,
-			TCPStartupOnly:    container.tcpStartupOnly,
-			ShutdownStrategy:  container.shutdownStrategy,
-			EndpointProtocols: slices.Clone(container.endpointProtocols),
-			PublicOriginEnv:   container.publicOriginEnv,
+			FlagFilePath:                  container.flagFilePath,
+			TCPStartupOnly:                container.tcpStartupOnly,
+			ShutdownStrategy:              container.shutdownStrategy,
+			TerminationGracePeriodSeconds: container.terminationGracePeriodSeconds,
+			EndpointProtocols:             slices.Clone(container.endpointProtocols),
+			PublicOriginEnv:               container.publicOriginEnv,
 		}
 		if container.readinessHTTP != nil {
 			readiness := *container.readinessHTTP
@@ -521,13 +558,14 @@ func (request CreateWorkloadRequest) toPolicyRequest(containers []provisioner.Wo
 			writablePaths = request.Workload.Containers[index].WritablePaths
 		}
 		requirements[index] = isolation.ContainerRequirement{
-			Name:             container.Name,
-			Ports:            append([]int(nil), container.Ports...),
-			Expose:           container.Expose,
-			ExposedPorts:     append([]int(nil), container.ExposedPorts...),
-			RunAsUser:        runAsUser,
-			WritablePaths:    make([]isolation.WritablePath, len(writablePaths)),
-			ShutdownStrategy: container.ShutdownStrategy,
+			Name:                          container.Name,
+			Ports:                         append([]int(nil), container.Ports...),
+			Expose:                        container.Expose,
+			ExposedPorts:                  append([]int(nil), container.ExposedPorts...),
+			RunAsUser:                     runAsUser,
+			WritablePaths:                 make([]isolation.WritablePath, len(writablePaths)),
+			ShutdownStrategy:              container.ShutdownStrategy,
+			TerminationGracePeriodSeconds: container.TerminationGracePeriodSeconds,
 		}
 		if len(request.Workload.Containers) > 0 {
 			requirements[index].ServiceAliases = slices.Clone(request.Workload.Containers[index].serviceAliases)
@@ -569,9 +607,10 @@ func validPort(port int) bool {
 
 func NewCreateWorkloadResponse(result provisioner.CreateWorkloadResult) CreateWorkloadResponse {
 	response := CreateWorkloadResponse{
-		RuntimeWorkloadID: result.RuntimeWorkloadID,
-		ServiceURL:        result.ServiceURL,
-		Endpoints:         make([]WorkloadEndpointResponse, 0, len(result.Endpoints)),
+		SteadyCPUMillicores: result.SteadyCPUMillicores,
+		RuntimeWorkloadID:   result.RuntimeWorkloadID,
+		ServiceURL:          result.ServiceURL,
+		Endpoints:           make([]WorkloadEndpointResponse, 0, len(result.Endpoints)),
 	}
 	for _, endpoint := range result.Endpoints {
 		response.Endpoints = append(response.Endpoints, newWorkloadEndpointResponse(endpoint))

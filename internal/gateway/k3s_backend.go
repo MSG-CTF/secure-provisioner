@@ -69,7 +69,18 @@ func (b *KubernetesBackend) DeleteWorkload(ctx context.Context, c provisioner.De
 func (b *KubernetesBackend) DeleteWorkloadStep(ctx context.Context, c provisioner.DeleteWorkloadCommand, binding runtimebinding.Binding) error {
 	stepCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	return b.Delete.DeleteWorkload(stepCtx, c, binding)
+	remove := b.Delete.DeleteWorkload
+	if stopped, ok := b.Delete.(interface {
+		DeleteStoppedWorkload(context.Context, provisioner.DeleteWorkloadCommand, runtimebinding.Binding) error
+	}); ok {
+		remove = stopped.DeleteStoppedWorkload
+	}
+	err := remove(stepCtx, c, binding)
+	var pending *operations.ProgressPendingError
+	if errors.As(err, &pending) && ctx.Err() == nil {
+		return operations.NewProgressPendingError("GATEWAY_WORKLOAD_DELETE_PENDING", err)
+	}
+	return err
 }
 func (b *KubernetesBackend) CleanupFailedCreate(ctx context.Context, c provisioner.CreateWorkloadCommand, cleanup provisioner.CreateCleanup) error {
 	if cleaner, ok := b.Create.(k3s.FailedCreateCleaner); ok {
@@ -263,7 +274,7 @@ func (b *KubernetesBackend) Quiesce(ctx context.Context, r Record) error {
 		return err
 	}
 	if len(pods.Items) > 0 {
-		return fmt.Errorf("%d workload pods still terminating", len(pods.Items))
+		return operations.NewProgressPendingError("GATEWAY_WORKLOAD_STOP_PENDING", fmt.Errorf("%d workload pods still terminating", len(pods.Items)))
 	}
 	return nil
 }

@@ -156,7 +156,10 @@ func (a *Adapter) CreateWorkloadForOperation(ctx context.Context, c provisioner.
 	// Callback paths classify journal/remote uncertainty explicitly. Preserve
 	// backend runtime errors and cleanup proof wrappers exactly as returned.
 	if err != nil && !callbackRan {
-		err = hold("GATEWAY_JOURNAL_UNAVAILABLE", err)
+		var pending *operations.ProgressPendingError
+		if !errors.As(err, &pending) {
+			err = hold("GATEWAY_JOURNAL_UNAVAILABLE", err)
+		}
 	}
 	return result, err
 }
@@ -250,6 +253,10 @@ func (a *Adapter) remove(ctx context.Context, s Session, r Record) error {
 		if quiesceErr != nil {
 			return hold("GATEWAY_WORKLOAD_STOP_PENDING", quiesceErr)
 		}
+	} else if err := a.backend.Quiesce(ctx, r); err != nil {
+		// Route deletion is durable, but pod termination may still be in progress
+		// after a retry or restart. Wait before handing the namespace to its controller.
+		return hold("GATEWAY_WORKLOAD_STOP_PENDING", err)
 	}
 	binding := recoveryBinding(r)
 	command := provisioner.DeleteWorkloadCommand{RequestID: r.Command.RequestID, InstanceID: r.Command.InstanceID, TeamID: r.Command.TeamID, TargetID: r.Command.TargetID, RuntimeType: r.Command.RuntimeType, RuntimeWorkloadID: r.Result.RuntimeWorkloadID}

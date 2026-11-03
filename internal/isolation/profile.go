@@ -36,21 +36,29 @@ type WritablePath struct {
 // ShutdownStrategy selects a fixed, operator-reviewed lifecycle action.
 type ShutdownStrategy string
 
-const ShutdownStrategyPythonSIGINTPID1 ShutdownStrategy = "python_sigint_pid1"
+const (
+	ShutdownStrategyPythonSIGINTPID1  ShutdownStrategy = "python_sigint_pid1"
+	ShutdownStrategyPythonSIGINTChild ShutdownStrategy = "python_sigint_child"
+)
 
 func ValidShutdownStrategy(profile WorkloadProfile, strategy ShutdownStrategy) bool {
-	return strategy == "" || (profile == WorkloadProfileWeb && strategy == ShutdownStrategyPythonSIGINTPID1)
+	return strategy == "" || (profile == WorkloadProfileWeb &&
+		(strategy == ShutdownStrategyPythonSIGINTPID1 || strategy == ShutdownStrategyPythonSIGINTChild))
 }
 
+// Zero preserves the Kubernetes default for existing durable commands.
+func ValidTerminationGracePeriod(seconds int64) bool { return seconds >= 0 && seconds <= 300 }
+
 type ContainerRequirement struct {
-	Name             string
-	Ports            []int
-	Expose           bool
-	RunAsUser        int64
-	WritablePaths    []WritablePath
-	ServiceAliases   []string         `json:",omitempty"`
-	ExposedPorts     []int            `json:",omitempty"`
-	ShutdownStrategy ShutdownStrategy `json:",omitempty"`
+	Name                          string
+	Ports                         []int
+	Expose                        bool
+	RunAsUser                     int64
+	WritablePaths                 []WritablePath
+	ExposedPorts                  []int            `json:",omitempty"`
+	ShutdownStrategy              ShutdownStrategy `json:",omitempty"`
+	TerminationGracePeriodSeconds int64            `json:",omitempty"`
+	ServiceAliases                []string         `json:",omitempty"`
 }
 
 func (container ContainerRequirement) PublicPorts() []int {

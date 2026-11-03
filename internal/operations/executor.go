@@ -71,6 +71,16 @@ type ExecutionError struct {
 // mutation is uncertain. Attempt exhaustion is not evidence of absence.
 type HeldExecutionError struct{ cause *ExecutionError }
 
+// ProgressPendingError means remote cleanup is advancing normally. Ownership
+// remains held, but observing progress must not inherit failure backoff.
+type ProgressPendingError struct{ *HeldExecutionError }
+
+func NewProgressPendingError(code string, cause error) *ProgressPendingError {
+	return &ProgressPendingError{NewHeldExecutionError(code, cause)}
+}
+
+func (e *ProgressPendingError) ProgressPending() bool { return true }
+
 func NewHeldExecutionError(code string, cause error) *HeldExecutionError {
 	return &HeldExecutionError{NewExecutionError(code, true, cause)}
 }

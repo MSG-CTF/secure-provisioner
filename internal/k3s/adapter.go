@@ -25,6 +25,7 @@ import (
 )
 
 type AdapterConfig struct {
+	StartupCPUProfiles map[string]provisioner.StartupCPUProfile
 	ReadyImageNodes    func(context.Context, string, string, []string) []string
 	ReadyTimeout       time.Duration
 	PollInterval       time.Duration
@@ -66,6 +67,7 @@ func NewAdapter(registry *Registry, config AdapterConfig) (*Adapter, error) {
 	}
 	config.RequiredFlagImages = append([]string(nil), config.RequiredFlagImages...)
 	config.RequiredFlagFiles = maps.Clone(config.RequiredFlagFiles)
+	config.StartupCPUProfiles = maps.Clone(config.StartupCPUProfiles)
 	for image, filename := range config.RequiredFlagFiles {
 		if !requiredFlags[image] || !provisioner.ValidFlagFilePath(filename) {
 			return nil, newRuntimeError("CONFIG_INVALID", false, nil)
@@ -151,6 +153,9 @@ func (a *Adapter) createWorkload(ctx context.Context, command provisioner.Create
 	if cluster.Client == nil {
 		return provisioner.CreateWorkloadResult{}, newRuntimeError("K3S_UNAVAILABLE", true, nil)
 	}
+	if err := a.validateStartupCPU(cluster, command); err != nil {
+		return provisioner.CreateWorkloadResult{}, a.failBeforeNamespace(command, err)
+	}
 	if err := prepareProtectionHashes(resources); err != nil {
 		return provisioner.CreateWorkloadResult{}, newRuntimeError("INVALID_CREATE_COMMAND", false, nil)
 	}
@@ -186,6 +191,11 @@ func (a *Adapter) createWorkload(ctx context.Context, command provisioner.Create
 
 	readyCtx, cancel := context.WithTimeout(ctx, a.config.ReadyTimeout)
 	defer cancel()
+	if command.SteadyCPUMillicores > 0 {
+		if err := prepareStartupCPU(readyCtx, cluster.Client, applied.Deployments, resources.ExpectedSpecHashes, command, a.config.PollInterval); err != nil {
+			return provisioner.CreateWorkloadResult{}, a.failAfterNamespace(cluster.Client, createdNamespace, "WORKLOAD_NOT_READY", err)
+		}
+	}
 	if err := waitUntilReady(
 		readyCtx,
 		cluster.Client,
@@ -228,10 +238,11 @@ func (a *Adapter) createWorkload(ctx context.Context, command provisioner.Create
 		serviceURL = endpoints[0].ServiceURL
 	}
 	return provisioner.CreateWorkloadResult{
-		RuntimeWorkloadID: resources.RuntimeWorkloadID,
-		NamespaceUID:      string(observedNamespace.UID),
-		ServiceURL:        serviceURL,
-		Endpoints:         endpoints,
+		SteadyCPUMillicores: command.SteadyCPUMillicores,
+		RuntimeWorkloadID:   resources.RuntimeWorkloadID,
+		NamespaceUID:        string(observedNamespace.UID),
+		ServiceURL:          serviceURL,
+		Endpoints:           endpoints,
 	}, nil
 }
 
