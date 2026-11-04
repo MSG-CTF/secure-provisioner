@@ -9,6 +9,8 @@ import re
 import subprocess
 from pathlib import Path
 
+from koth_pixel_gateway import pixel_gateway
+
 PROFILE = "msgctf.io/capacity-profile"
 INIT_NAME = "prepare-jenga-sqlite"
 DATABASE = "/data/jenga.db"
@@ -124,13 +126,14 @@ def jenga_gateway(text, upstream):
     return "".join(lines)
 
 
-def tune_jenga_gateway(state_dir, upstream):
+def tune_gateway(state_dir, upstream, game="jenga"):
     target = Path("/etc/msgctf-koth/Caddyfile")
     original = target.read_text(encoding="utf-8")
-    candidate = jenga_gateway(original, upstream)
+    render = {"jenga": jenga_gateway, "pixel-smuggler": pixel_gateway}[game]
+    candidate = render(original, upstream)
     digest = lambda text: hashlib.sha256(text.encode()).hexdigest()
     state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-    receipt = state_dir / "jenga-gateway-applied-sha256"
+    receipt = state_dir / (game + "-gateway-applied-sha256")
     def reload_gateway():
         result = subprocess.run(["systemctl", "show", "msg-koth-gateway", "--property=CanReload", "--value"],
                                 capture_output=True, text=True, check=True, timeout=10)
@@ -153,10 +156,10 @@ def tune_jenga_gateway(state_dir, upstream):
             restore_original = restore_file.read_text()
             if state.get("original_hash") != digest(restore_original):
                 raise ValueError("Scheduled gateway restore changed; do not overwrite")
-            restores.append((path, state, restore_file, jenga_gateway(restore_original, upstream)))
+            restores.append((path, state, restore_file, render(restore_original, upstream)))
     if len(restores) > 1:
         raise ValueError("More than one active gateway restore")
-    for name, text in [("jenga-gateway", candidate)] + [("jenga-event-gateway", row[3]) for row in restores]:
+    for name, text in [(game + "-gateway", candidate)] + [(game + "-event-gateway", row[3]) for row in restores]:
         check = state_dir / (name + ".candidate")
         check.write_text(text)
         check.chmod(0o600)
@@ -172,13 +175,13 @@ def tune_jenga_gateway(state_dir, upstream):
         os.replace(temporary, path)
     # Preserve both QA and event schedules; the existing close job checks these hashes.
     for path, state, restore_file, restored in restores:
-        backup = state_dir / "jenga-rehearsal-state-before.json"
+        backup = state_dir / (game + "-rehearsal-state-before.json")
         if not backup.exists():
             backup.write_text(json.dumps(state)); backup.chmod(0o600)
         replace(restore_file, restored)
         state.update(candidate_hash=digest(candidate), original_hash=digest(restored))
         replace(path, json.dumps(state))
-    backup = state_dir / "jenga-Caddyfile-before"
+    backup = state_dir / (game + "-Caddyfile-before")
     if not backup.exists():
         backup.write_text(original); backup.chmod(0o600)
     if target.read_text() != original:
@@ -308,12 +311,28 @@ def tune_dependency(state_dir, apply):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("game", choices=("jenga", "swanopoly", "dependency-hell"))
+    parser.add_argument("game", choices=("jenga", "swanopoly", "pixel-smuggler", "dependency-hell"))
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--state-dir", type=Path, default=Path("/var/lib/msgctf-koth-capacity"))
     args = parser.parse_args()
     if args.game == "dependency-hell":
         print(json.dumps(tune_dependency(args.state_dir, args.apply)))
+        return
+    if args.game == "pixel-smuggler":
+        service = json.loads(kubectl(["-n", "koth-pixel-smuggler", "get", "service", "game", "-o", "json"]))
+        deployment = json.loads(kubectl(["-n", "koth-pixel-smuggler", "get", "deployment", "game", "-o", "json"]))
+        containers = deployment["spec"]["template"]["spec"]["containers"]
+        if (deployment["spec"].get("replicas", 1) != 1 or len(containers) != 1
+                or containers[0]["name"] != "service"
+                or not re.fullmatch(r"ghcr\.io/msg-ctf/challenges/koth-pixel-smuggler/service@sha256:[0-9a-f]{64}", containers[0]["image"])):
+            raise ValueError("Only the reviewed single-replica Pixel image may be tuned")
+        upstream = service["spec"]["clusterIP"] + ":8080"
+        current = Path("/etc/msgctf-koth/Caddyfile").read_text()
+        changed = pixel_gateway(current, upstream) != current
+        applied = tune_gateway(args.state_dir, upstream, args.game) if args.apply else False
+        print(json.dumps({"game": args.game, "changes_needed": changed, "gateway_updated": applied,
+                          "submission_connections": 2, "other_connections": 4,
+                          "game_images_changed": False, "game_source_changed": False}))
         return
     scoped = ["-n", "koth-" + args.game]
     deployment = json.loads(kubectl(scoped + ["get", "deployment", "game", "-o", "json"]))
@@ -323,7 +342,7 @@ def main():
     if args.apply and args.game == "jenga":
         service = json.loads(kubectl(scoped + ["get", "service", "game", "-o", "json"]))
         upstream = service["spec"]["clusterIP"] + ":8080"
-        gateway_changed = tune_jenga_gateway(args.state_dir, upstream)
+        gateway_changed = tune_gateway(args.state_dir, upstream)
     if args.apply and changed:
         if args.game == "jenga":
             actual = kubectl(scoped + ["exec", "deployment/game", "-c", "jenga", "--", "python", "-c",
