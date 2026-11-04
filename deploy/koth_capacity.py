@@ -240,7 +240,8 @@ def dependency_backend_template(backend):
     containers = template["spec"]["containers"]
     if len(containers) != 1 or containers[0]["name"] != "backend":
         raise ValueError("Unexpected public backend container layout")
-    values = {"RECOVERY_BATCH_SIZE": "1", "RECOVERY_INTERVAL_SECONDS": "1"}
+    values = {"RECOVERY_BATCH_SIZE": "1", "RECOVERY_INTERVAL_SECONDS": "1",
+              "DATABASE_POOL_MIN_SIZE": "8"}
     containers[0]["env"] = [e for e in containers[0].get("env", []) if e["name"] not in values]
     containers[0]["env"].extend({"name": key, "value": value} for key, value in values.items())
     return template

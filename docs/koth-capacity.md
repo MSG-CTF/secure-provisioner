@@ -37,6 +37,8 @@ Swanopoly는 관리자 환경변수 버전에도 test·submit의 RUNNER_MAX_WAIT
 게임 소스의 기본값과 관리자 운영값은 별도로 유지한다
 Dependency Hell은 관리자 환경변수 버전의 judge-coordinator MAX_ACTIVE_EVALUATIONS도 4로 저장한다
 backend의 RECOVERY_BATCH_SIZE와 RECOVERY_INTERVAL_SECONDS도 각각 1로 저장한다
+backend의 DATABASE_POOL_MIN_SIZE는 기존 최대 연결 수와 같은 8로 저장한다
+기본값 1에서는 동시 조회마다 추가 TLS 연결을 만들고 닫는 비용이 반복되므로 기존 8개 연결 범위에서 재사용한다
 HPA의 기존 최대 8개와 CPU 기준은 유지하고 최소 replica만 4개로 올린다
 작업자가 채점을 기다릴 때 CPU 사용량이 낮아져도 대기열 처리 인원이 줄지 않게 한다
 각 작업자가 대기 항목 16개를 먼저 임대하고 순서대로 처리하던 설정도 한 건씩 확보하도록 바꾼다
