@@ -578,7 +578,7 @@ class RuntimeBridge:
             self.started = False
 
 
-def deploy_runtime(manifest, files, values, root, state, service, attempts, delay):
+def deploy_runtime(manifest, files, values, root, state, service, attempts, delay, policy_update=None):
     """An API-only candidate serves the durable queue while one worker is replaced."""
     backup = state / "previous"
     if backup.exists() or backup.is_symlink():
@@ -618,6 +618,13 @@ def deploy_runtime(manifest, files, values, root, state, service, attempts, dela
             0,
         ),
     ]
+    policy_entry = None
+    if policy_update is not None:
+        policy_path = path("/etc/secure-provisioner/image-policies.json")
+        if policy_path.is_symlink() or not policy_path.is_file():
+            raise DeploymentError("image policies must be an existing regular file")
+        policy_entry = (policy_path, policy_update, policy_path.stat().st_mode & 0o777, policy_path.stat().st_gid)
+        entries.append(policy_entry)
     snapshots = []
     for target, _, _, _ in entries:
         if target.is_symlink() or not target.is_file():
@@ -631,7 +638,11 @@ def deploy_runtime(manifest, files, values, root, state, service, attempts, dela
         snapshots.append((target, saved, metadata))
     bridge = RuntimeBridge(root, service, attempts, delay)
     changed = False
+    policy_changed = False
     try:
+        if policy_entry:
+            atomic_write(*policy_entry)
+            policy_changed = True
         bridge.prepare(files["artifact"], values, token)
         service.handoff_stop(bridge.values)
         changed = True
@@ -642,6 +653,9 @@ def deploy_runtime(manifest, files, values, root, state, service, attempts, dela
         bridge.route(8080)
     except BaseException:
         try:
+            if policy_changed and not changed:
+                target, saved, metadata = snapshots[-1]
+                atomic_write(target, saved.read_bytes(), metadata.st_mode & 0o777, metadata.st_gid)
             if changed:
                 bridge.route(18080)
                 # A failed readiness check may still have a live worker. Fence
@@ -691,6 +705,43 @@ def deploy_runtime(manifest, files, values, root, state, service, attempts, dela
         "deployment_strategy": RUNTIME_STRATEGY,
         "worker_handoff_verified": True,
     }
+
+
+def reload_image_policies(candidate, expected_sha256, root=Path("/"), service=None, attempts=45, delay=2):
+    """Replace verified policy data using the existing API bridge and worker fence."""
+    if not isinstance(candidate, bytes) or not 1 <= len(candidate) <= 1 << 20:
+        raise DeploymentError("invalid image policy size")
+    path = lambda name: root / name.lstrip("/")
+    state = path("/var/lib/msgctf-deploy/runtime")
+    state.mkdir(parents=True, mode=0o700, exist_ok=True)
+    service = service or SystemService()
+    with (state / "deploy.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise DeploymentError("deployment already running") from None
+        policy = path("/etc/secure-provisioner/image-policies.json")
+        if policy.is_symlink() or not policy.is_file() or hashlib.sha256(policy.read_bytes()).hexdigest() != expected_sha256:
+            raise DeploymentError("image policies changed during synchronization")
+        config = CONFIG["runtime"]
+        sources = {"artifact": path(config["artifact"]), "app.env": path(config["env"]),
+                   "service-token": path("/etc/secure-provisioner/service-token"), "marker": path(config["marker"])}
+        if any(p.is_symlink() or not p.is_file() for p in sources.values()):
+            raise DeploymentError("current runtime files must be regular files")
+        files = {name: p.read_bytes() for name, p in sources.items() if name != "marker"}
+        marker = json.loads(sources["marker"].read_text())
+        if hashlib.sha256(files["artifact"]).hexdigest() != marker["artifact_sha256"]:
+            raise DeploymentError("current artifact does not match deployment marker")
+        with tempfile.NamedTemporaryFile(prefix="image-policy-", dir=state) as temporary:
+            temporary.write(candidate)
+            temporary.flush()
+            result = subprocess.run([str(path(config["artifact"])), "--validate-image-policies", temporary.name],
+                                    capture_output=True, timeout=15)
+            if result.returncode:
+                raise DeploymentError("candidate image policy was rejected")
+        manifest = {"source_sha": marker["source_commit"], "checksums": {name: hashlib.sha256(raw).hexdigest() for name, raw in files.items()}}
+        return deploy_runtime(manifest, files, environment_values(files["app.env"]), root, state,
+                              service, attempts, delay, policy_update=candidate)
 
 
 def verify(component, config, values, token, service, attempts=45, delay=2):

@@ -1,0 +1,12 @@
+[Unit]
+Description=Discover successful main image publications
+
+[Timer]
+OnBootSec=15s
+OnUnitInactiveSec=30s
+RandomizedDelaySec=5s
+Persistent=true
+Unit=published-image-sync.service
+
+[Install]
+WantedBy=timers.target

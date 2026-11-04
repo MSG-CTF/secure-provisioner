@@ -1,0 +1,15 @@
+[Unit]
+Description=Synchronize verified challenge image publications
+After=network-online.target secure-provisioner.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+ExecStart=/usr/bin/python3 -I /opt/secure-provisioner-publications/published_image_sync.py
+TimeoutStartSec=600
+TimeoutStopSec=180
+NoNewPrivileges=true
+PrivateTmp=true
