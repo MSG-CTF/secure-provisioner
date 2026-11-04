@@ -4,6 +4,8 @@ import hashlib
 import hmac
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -295,6 +297,55 @@ class EnvironmentAgentTests(unittest.TestCase):
         original["spec"]["containers"][0]["envFrom"].append({"configMapRef": {"name": "other"}})
         with self.assertRaisesRegex(agent.Fault, "ENVIRONMENT_MISMATCH"):
             self.kube.template(original, self.desired)
+
+    def environment_probe_fixture(self, *, mismatch=False, unavailable=False):
+        kube = agent.Kubernetes(self.game)
+        deployment = copy.deepcopy(self.kube.deployment())
+        deployment['metadata'] = {'generation': 1, 'uid': 'deployment-id'}
+        deployment['status'] = {'observedGeneration': 1, 'updatedReplicas': 1, 'readyReplicas': 1}
+        deployment['spec']['selector'] = {'matchLabels': {'app': 'game'}}
+        kube.deployment = lambda: deployment
+        desired = copy.deepcopy(self.desired)
+        desired['settings']['containers'][0]['entries']['PORT']['value'] = 'literal=$(NAME)=value\n한글'
+        desired['settings']['containers'][0]['entries']['EMPTY'] = {'value': ''}
+        values = {k: e['value'] for k, e in desired['settings']['containers'][0]['entries'].items() if e['value'] is not None}
+        calls = []
+
+        def run(args, **kwargs):
+            if args[:2] == ['get', 'replicasets']:
+                return {'items': [{'metadata': {'uid': 'rs', 'ownerReferences': [{'kind': 'Deployment', 'uid': 'deployment-id', 'controller': True}]}}]}
+            if args[:2] == ['get', 'pods']:
+                return {'items': [{'metadata': {'name': 'pod', 'ownerReferences': [{'kind': 'ReplicaSet', 'uid': 'rs', 'controller': True}]}, 'status': {'conditions': [{'type': 'Ready', 'status': 'True'}]}}]}
+            if args[:2] == ['get', 'secret']:
+                return {'data': {k: base64.b64encode(v.encode()).decode() for k, v in values.items()}}
+            if args[0] == 'exec':
+                calls.append(args[5:])
+                if args[5:] == ['env', '-0'] or unavailable:
+                    raise agent.Fault('VM_UNAVAILABLE')
+                self.assertEqual(args[5:7], ['/usr/bin/python3', '-c'])
+                actual = {**values, 'PATH': '/usr/bin', 'OPTION': 'image-default'}
+                if mismatch:
+                    actual['PORT'] = 'stale'
+                return subprocess.check_output([sys.executable, '-c', args[7]], env=actual)
+            raise AssertionError('Unexpected Kubernetes operation')
+
+        kube.run = run
+        return kube, desired, calls
+
+    def test_minimal_python_image_preserves_literal_multiline_unicode_and_empty_values(self):
+        kube, desired, calls = self.environment_probe_fixture()
+        self.assertTrue(kube.values_match(desired))
+        self.assertEqual(calls[0], ['env', '-0'])
+        self.assertEqual(calls[1][:2], ['/usr/bin/python3', '-c'])
+
+    def test_minimal_python_probe_does_not_adopt_mismatched_values(self):
+        kube, desired, _ = self.environment_probe_fixture(mismatch=True)
+        self.assertFalse(kube.values_match(desired))
+
+    def test_failed_env_and_python_probes_fail_closed(self):
+        kube, desired, _ = self.environment_probe_fixture(unavailable=True)
+        with self.assertRaisesRegex(agent.Fault, 'VM_UNAVAILABLE'):
+            kube.values_match(desired)
 
     def test_cleanup_keeps_pod_and_rollback_references_and_uses_uid_preconditions(self):
         kube = agent.Kubernetes(self.game)

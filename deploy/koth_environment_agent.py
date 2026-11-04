@@ -367,7 +367,14 @@ class Kubernetes:
             if injected != configured:
                 return False
             for pod in pods:
-                raw = self.run(["exec", pod["metadata"]["name"], "-c", container["name"], "--", "env", "-0"], raw=True)
+                try:
+                    raw = self.run(["exec", pod["metadata"]["name"], "-c", container["name"], "--", "env", "-0"], raw=True)
+                except Fault:
+                    # Trusted minimal images can omit coreutils/BusyBox. Read the
+                    # same bytes through their fixed Python path without a shell.
+                    raw = self.run(["exec", pod["metadata"]["name"], "-c", container["name"], "--",
+                                    "/usr/bin/python3", "-c",
+                                    "import os,sys;sys.stdout.buffer.write(b'\\0'.join((k+'='+v).encode('utf-8') for k,v in os.environ.items())+b'\\0')"], raw=True)
                 actual = dict(part.decode("utf-8").split("=", 1) for part in raw.split(b"\0") if b"=" in part)
                 for key, entry in container["entries"].items():
                     value = entry["value"]
