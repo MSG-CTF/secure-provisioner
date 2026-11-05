@@ -5,9 +5,38 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"testing"
 	"time"
 )
+
+func TestWindowsWorkerConcurrencyBounds(t *testing.T) {
+	for _, test := range []struct {
+		workers  int
+		accepted bool
+	}{
+		{-1, false},
+		{1, true},
+		{10, true},
+		{16, true},
+		{17, true},
+		{30, true},
+		{31, false},
+	} {
+		t.Run(strconv.Itoa(test.workers), func(t *testing.T) {
+			_, err := (RuntimeConfig{Concurrency: test.workers}).ServiceConfig()
+			if (err == nil) != test.accepted {
+				t.Errorf("config concurrency %d: %v", test.workers, err)
+			}
+			cfg := DefaultServiceConfig()
+			cfg.Concurrency = test.workers
+			_, err = NewService(cfg, NewMemoryStore(), &serviceBroker{}, &serviceTransport{})
+			if (err == nil) != test.accepted {
+				t.Errorf("service concurrency %d: %v", test.workers, err)
+			}
+		})
+	}
+}
 
 func TestBrokerTokenAcceptsServiceGroupReadOnly(t *testing.T) {
 	if runtime.GOOS == "windows" {

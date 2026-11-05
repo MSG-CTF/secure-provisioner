@@ -33,6 +33,26 @@ release 없는 Backend 코드를 적용하기 전에 이 Runtime 버전을 먼�
 - 각 VM의 실행기는 Runtime 클라이언트 인증서를 검증하고 443 인바운드를 Runtime
   송신 주소에만 허용해야 한다. Broker가 READY로 반환한 VM은 동적으로 선택한다.
 
+## 워커 수
+
+Windows EXE 워커는 `PROVISIONER_WINDOWS_CONFIG`가 가리키는 JSON의
+`concurrency`로 설정한다. 허용 범위는 1~30이며 생략하거나 0이면 기본값 2를 쓴다.
+Broker mTLS 설정 예시는 초기 적용값인 `"concurrency": 10`으로 준비되어 있다.
+`PROVISIONER_WORKERS`는 별도의 일반 Runtime 작업 설정이다.
+
+워커 하나는 EXE 조회·전달·실행 결과 수집을 처리한다. 실제 실행 병렬도는
+Broker에서 READY로 제공되고 실행기에 접속 가능한 VM 수에 제한된다.
+기존 VM별 배정 잠금과 Broker started 승인을 유지하며 한 VM에 중복 실행하지 않는다.
+
+초기 운영 적용 시 기존 JSON의 `concurrency`만 10으로 바꾸고 현재 Backend origin과
+mTLS·토큰 파일 참조를 보존한다. 예시 파일 전체를 운영 설정에 덮어쓰지 않는다.
+10개 설정은 기존 바이너리에서도 지원한다. 이후 30개로 확대할 때는 이전 바이너리가
+16 초과를 거부하므로 새 바이너리를 먼저 배포한 뒤 설정을 바꾼다.
+설정은 시작 시 읽으므로 진행 중 실행을 비운 뒤 Runtime을 재시작한다.
+새 배포의 `checker_commit_sha`와 Backend `EXE_CHECKERS_JSON`의 값도 함께 맞춘다.
+30건 모두 최대 크기일 때 EXE 원본만 300 MiB이며 복사·HTTP·DB 메모리가 추가된다.
+운영에서 30건을 동시에 실행하는 성능 시험은 별도로 수행한다.
+
 ## 실행 순서
 
 Windows 팀별 대기열은 Backend에서 팀당 대기 또는 실행 중 한 건으로 접수를 제한한다

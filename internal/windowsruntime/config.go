@@ -114,7 +114,7 @@ func (c RuntimeConfig) ServiceConfig() (ServiceConfig, error) {
 	if c.Concurrency != 0 {
 		cfg.Concurrency = c.Concurrency
 	}
-	if cfg.MaxPayload < 2 || cfg.MaxPayload > 10<<20 || cfg.OutputLimit < 1 || cfg.OutputLimit > 1<<20 || cfg.Concurrency < 1 || cfg.Concurrency > 16 {
+	if cfg.MaxPayload < 2 || cfg.MaxPayload > 10<<20 || cfg.OutputLimit < 1 || cfg.OutputLimit > 1<<20 || cfg.Concurrency < 1 || cfg.Concurrency > 30 {
 		return cfg, errors.New("Windows payload, output, or worker limit out of range")
 	}
 	return cfg, nil
