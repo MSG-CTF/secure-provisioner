@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import socket
 import sqlite3
 import stat
@@ -47,7 +48,7 @@ def validate_request(request):
     required = {"format_version", "action", "game", "operation_id", "expected_pod_name", "data_root", "store_specs"}
     if set(request) - {'artifact_bundle'} != required or type(request.get('artifact_bundle', False)) is not bool or request["format_version"] != VERSION or request["game"] not in GAMES:
         raise StorageError("INVALID_REQUEST")
-    if request["action"] not in {"inspect", "backup", "verify", "restore", "revoke_sessions", "cleanup", "artifact_meta", "artifact_backup", "artifact_verify", "artifact_restore", "artifact_check"}:
+    if request["action"] not in {"inspect", "backup", "verify", "restore", "rebase", "revoke_sessions", "cleanup", "artifact_meta", "artifact_backup", "artifact_verify", "artifact_restore", "artifact_rebase", "artifact_check"}:
         raise StorageError("INVALID_REQUEST")
     if str(uuid.UUID(request["operation_id"])) != request["operation_id"]:
         raise StorageError("INVALID_REQUEST")
@@ -172,11 +173,30 @@ def backup_database(source, destination, deadline):
         os.fsync(stream.fileno())
 
 
+def private_directory(path, *, create=False):
+    if create:path.mkdir(mode=0o700,exist_ok=True)
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(fd)
+        # A PVC fsGroup remount can add group bits to an owned 0700 directory.
+        # Narrow that known group-only mode, never adopt foreign/world access.
+        if (info.st_uid != os.geteuid() or info.st_mode & 0o007
+                or info.st_mode & 0o070 and info.st_gid not in {os.getegid(),*os.getgroups()}):
+            raise StorageError("SCRATCH_PERMISSIONS_INVALID")
+        os.fchmod(fd, 0o700); os.fsync(fd)
+    finally:
+        os.close(fd)
+    return path
+
+
+def scratch_root(request):
+    return safe_path(Path(request['data_root'])/('.msgctf-storage-'+str(os.geteuid())),request['data_root'],must_exist=False)
+
+
 def stage_directory(request):
-    parent = safe_path(Path(request["data_root"]) / ".msgctf-storage", request["data_root"], must_exist=False)
-    parent.mkdir(mode=0o700, exist_ok=True)
-    if parent.stat().st_uid != os.geteuid() or parent.stat().st_mode & 0o077:
-        raise StorageError("SCRATCH_PERMISSIONS_INVALID")
+    # Source exec may use UID 0 while the maintenance Pod uses UID 10001.
+    # Each context owns its private parent and never adopts another UID's path.
+    parent=private_directory(scratch_root(request),create=True)
     path = parent / (request["operation_id"] + "-" + request["action"])
     path.mkdir(mode=0o700)
     return path
@@ -184,6 +204,14 @@ def stage_directory(request):
 
 def cleanup_stage(path):
     for file in path.iterdir():
+        if file.is_dir() and not file.is_symlink() and re.fullmatch(r'candidate-files-[a-z0-9_]+',file.name):
+            count=0
+            for folder,dirs,files in os.walk(file,followlinks=False):
+                for name in [*dirs,*files]:
+                    item=Path(folder)/name;info=item.lstat();count+=1
+                    if count>1600000 or stat.S_ISLNK(info.st_mode) or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode) and info.st_nlink==1):
+                        raise StorageError('SCRATCH_CONTENT_UNEXPECTED')
+            shutil.rmtree(file);continue
         if file.is_symlink() or not file.is_file() or not re.fullmatch(r"(?:backup|authority|candidate)-(?:(?:game|auth)\.sqlite(?:-wal|-shm|-journal)?|artifacts\.(?:pack|part))", file.name):
             raise StorageError("SCRATCH_CONTENT_UNEXPECTED")
         file.unlink()
@@ -246,7 +274,7 @@ def read_bundle(stream, stage, specs, game, prefix, with_artifacts=False):
     return header, files
 
 
-def restore_database(snapshot, authority, target, spec):
+def restore_database(snapshot, authority, target, spec, *, rebase=False):
     original = metadata(snapshot, spec, closed_snapshot=True)
     current = metadata(authority, spec, closed_snapshot=True)
     if original["schema_sha256"] != current["schema_sha256"]:
@@ -269,12 +297,25 @@ def restore_database(snapshot, authority, target, spec):
             or any(result['table_row_counts'].get(t, 0) for t in spec['session_tables'])):
         raise StorageError("RESTORE_VERIFICATION_FAILED")
     target.parent.mkdir(parents=True, exist_ok=True)
-    if target.exists():
+    if target.exists() and not rebase:
         raise StorageError("RESTORE_TARGET_NOT_EMPTY")
+    if rebase:
+        if metadata(target,spec)['schema_sha256']!=current['schema_sha256']:
+            raise StorageError('DATABASE_SCHEMA_CHANGED')
+        check_handles([target],reject_live=True)
+        for item in [target,*(Path(str(target)+suffix) for suffix in ('-wal','-shm','-journal'))]:
+            if item.exists() or item.is_symlink():
+                info=item.lstat()
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1 or info.st_uid!=os.geteuid():
+                    raise StorageError('OFFLINE_REBASE_TARGET_UNSAFE')
+                if item!=target:item.unlink()
     os.chmod(snapshot, 0o600)
     os.replace(snapshot, target)
     with target.open("rb") as stream:
         os.fsync(stream.fileno())
+    directory=os.open(target.parent,os.O_RDONLY|os.O_DIRECTORY)
+    try:os.fsync(directory)
+    finally:os.close(directory)
     return result
 
 
@@ -282,18 +323,23 @@ def run(request, input_stream, output_stream):
     os.umask(0o077)
     validate_request(request)
     stores = resolve_stores(request, existing=request["action"] not in {"restore", "cleanup"})
-    check_handles([s["path"] for s in stores], reject_live=request["action"] in {"restore", "revoke_sessions"})
+    check_handles([s["path"] for s in stores], reject_live=request["action"] in {"restore", "rebase", "revoke_sessions"})
     if request['action'] == 'artifact_meta':
         write_all(output_stream, canonical({'artifact_roots': artifacts.roots(request['game'], request['data_root'])})); return
     if request['action'] == 'cleanup':
         removed = []
-        for action in ('backup', 'verify', 'restore', 'revoke_sessions', 'artifact_backup', 'artifact_verify', 'artifact_restore', 'artifact_check'):
-            folder = safe_path(Path(request['data_root']) / '.msgctf-storage' / (request['operation_id'] + '-' + action), request['data_root'], must_exist=False)
-            if folder.exists():
-                if folder.stat().st_uid != os.geteuid() or folder.stat().st_mode & 0o077:
-                    raise StorageError('SCRATCH_PERMISSIONS_INVALID')
-                check_handles(list(folder.iterdir()), reject_live=True)
-                cleanup_stage(folder); removed.append(action)
+        parents=[scratch_root(request)]
+        legacy=safe_path(Path(request['data_root'])/'.msgctf-storage',request['data_root'],must_exist=False)
+        if legacy.exists() and legacy.stat().st_uid==os.geteuid():parents.append(legacy)
+        for parent in parents:
+            if not parent.exists():continue
+            private_directory(parent)
+            for action in ('backup', 'verify', 'restore', 'rebase', 'revoke_sessions', 'artifact_backup', 'artifact_verify', 'artifact_restore', 'artifact_rebase', 'artifact_check'):
+                folder = safe_path(parent / (request['operation_id'] + '-' + action), request['data_root'], must_exist=False)
+                if folder.exists():
+                    private_directory(folder)
+                    check_handles(list(folder.iterdir()), reject_live=True)
+                    cleanup_stage(folder); removed.append(action)
         write_all(output_stream, canonical({'removed_scratch_actions': removed})); return
     if request["action"] == "inspect":
         result = {"format_version": VERSION, "game": request["game"], "sqlite_context": "service_pod",
@@ -324,7 +370,7 @@ def run(request, input_stream, output_stream):
                 if input_stream.read(1): raise StorageError('INVALID_BUNDLE')
                 if header['stores'][0]['artifact_roots'] != root_map:
                     raise StorageError('ARTIFACT_ROOT_SCOPE_CHANGED')
-                proof = artifacts.check_pack(files['artifacts'], refs, root_map, restore=request['action']=='artifact_restore')
+                proof = artifacts.rebase_pack(files['artifacts'],refs,root_map) if request['action']=='artifact_rebase' else artifacts.check_pack(files['artifacts'], refs, root_map, restore=request['action']=='artifact_restore')
                 artifacts.check_metadata(header['stores'][0], refs, proof)
                 if request['action']=='artifact_restore': artifacts.check_sources(refs, root_map)
                 write_all(output_stream, canonical(proof))
@@ -399,10 +445,18 @@ def run(request, input_stream, output_stream):
                 _, authority = read_bundle(input_stream, stage, stores, request["game"], "authority")
                 if input_stream.read(1):
                     raise StorageError("INVALID_BUNDLE")
-                results = [restore_database(files[s["store_id"]], authority[s["store_id"]], s["path"], s) for s in stores]
-                result = {"game": request["game"], "sqlite_context": "isolated_restore_pod", "stores": results,
+                rebased=None
+                if request['action']=='rebase' and request.get('artifact_bundle'):
+                    with closing(connect(files['game'])) as db:refs=artifacts.grand_references(db)
+                    root_map=artifacts.roots(request['game'],request['data_root'])
+                    if header['stores'][-1]['artifact_roots']!=root_map:raise StorageError('ARTIFACT_ROOT_SCOPE_CHANGED')
+                    rebased=artifacts.rebase_pack(files['artifacts'],refs,root_map)
+                    artifacts.check_metadata(header['stores'][-1],refs,rebased)
+                results = [restore_database(files[s["store_id"]], authority[s["store_id"]], s["path"], s,rebase=request['action']=='rebase') for s in stores]
+                result = {"game": request["game"], "sqlite_context": "offline_rebase_pod" if request['action']=='rebase' else "isolated_restore_pod", "stores": results,
                           "current_auth_history_preserved": True, "restored_session_row_count": 0}
-                if request.get('artifact_bundle'):
+                if rebased is not None:result['artifacts']=rebased
+                elif request.get('artifact_bundle'):
                     with closing(connect(stores[0]['path'])) as db: refs = artifacts.grand_references(db)
                     root_map = artifacts.roots(request['game'], request['data_root'])
                     if header['stores'][-1]['artifact_roots'] != root_map: raise StorageError('ARTIFACT_ROOT_SCOPE_CHANGED')

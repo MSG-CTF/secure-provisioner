@@ -349,7 +349,7 @@ class Storage:
                 'operation_id': operation_id or self.operation_id, 'expected_pod_name': source['pod_name'],
                 'data_root': PROFILES[self.game]['data_root'], 'store_specs': copy.deepcopy(PROFILES[self.game]['stores'])}
         if self.game == 'grand-tour-duel':
-            result['artifact_bundle'] = include_artifacts and action in {'backup', 'verify', 'restore'}
+            result['artifact_bundle'] = include_artifacts and action in {'backup', 'verify', 'restore', 'rebase'}
         return result
 
     def execute(self, source, action, *, input_file=None, output_file=None, operation_id=None, include_artifacts=True):
