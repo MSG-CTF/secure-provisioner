@@ -44,7 +44,7 @@ type Service struct {
 }
 
 func NewService(cfg ServiceConfig, store Store, broker Broker, transport Transport) (*Service, error) {
-	if store == nil || broker == nil || transport == nil || cfg.MaxPayload < 2 || cfg.MaxPayload > 10<<20 || cfg.OutputLimit < 1 || cfg.OutputLimit > 1<<20 || cfg.ExecutionTimeout < time.Second || cfg.ExecutionTimeout > time.Hour || cfg.ConnectTimeout < time.Second || cfg.ConnectTimeout > 5*time.Minute || cfg.LeaseDuration < time.Second || cfg.PollInterval <= 0 || cfg.RetryInterval <= 0 || cfg.Concurrency < 1 || cfg.Concurrency > 16 {
+	if store == nil || broker == nil || transport == nil || cfg.MaxPayload < 2 || cfg.MaxPayload > 10<<20 || cfg.OutputLimit < 1 || cfg.OutputLimit > 1<<20 || cfg.ExecutionTimeout < time.Second || cfg.ExecutionTimeout > time.Hour || cfg.ConnectTimeout < time.Second || cfg.ConnectTimeout > 5*time.Minute || cfg.LeaseDuration < time.Second || cfg.PollInterval <= 0 || cfg.RetryInterval <= 0 || cfg.Concurrency < 1 || cfg.Concurrency > 30 {
 		return nil, errors.New("invalid Windows runtime configuration")
 	}
 	return &Service{cfg: cfg, store: store, broker: broker, transport: transport}, nil
