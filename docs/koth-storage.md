@@ -129,10 +129,10 @@ PostgreSQL 임시 DB는 마이그레이션 소유자로 만들고 PUBLIC의 CONN
 성공·실패 모두 작업 UID로 확인한 네임스페이스와 임시 DB를 정리한다
 
 이 명령은 실제 복원·검증 뒤 시험 자원을 정리한다
-운영 PVC 자동 전환과 실행 중 원본 덮어쓰기는 제공하지 않는다
+restore 명령은 운영 PVC를 전환하지 않으며 운영 전환에는 아래의 별도 cutover 명령을 사용한다
 source_pvc_untouched는 원본 PVC를 복원 대상으로 쓰지 않았다는 의미다
 백업 중 서비스 Pod의 전용 임시 파일 작성과 정상 서비스 쓰기는 계속 발생하므로 원본 PVC 전체 바이트 불변을 뜻하지 않는다
-실제 장애 전환은 쓰기 중지·최신 업무 백업·현재 인증 이력 확보·새 PVC 복구·검증 이미지 기동·로그인·확정 점수 확인 순서로 별도 배포 절차에서 수행한다
+실제 장애 전환은 아래의 쓰기 차단·최신 백업·현재 인증 이력·새 PVC·검증·공개 결정을 기록하는 절차로 수행한다
 현재 이력을 확보할 수 없으면 별도 보관한 최신 이력과 새 키 또는 새 epoch가 필요하며 과거 권한만으로 기동하지 않는다
 
 ## 실패·중단·감사
@@ -174,3 +174,78 @@ DNS 변경 뒤에도 기존 Pod 네트워크 정책의 Core 주소가 남아 있
 적용 뒤 설정을 다시 읽어 확인하고 호스트에 Core 주소 핀과 감사 기록을 남긴다
 이 설정은 게임 이미지·Pod 재배포와 독립적으로 유지된다
 Core 내부 API 경로와 실제 정상 로그인은 별도로 확인하며 건강 확인 200만으로 인증 연동을 통과시키지 않는다
+
+## 운영 PVC·DB 전환과 자동 롤백
+
+    sudo msgctf-koth-cutover start --game card-battle-arena --operation-id "$CUTOVER_ID" --actor operator
+    sudo msgctf-koth-cutover status --game card-battle-arena --operation-id "$CUTOVER_ID"
+
+start는 새 UUID의 계획을 root 전용으로 저장하고 systemd 일회 작업을 비동기 시작한다
+SSH 연결이 끊겨도 작업은 계속하며 작업 종료 뒤 ExecStopPost가 미완료 저널을 복구한다
+호스트 재부팅 때도 k3s 뒤·환경 반영 에이전트 앞에서 복구 서비스를 실행한다
+복구 서비스가 실패하면 환경 반영 에이전트의 시작 의존성이 충족되지 않으며 미완료 상태를 덮어쓰지 않는다
+status는 작업 잠금과 독립적으로 원자 저장한 메타데이터만 읽는다
+
+1) Deployment·PVC·Service·HPA UID와 템플릿을 고정하고 환경 반영 에이전트를 중지한다
+2) namespace의 모든 Service 선택자를 닫고 HPA의 전용 임시 대상을 지정한 뒤 모든 Deployment를 0으로 줄인다
+3) 기존 Pod 종료를 기다리고 Dependency Hell은 운영 DB의 다른 역할 연결도 0인지 확인한다
+4) 같은 고정 이미지의 비밀값 없는 유지보수 Pod에서 마지막 DB·참조 파일 백업과 현재 키 이력을 확보한다
+5) 새 local-path PVC에 실제 복원하고 현재 활성·퇴역 키 이력을 합치며 세션을 비운다
+6) 원본 용량보다 작지 않은 새 PVC로 Deployment 템플릿을 전환한다
+7) Dependency Hell은 PostgreSQL 후보 DB의 소유자·ACL·접속 제한·DB별 설정을 보존하고 DB 이름을 트랜잭션으로 교환한다
+8) 원래 복제 수로 기동하고 원본 확정 행·참조 파일·키 이력·세션 0을 검사한다
+9) 공개 결정을 먼저 fsync한 뒤 Service 선택자·HPA·환경 반영 에이전트를 복원한다
+
+각 게임을 하나씩 전환하며 해당 게임의 참가자·점수 경로는 이 구간에 잠시 사용할 수 없다
+전환 전체를 6개 게임의 전역 트랜잭션으로 묶지 않는다
+PostgreSQL 원본 DB에 pg_restore를 실행하지 않으며 DB 파일이 있는 PostgreSQL 서버 PVC는 그대로 둔다
+Dependency Hell은 복원한 논리 DB와 산출물 PVC를 함께 전환한다
+원래 DB 이름과 접속 비밀값을 유지하므로 앱의 비밀값을 새로 만들거나 공개하지 않는다
+새 PVC는 Deployment에 명시하며 환경·이미지 반영 에이전트는 현재 템플릿의 이 볼륨 연결을 보존한다
+
+선택 아카이브가 필요하면 start에 archive와 sha256 인자를 함께 전달한다
+현재 PVC UID·DB 경로·스키마·모든 업무 해시·파일 참조가 쓰기 차단 뒤 마지막 백업과 같아야 한다
+오래된 백업이 최신 업무 행을 버리면 RECOVERY_WOULD_DISCARD_CURRENT_BUSINESS_ROWS로 중단한다
+현재 권한과 업무 상태를 읽을 수 없는 완전 유실 장애를 오래된 자료만으로 자동 개방하는 명령은 제공하지 않는다
+그 경우 검증된 외부 보관본과 최신 권한을 확보하는 별도 복구 판단이 필요하다
+
+공개 시작 전 실패는 트래픽 차단을 유지하며 원래 PVC·DB로 자동 복귀한다
+후보에서 확보한 최신 키 이력을 원본에 합치고 원본의 기존 세션도 비워 구 세션이 부활하지 않게 한다
+유지보수 Pod를 먼저 종료해 중단된 kubectl exec 프로세스가 남아 있는 경우도 정리한다
+원본 확정 행과 파일을 다시 검사하고 정상 기동한 뒤에만 원래 경로를 연다
+차단 중 자율 작업자가 새 확정 행을 만들었거나 UID·템플릿·DB OID가 외부에서 바뀌면 두 저장소를 보존하고 needs_recovery로 남긴다
+다른 운영자의 변경이나 새 확정 행을 덮어쓰며 성공으로 처리하지 않는다
+
+공개 결정 뒤에는 새 요청이 접수됐을 수 있으므로 과거 PVC로 자동 복귀하지 않는다
+일부 Service만 열린 상태에서 중단돼도 새 PVC·DB를 유지하며 남은 공개 절차를 재개한다
+공개 후의 장애는 최신 상태를 기준으로 새 UUID의 복구 작업을 수행한다
+
+    sudo msgctf-koth-cutover recover --game card-battle-arena --operation-id "$CUTOVER_ID" --actor operator
+
+수동 복구도 같은 저널·flock·UID·리비전 조건을 사용한다
+계획 변경에 같은 UUID를 재사용할 수 없으며 완료된 작업의 재실행은 저장소를 다시 전환하지 않는다
+진행 중에는 설치 도구가 새 릴리스로의 교체를 거절한다
+저널의 템플릿과 백업은 root 0600 또는 0400으로 보관하고 status와 JSONL에는 비밀값 없는 전환 메타데이터만 남긴다
+
+## 실패 주입과 보관 자원
+
+    sudo msgctf-koth-cutover start --game card-battle-arena --operation-id "$FAILURE_ID" --actor operator --fault after_ready
+
+after_freeze·after_restore·after_pvc_switch·after_pg_swap·after_ready에서 실패를 주입할 수 있다
+after_ready는 후보 PVC·DB로 실제 기동한 뒤 공개 전에 실패시키므로 실제 전환과 자동 롤백 경로를 함께 검사한다
+게임별 롤백 뒤와 성공 전환 뒤에 정상 로그인·보호 경로·이전 세션·폐기 토큰 재로그인·Core 점수를 실제 HTTP로 확인한다
+실패 주입은 해당 게임의 동일한 점검 중단 구간을 사용한다
+
+원래 PVC와 성공 전환 전 DB는 복구 근거로 보관하며 자동 삭제하지 않는다
+이전 PostgreSQL DB는 작업 UUID의 이름과 OID를 기록하고 새 연결을 거절한다
+실패 후보도 검증이 끝날 때까지 작업 라벨과 UID로 보관한다
+롤백 완료 뒤 필요 없는 실패 후보만 다음 명령으로 정리한다
+
+    sudo msgctf-koth-cutover retire-failed --game card-battle-arena --operation-id "$FAILURE_ID" --actor operator
+
+진행 중인 작업이나 Pod·워크로드에서 참조하는 PVC는 삭제하지 않는다
+롤백된 작업의 후보 PVC UID·작업 라벨과 PostgreSQL 후보 OID·작업 표식이 모두 맞아야 삭제한다
+원래 PVC와 현재 운영 DB는 이 명령의 삭제 대상이 아니다
+
+추가 회귀 테스트는 실제 Python·Node SQLite의 원본 inode·업무·최신 키 보존·세션 폐기와 PostgreSQL 18의 실제 전환·역전환·중간 SQL 실패·OID 충돌을 검사한다
+공개 전후 재시도·중단 복구 결정·HPA 중지·CAS·부팅 순서·후보 삭제 차단·재배포 뒤 PVC 보존도 검사한다

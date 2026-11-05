@@ -32,7 +32,7 @@ function safePath(file, root, existing = true) {
 function validateRequest(request) {
   const required = ['format_version', 'action', 'game', 'operation_id', 'expected_pod_name', 'data_root', 'store_specs'];
   if (Object.keys(request).sort().join() !== required.sort().join() || request.format_version !== VERSION
-      || request.game !== 'swanopoly' || !['inspect', 'backup', 'verify', 'restore', 'cleanup'].includes(request.action)
+      || request.game !== 'swanopoly' || !['inspect', 'backup', 'verify', 'restore', 'revoke_sessions', 'cleanup'].includes(request.action)
       || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(request.operation_id)) fail('INVALID_REQUEST');
   if (!process.env.KUBERNETES_SERVICE_HOST || os.hostname() !== request.expected_pod_name) fail('NOT_IN_EXPECTED_POD');
   if (request.data_root !== '/data' || !Array.isArray(request.store_specs) || request.store_specs.length !== 1) fail('INVALID_REQUEST');
@@ -180,11 +180,11 @@ function restoreDatabase(snapshot, authority, target, spec) {
 
 async function run(request, inputFd = 0, output = process.stdout) {
   process.umask(0o077); validateRequest(request);
-  const stores = resolveStores(request, !['restore', 'cleanup'].includes(request.action)); checkHandles(stores.map(s => s.path), request.action === 'restore');
+  const stores = resolveStores(request, !['restore', 'cleanup'].includes(request.action)); checkHandles(stores.map(s => s.path), ['restore', 'revoke_sessions'].includes(request.action));
   const json = value => output.write(canonical(value));
   if (request.action === 'cleanup') {
     const removed = [];
-    for (const action of ['backup', 'verify', 'restore']) {
+    for (const action of ['backup', 'verify', 'restore', 'revoke_sessions']) {
       const folder = safePath(path.join(request.data_root, '.msgctf-storage', request.operation_id + '-' + action), request.data_root, false);
       if (!fs.existsSync(folder)) continue;
       const info = fs.statSync(folder); if (info.uid !== process.geteuid() || info.mode & 0o077) fail('SCRATCH_PERMISSIONS_INVALID');
@@ -203,7 +203,24 @@ async function run(request, inputFd = 0, output = process.stdout) {
       for (const file of files) for await (const block of fs.createReadStream(file)) if (!output.write(block)) await once(output, 'drain');
     } else {
       const { files } = readBundle(inputFd, folder, stores, request.game, 'backup');
-      if (request.action === 'verify') {
+      if (request.action === 'revoke_sessions') {
+        if (fs.readSync(inputFd, Buffer.alloc(1)) !== 0) fail('INVALID_BUNDLE');
+        const results = stores.map(spec => {
+          const before = metadata(spec.path, spec), active = metadata(files[spec.store_id], spec);
+          if (before.schema_sha256 !== active.schema_sha256) fail('DATABASE_SCHEMA_CHANGED');
+          const db = connect(spec.path, true);
+          try {
+            db.prepare('ATTACH DATABASE ? AS authority').run(files[spec.store_id]); db.exec('BEGIN IMMEDIATE');
+            for (const table of spec.session_tables) if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table)) db.exec(`DELETE FROM "${table}"`);
+            if (spec.auth_key_table) db.exec(`DELETE FROM "${spec.auth_key_table}"; INSERT INTO "${spec.auth_key_table}" SELECT * FROM authority."${spec.auth_key_table}"`);
+            db.exec('COMMIT');
+          } finally { db.close(); }
+          const after = metadata(spec.path, spec);
+          if (after.business_sha256 !== before.business_sha256 || after.auth_history_sha256 !== active.auth_history_sha256 || spec.session_tables.some(t => after.table_row_counts[t])) fail('RESTORE_VERIFICATION_FAILED');
+          return after;
+        });
+        json({ stores: results, current_auth_history_preserved: true, restored_session_row_count: 0 });
+      } else if (request.action === 'verify') {
         if (fs.readSync(inputFd, Buffer.alloc(1)) !== 0) fail('INVALID_BUNDLE');
         const results = stores.map(spec => {
           const db = connect(spec.path);
