@@ -9,7 +9,7 @@ import re
 import stat
 import tempfile
 
-FILES = ('koth_storage.py', 'koth_storage_worker.py', 'koth_storage_worker.cjs')
+FILES = ('koth_storage.py', 'koth_storage_worker.py', 'koth_storage_worker.cjs', 'koth_core_egress.py')
 GAMES = ('jenga', 'card-battle-arena', 'grand-tour-duel', 'dependency-hell', 'pixel-smuggler', 'swanopoly')
 
 
@@ -59,6 +59,7 @@ def install(source, source_sha, game, *, prefix=Path('/')):
     os.symlink(source_sha, temporary); os.replace(temporary, link)
     wrapper = b'#!/bin/sh\nset -eu\numask 077\nexec /usr/bin/python3 -B /usr/local/lib/msgctf-koth-storage/current/koth_storage.py "$@"\n'
     atomic(bin_dir / 'msgctf-koth-storage', wrapper, 0o755)
+    atomic(bin_dir / 'msgctf-koth-core-endpoint', wrapper.replace(b'koth_storage.py', b'koth_core_egress.py'), 0o755)
     return manifest
 
 
