@@ -407,7 +407,7 @@ class Cutover:
             original = self.state['postgres']; q = sql_identifier(candidate)
             if any(dbs[candidate][key] != original[key] for key in ('encoding','collate','ctype')):
                 raise s.StorageError('POSTGRES_DATABASE_PROPERTIES_CHANGED')
-            sql = f'ALTER DATABASE {q} OWNER TO {sql_identifier(original["owner"])}; REVOKE ALL ON DATABASE {q} FROM PUBLIC; '
+            sql = f'BEGIN; ALTER DATABASE {q} OWNER TO {sql_identifier(original["owner"])}; REVOKE ALL ON DATABASE {q} FROM PUBLIC; '
             limit=original['connection_limit']
             if type(limit) is not int or not -1<=limit<=100000: raise s.StorageError('POSTGRES_DATABASE_PROPERTIES_CHANGED')
             sql+=f'ALTER DATABASE {q} CONNECTION LIMIT {limit}; '
@@ -415,12 +415,16 @@ class Cutover:
                 for config in setting['config']:
                     key,value=config.split('=',1)
                     prefix=f'ALTER ROLE {sql_identifier(setting["role"])} IN DATABASE {q}' if setting['role'] else f'ALTER DATABASE {q}'
-                    sql+=prefix+' SET '+sql_identifier(key)+" TO '"+value.replace("'","''")+"'; "
+                    # SET search_path TO 'a,b' quotes a single identifier. Let the
+                    # GUC parser interpret the original raw value, then persist
+                    # FROM CURRENT without changing list-valued settings.
+                    qkey=sql_identifier(key)
+                    sql+="SELECT pg_catalog.set_config('"+key+"','"+value.replace("'","''")+"',true); "+prefix+' SET '+qkey+' FROM CURRENT; '
             for grant in original['privileges']:
                 if grant['privilege'] not in {'CREATE','CONNECT','TEMPORARY'}: raise s.StorageError('POSTGRES_PRIVILEGE_UNSUPPORTED')
                 role = 'PUBLIC' if grant['grantee']=='PUBLIC' else sql_identifier(grant['grantee'])
                 sql += f'GRANT {grant["privilege"]} ON DATABASE {q} TO {role}' + (' WITH GRANT OPTION' if grant['grantable'] else '') + '; '
-            pg_control(self.kube, sql)
+            pg_control(self.kube, sql+'COMMIT;')
             pg_control(self.kube, pg_swap_sql(current, candidate, previous))
         else:
             if dbs.get(current, {}).get('database_oid') == old_oid:
