@@ -1,0 +1,331 @@
+"""SQLite operations executed by kubectl exec, never by the host controller.
+
+stdout is a private framed snapshot for backup, JSON metadata otherwise.
+No caller-supplied SQL, archive filenames, credentials, or host database paths.
+"""
+from __future__ import annotations
+
+from contextlib import closing
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import socket
+import sqlite3
+import stat
+import sys
+import time
+import uuid
+
+VERSION = 1
+MAX_HEADER = 65536
+MAX_DATABASE = 512 * 1024 * 1024
+MAX_TOTAL = 1024 * 1024 * 1024
+IDENTIFIER = re.compile(r"[a-z_][a-z0-9_]*\Z")
+GAMES = {"jenga", "card-battle-arena", "grand-tour-duel", "dependency-hell", "pixel-smuggler", "swanopoly"}
+
+
+class StorageError(Exception):
+    pass
+
+
+def canonical(value):
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+
+
+def file_digest(path):
+    result = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            result.update(block)
+    return result.hexdigest()
+
+
+def validate_request(request):
+    required = {"format_version", "action", "game", "operation_id", "expected_pod_name", "data_root", "store_specs"}
+    if set(request) != required or request["format_version"] != VERSION or request["game"] not in GAMES:
+        raise StorageError("INVALID_REQUEST")
+    if request["action"] not in {"inspect", "backup", "verify", "restore", "cleanup"}:
+        raise StorageError("INVALID_REQUEST")
+    if str(uuid.UUID(request["operation_id"])) != request["operation_id"]:
+        raise StorageError("INVALID_REQUEST")
+    if (not os.environ.get("KUBERNETES_SERVICE_HOST")
+            or socket.gethostname() != request["expected_pod_name"]):
+        raise StorageError("NOT_IN_EXPECTED_POD")
+    if request["data_root"] not in {"/data", "/var/lib/koth"}:
+        raise StorageError("DATABASE_PATH_UNSAFE")
+    specs = request["store_specs"]
+    if (not isinstance(specs, list) or not 1 <= len(specs) <= 2
+            or len({s.get("store_id") for s in specs}) != len(specs)):
+        raise StorageError("INVALID_REQUEST")
+    for spec in specs:
+        if (set(spec) != {"store_id", "path_env", "default_path", "suffix", "auth_key_table", "session_tables", "immutable_tables"}
+                or spec["store_id"] not in {"game", "auth"}
+                or spec["auth_key_table"] is not None and not IDENTIFIER.fullmatch(spec["auth_key_table"])
+                or not all(IDENTIFIER.fullmatch(s) for s in spec["session_tables"] + spec["immutable_tables"])):
+            raise StorageError("INVALID_REQUEST")
+    return request
+
+
+def safe_path(path, root, *, must_exist=True):
+    path, root = Path(path), Path(root)
+    if not path.is_absolute() or path == root or not path.is_relative_to(root):
+        raise StorageError("DATABASE_PATH_UNSAFE")
+    for part in [root, *path.parents, path]:
+        if part.is_symlink():
+            raise StorageError("DATABASE_PATH_UNSAFE")
+    if must_exist and (not path.is_file() or not stat.S_ISREG(path.stat().st_mode)):
+        raise StorageError("DATABASE_MISSING")
+    if not path.resolve().is_relative_to(root.resolve()):
+        raise StorageError("DATABASE_PATH_UNSAFE")
+    return path
+
+
+def resolve_stores(request, *, existing=True):
+    stores = []
+    for spec in request["store_specs"]:
+        raw = os.environ.get(spec["path_env"], spec["default_path"])
+        path = Path(raw + spec["suffix"])
+        stores.append({**spec, "path": safe_path(path, request["data_root"], must_exist=existing)})
+    return stores
+
+
+def check_handles(paths, *, reject_live=False, proc=Path("/proc")):
+    targets = {str(p) for p in paths}
+    names = targets | {p + s for p in targets for s in ("-wal", "-shm", "-journal")}
+    for process in proc.iterdir():
+        if not process.name.isdigit() or int(process.name) == os.getpid():
+            continue
+        try:
+            files = list((process / "fd").iterdir())
+        except (PermissionError, FileNotFoundError):
+            continue
+        for file in files:
+            try:
+                target = os.readlink(file)
+            except OSError:
+                continue
+            if target.removesuffix(" (deleted)") not in names:
+                continue
+            if target.endswith(" (deleted)"):
+                raise StorageError("LIVE_SQLITE_HANDLE_DELETED")
+            if reject_live:
+                raise StorageError("RESTORE_TARGET_IN_USE")
+
+
+def connect(path, *, writable=False):
+    db = sqlite3.connect(Path(path).as_uri() + ("?mode=rw" if writable else "?mode=ro"), uri=True, timeout=5)
+    db.execute("PRAGMA trusted_schema=OFF")
+    return db
+
+
+def normalize(value):
+    if isinstance(value, bytes):
+        return {"blob_hex": value.hex()}
+    return value
+
+
+def rows_digest(db, table):
+    rows = [canonical([normalize(v) for v in row]) for row in db.execute('SELECT * FROM "' + table + '"')]
+    return hashlib.sha256(b"\n".join(sorted(rows))).hexdigest()
+
+
+def metadata(path, spec, *, closed_snapshot=False):
+    with closing(connect(path)) as db:
+        db.execute("BEGIN")
+        if db.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
+            raise StorageError("DATABASE_INTEGRITY_FAILED")
+        schema = db.execute("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name").fetchall()
+        tables = [r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+        if not all(IDENTIFIER.fullmatch(table) for table in tables):
+            raise StorageError("DATABASE_SCHEMA_UNSUPPORTED")
+        auth = spec["auth_key_table"]
+        if auth and (auth not in tables or db.execute('SELECT count(*) FROM "' + auth + '"').fetchone()[0] == 0):
+            raise StorageError("AUTH_HISTORY_MISSING")
+        excluded = set(spec["session_tables"]) | {auth}
+        hashes = {table: rows_digest(db, table) for table in tables if table not in excluded}
+        result = {"store_id": spec["store_id"], "engine": "sqlite",
+                "database_path": str(spec.get("path", path)),
+                "schema_sha256": hashlib.sha256(canonical(schema)).hexdigest(),
+                "business_sha256": hashlib.sha256(canonical(hashes)).hexdigest(),
+                "auth_history_sha256": rows_digest(db, auth) if auth else None,
+                "table_row_counts": {table: db.execute('SELECT count(*) FROM "' + table + '"').fetchone()[0] for table in tables},
+                "sqlite_version": sqlite3.sqlite_version}
+        if closed_snapshot:
+            result.update(database_bytes=Path(path).stat().st_size, database_sha256=file_digest(path))
+        return result
+
+
+def backup_database(source, destination, deadline):
+    def progress(*_):
+        if time.monotonic() > deadline:
+            raise StorageError("DATABASE_BACKUP_TIMEOUT")
+    with closing(connect(source)) as reader, closing(sqlite3.connect(destination)) as target:
+        reader.backup(target, pages=256, progress=progress, sleep=0.02)
+        # Only the private, completed snapshot is checkpointed or changed.
+        target.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        target.execute("PRAGMA journal_mode=DELETE")
+    with Path(destination).open("rb") as stream:
+        os.fsync(stream.fileno())
+
+
+def stage_directory(request):
+    parent = safe_path(Path(request["data_root"]) / ".msgctf-storage", request["data_root"], must_exist=False)
+    parent.mkdir(mode=0o700, exist_ok=True)
+    if parent.stat().st_uid != os.geteuid() or parent.stat().st_mode & 0o077:
+        raise StorageError("SCRATCH_PERMISSIONS_INVALID")
+    path = parent / (request["operation_id"] + "-" + request["action"])
+    path.mkdir(mode=0o700)
+    return path
+
+
+def cleanup_stage(path):
+    for file in path.iterdir():
+        if file.is_symlink() or not file.is_file() or not re.fullmatch(r"(?:backup|authority|candidate)-(?:game|auth)\.sqlite(?:-wal|-shm|-journal)?", file.name):
+            raise StorageError("SCRATCH_CONTENT_UNEXPECTED")
+        file.unlink()
+    path.rmdir()
+
+
+def write_bundle(stream, header, files):
+    line = canonical(header) + b"\n"
+    if len(line) > MAX_HEADER:
+        raise StorageError("INVALID_BUNDLE")
+    stream.write(line)
+    for file in files:
+        with Path(file).open("rb") as source:
+            for block in iter(lambda: source.read(1024 * 1024), b""):
+                stream.write(block)
+    stream.flush()
+
+
+def read_bundle(stream, stage, specs, game, prefix):
+    line = stream.readline(MAX_HEADER + 1)
+    if len(line) > MAX_HEADER or not line.endswith(b"\n"):
+        raise StorageError("INVALID_BUNDLE")
+    header = json.loads(line)
+    if header.get("format_version") != VERSION or header.get("game") != game or not isinstance(header.get("stores"), list):
+        raise StorageError("INVALID_BUNDLE")
+    items = header["stores"]
+    if [v.get("store_id") for v in items] != [s["store_id"] for s in specs]:
+        raise StorageError("INVALID_BUNDLE")
+    total, files = 0, {}
+    for item in items:
+        count = item.get("database_bytes")
+        if item.get('engine') != 'sqlite' or type(count) is not int or not 512 <= count <= MAX_DATABASE or not re.fullmatch(r"[0-9a-f]{64}", item.get("database_sha256", "")):
+            raise StorageError("INVALID_BUNDLE")
+        total += count
+        if total > MAX_TOTAL:
+            raise StorageError("INVALID_BUNDLE")
+        target = stage / (prefix + "-" + item["store_id"] + ".sqlite")
+        with target.open("xb") as output:
+            remaining = count
+            while remaining:
+                block = stream.read(min(remaining, 1024 * 1024))
+                if not block:
+                    raise StorageError("BUNDLE_TRUNCATED")
+                output.write(block); remaining -= len(block)
+        if file_digest(target) != item["database_sha256"]:
+            raise StorageError("BUNDLE_HASH_MISMATCH")
+        files[item["store_id"]] = target
+    return header, files
+
+
+def restore_database(snapshot, authority, target, spec):
+    original = metadata(snapshot, spec, closed_snapshot=True)
+    current = metadata(authority, spec, closed_snapshot=True)
+    if original["schema_sha256"] != current["schema_sha256"]:
+        raise StorageError("DATABASE_SCHEMA_CHANGED")
+    auth = spec["auth_key_table"]
+    # The candidate is private. No live database is opened writable or replaced.
+    with closing(connect(snapshot, writable=True)) as candidate, closing(connect(authority)) as authority_db:
+        candidate.execute("BEGIN IMMEDIATE")
+        for table in spec["session_tables"]:
+            if candidate.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+                candidate.execute('DELETE FROM "' + table + '"')
+        if auth:
+            columns = [row[1] for row in authority_db.execute('PRAGMA table_info("' + auth + '")')]
+            rows = authority_db.execute('SELECT * FROM "' + auth + '"').fetchall()
+            candidate.execute('DELETE FROM "' + auth + '"')
+            candidate.executemany('INSERT INTO "' + auth + '" VALUES(' + ','.join('?' for _ in columns) + ')', rows)
+        candidate.commit()
+    result = metadata(snapshot, spec, closed_snapshot=True)
+    if (result["business_sha256"] != original["business_sha256"] or result["auth_history_sha256"] != current["auth_history_sha256"]
+            or any(result['table_row_counts'].get(t, 0) for t in spec['session_tables'])):
+        raise StorageError("RESTORE_VERIFICATION_FAILED")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        raise StorageError("RESTORE_TARGET_NOT_EMPTY")
+    os.chmod(snapshot, 0o600)
+    os.replace(snapshot, target)
+    with target.open("rb") as stream:
+        os.fsync(stream.fileno())
+    return result
+
+
+def run(request, input_stream, output_stream):
+    os.umask(0o077)
+    validate_request(request)
+    stores = resolve_stores(request, existing=request["action"] not in {"restore", "cleanup"})
+    check_handles([s["path"] for s in stores], reject_live=request["action"] == "restore")
+    if request['action'] == 'cleanup':
+        removed = []
+        for action in ('backup', 'verify', 'restore'):
+            folder = safe_path(Path(request['data_root']) / '.msgctf-storage' / (request['operation_id'] + '-' + action), request['data_root'], must_exist=False)
+            if folder.exists():
+                if folder.stat().st_uid != os.geteuid() or folder.stat().st_mode & 0o077:
+                    raise StorageError('SCRATCH_PERMISSIONS_INVALID')
+                check_handles(list(folder.iterdir()), reject_live=True)
+                cleanup_stage(folder); removed.append(action)
+        output_stream.write(canonical({'removed_scratch_actions': removed})); return
+    if request["action"] == "inspect":
+        result = {"format_version": VERSION, "game": request["game"], "sqlite_context": "service_pod",
+                  "stores": [metadata(s["path"], s) for s in stores], "deleted_sqlite_handle_count": 0}
+        output_stream.write(canonical(result)); return
+    stage = stage_directory(request)
+    try:
+        if request["action"] == "backup":
+            files, info = [], []
+            for spec in stores:
+                path = stage / ("backup-" + spec["store_id"] + ".sqlite")
+                backup_database(spec["path"], path, time.monotonic() + 45)
+                info.append(metadata(path, spec, closed_snapshot=True)); files.append(path)
+            write_bundle(output_stream, {"format_version": VERSION, "game": request["game"], "stores": info}, files)
+        else:
+            header, files = read_bundle(input_stream, stage, stores, request["game"], "backup")
+            if request["action"] == "verify":
+                if input_stream.read(1):
+                    raise StorageError('INVALID_BUNDLE')
+                results = []
+                for spec in stores:
+                    with closing(connect(spec["path"])) as live:
+                        live.execute("ATTACH DATABASE ? AS snapshot", (files[spec["store_id"]].as_uri() + "?mode=ro",))
+                        counts = {}
+                        for table in spec["immutable_tables"]:
+                            if not live.execute("SELECT 1 FROM snapshot.sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+                                raise StorageError("DATABASE_SCHEMA_CHANGED")
+                            missing = live.execute('SELECT count(*) FROM(SELECT * FROM snapshot."' + table + '" EXCEPT SELECT * FROM main."' + table + '")').fetchone()[0]
+                            if missing:
+                                raise StorageError("ORIGINAL_ROWS_CHANGED")
+                            counts[table] = missing
+                        results.append({"store_id": spec["store_id"], "missing_or_changed_row_counts": counts})
+                output_stream.write(canonical({"game": request["game"], "sqlite_context": "service_pod", "stores": results}))
+            else:
+                _, authority = read_bundle(input_stream, stage, stores, request["game"], "authority")
+                if input_stream.read(1):
+                    raise StorageError("INVALID_BUNDLE")
+                results = [restore_database(files[s["store_id"]], authority[s["store_id"]], s["path"], s) for s in stores]
+                output_stream.write(canonical({"game": request["game"], "sqlite_context": "isolated_restore_pod", "stores": results,
+                                               "current_auth_history_preserved": True, "restored_session_row_count": 0}))
+    finally:
+        cleanup_stage(stage)
+
+
+if __name__ == "__main__":
+    try:
+        run(json.loads(sys.argv[1]), sys.stdin.buffer, sys.stdout.buffer)
+    except Exception as error:
+        code = str(error) if isinstance(error, StorageError) else "STORAGE_WORKER_FAILED"
+        sys.stderr.write(json.dumps({"error_code": code}) + "\n")
+        raise SystemExit(1) from None

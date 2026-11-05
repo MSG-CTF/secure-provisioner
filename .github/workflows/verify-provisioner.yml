@@ -41,7 +41,12 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
       - name: Verify modules and deployment recovery
+        env:
+          KOTH_STORAGE_PG_CONTAINER: ${{ job.services.postgres.id }}
         run: |
           go mod verify
           go build -o "$RUNNER_TEMP/registry-validator" ./cmd/provisioner
