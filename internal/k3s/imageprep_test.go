@@ -53,7 +53,7 @@ func TestImageInventoryErrorsClassifyTransientWithoutExposingRawDetails(t *testi
 	}
 }
 
-func TestImagePreparationPlacementKeepsRequiredPlatformAndOptionalPreference(t *testing.T) {
+func TestImagePreparationPlacementRequiresPreparedNodeAndPlatform(t *testing.T) {
 	command := validCreateCommand("aws-dev")
 	command.Architecture = "AMD64"
 	resources, err := BuildResourceSet(validCluster("aws-dev"), command)
@@ -64,13 +64,57 @@ func TestImagePreparationPlacementKeepsRequiredPlatformAndOptionalPreference(t *
 	if pod.NodeSelector["kubernetes.io/os"] != "linux" || pod.NodeSelector["kubernetes.io/arch"] != "amd64" {
 		t.Fatal("missing required platform")
 	}
-	applyImagePreference(resources, []string{"node-a"})
-	if pod.Affinity == nil || pod.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution != nil || len(pod.Affinity.NodeAffinity.PreferredDuringSchedulingIgnoredDuringExecution) != 1 {
-		t.Fatal("readiness must remain soft")
+	restrictImagePlacement(resources, []string{"node-a"})
+	if pod.Affinity == nil || pod.Affinity.NodeAffinity == nil || pod.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
+		t.Fatal("prepared images must be a required placement constraint")
+	}
+	terms := pod.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	if len(terms) != 1 || len(terms[0].MatchFields) != 1 || terms[0].MatchFields[0].Key != "metadata.name" || terms[0].MatchFields[0].Operator != corev1.NodeSelectorOpIn || len(terms[0].MatchFields[0].Values) != 1 || terms[0].MatchFields[0].Values[0] != "node-a" {
+		t.Fatalf("prepared-node constraint = %+v", terms)
 	}
 	command.Architecture = "ARM64"
 	if _, err := BuildResourceSet(validCluster("aws-dev"), command); err == nil {
 		t.Fatal("target platform mismatch accepted")
+	}
+}
+
+func TestImagePreparationPlacementPreservesEveryExistingRequiredTerm(t *testing.T) {
+	resources, err := BuildResourceSet(validCluster("aws-dev"), validCreateCommand("aws-dev"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pod := &resources.Deployments[0].Spec.Template.Spec
+	pod.Affinity = &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
+		RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{NodeSelectorTerms: []corev1.NodeSelectorTerm{
+			{MatchExpressions: []corev1.NodeSelectorRequirement{{Key: "zone", Operator: corev1.NodeSelectorOpIn, Values: []string{"a"}}}},
+			{MatchExpressions: []corev1.NodeSelectorRequirement{{Key: "zone", Operator: corev1.NodeSelectorOpIn, Values: []string{"b"}}}},
+		}},
+	}}
+	restrictImagePlacement(resources, []string{"prepared"})
+	terms := pod.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	if len(terms) != 2 {
+		t.Fatalf("existing terms replaced: %+v", terms)
+	}
+	for _, term := range terms {
+		if len(term.MatchExpressions) != 1 || term.MatchExpressions[0].Key != "zone" || len(term.MatchFields) != 1 || term.MatchFields[0].Values[0] != "prepared" {
+			t.Fatalf("required term weakened: %+v", term)
+		}
+	}
+}
+
+func TestImagePreparationPlacementDoesNotWidenEmptyRequiredTerm(t *testing.T) {
+	resources, err := BuildResourceSet(validCluster("aws-dev"), validCreateCommand("aws-dev"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pod := &resources.Deployments[0].Spec.Template.Spec
+	pod.Affinity = &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
+		RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{NodeSelectorTerms: []corev1.NodeSelectorTerm{{}}},
+	}}
+	restrictImagePlacement(resources, []string{"prepared"})
+	term := pod.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[0]
+	if len(term.MatchExpressions) != 0 || len(term.MatchFields) != 0 {
+		t.Fatal("an empty term matching no nodes became schedulable")
 	}
 }
 

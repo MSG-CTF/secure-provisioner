@@ -20,11 +20,12 @@
 - Scheduler는 Broker 후보를 받은 뒤 Runtime의 준비 상태를 일괄 조회한다(B안).
 - Runtime이 노드별 다운로드, 로컬 이미지 확인, 재시도, 상태 만료를 관리한다.
 - Broker 후보 조회·예약 요청과 응답은 변경하지 않는다.
-- 이미지 준비는 선호 조건이다. 누락, UNKNOWN, 만료, timeout, API 오류만으로
-  후보를 제거하거나 생성 실패로 처리하지 않는다. 실제 생성의 인증, digest 승인,
-  격리, 플랫폼, 자원 검증 실패는 기존 실패 경로로 처리한다.
-- 준비 작업 실패를 release 활성화의 필수 차단 조건으로 만들지 않는다. 그런 gate는
-  이번 성능 최적화 계약과 별도 운영 정책이다.
+- Scheduler 준비 조회는 후보 순위에 활용하지만 실제 K3s 생성에서는 유효한 준비가
+  필수다. Runtime이 전체 이미지와 현재 노드 identity를 확인하지 못하면 Namespace
+  생성 전에 `IMAGE_NOT_READY`로 실패하며 원격 pull로 대체하지 않는다. 인증, digest
+  승인, 격리, 플랫폼, 자원 검증도 계속 필수다.
+- release 활성화 조건은 Backend 운영 정책으로 유지한다. 활성 release라도 실제
+  K3s 실행은 이 계약의 필수 준비 검사를 통과해야 한다.
 
 ## 조회: POST /v1/image-readiness/query
 
@@ -204,9 +205,9 @@ Scheduler는 필수 후보 검사를 먼저 하고 같은 위험도 안에서 �
 후보 조회 뒤 시간이 흘렀다면 reservation 전에 후보 valid_until을 다시 확인한다.
 미확정 예약은 기존 request_id로 복구하며 준비 순위 변화로 다른 후보를 예약하지 않는다.
 
-Runtime은 전체 이미지가 준비된 노드에 `preferredDuringSchedulingIgnoredDuringExecution`
-선호도를 각 컨테이너 Deployment에 적용하고 `IfNotPresent`를 유지한다. 준비된 노드가
-없으면 이 선호도만 생략한다. OS/architecture·격리 조건은 필수이며 ready를 이유로
+Runtime은 전체 이미지가 준비된 현재 노드에 `requiredDuringSchedulingIgnoredDuringExecution`
+조건을 각 컨테이너 Deployment에 적용하고 `Never`를 사용한다. 준비된 노드가
+없으면 Namespace 생성 전에 `IMAGE_NOT_READY`로 실패한다. OS/architecture·격리 조건은 필수이며 ready를 이유로
 이를 완화하지 않는다. 같은 노드에 모든 이미지를 가진다는 준비 기준과 모든 Pod를
 한 노드에 모은다는 co-location 요구는 다르며 후자는 이 계약에서 요구하지 않는다.
 
@@ -236,10 +237,11 @@ scheduler:
 ```
 
 전용 Runtime 조회 timeout을 사용하고 기존 create/operation client의 5초 read timeout을
-재사용하지 않는다. 고정된 fallback 동작을 fail-closed 설정으로 바꾸지 않는다.
+재사용하지 않는다. Scheduler 조회의 후보 순위 fallback은 유지하지만 Runtime 생성의
+필수 준비 검사를 대체하거나 우회하지 않는다.
 시범 검증 후 양쪽 enabled를 켠다. TTL과 관측 주기는 함께 설정 검증한다.
-실제 배치 가능한 모든 노드에 GHCR pull 인증이 있어야 한다. cache hit만으로
-registry 자격을 매번 재인증했다고 선언하지 않는다. 필요 시 K3s 버전과 kubelet의
+이미지 사전 다운로드 단계에 필요한 인증과 문제 생성 경로는 분리한다. 새 생성은
+로컬 캐시만 사용한다. cache hit만으로 registry 자격을 매번 재인증했다고 선언하지 않는다. 필요 시 K3s 버전과 kubelet의
 image pull credential verification 설정을 별도로 확인한다.
 
 ## 적용 순서와 완료 기준
@@ -255,12 +257,14 @@ image pull credential verification 설정을 별도로 확인한다.
 - 전체 이미지를 가진 노드가 2대면 ready_node_count=2이며 인스턴스 2개 예약을 보장하지 않는다.
 - target 일부/전부 미등록이면 해당 결과만 생략한다. 미등록 operation 조회는 404다.
 - 조회/캐시 재접근, 정책 재조회, 재전송으로 observed_at/valid_until이 연장되지 않는다.
-- 미관측/만료/노드 교체/boot 변화/캐시 삭제는 우선순위를 제거하고 정상 lazy pull을 허용한다.
-- 조회 timeout/401/403/404/5xx에도 보안 검사를 통과한 생성은 기존 경로로 진행한다.
-  401/403은 설정 오류로 관측하되 실제 생성 API의 인증 오류까지 무시하지 않는다.
+- 미관측/만료/노드 교체/boot 변화는 생성 시 `IMAGE_NOT_READY`로 거절한다.
+  확인 뒤 캐시가 삭제돼도 `Never`가 원격 pull을 차단하며 기존 생성 실패 정리 경로를 따른다.
+- Scheduler 조회 timeout/401/403/404/5xx는 Runtime의 필수 준비 검사를 우회하지 않는다.
+  실제 생성은 내부 준비 기록과 현재 노드를 독립적으로 확인하고 인증도 검증한다.
 - 보조 이미지 미승인, 정책 block, 플랫폼 불일치는 실제 생성에서 거절한다.
 - 작업 부분 실패·중복 접수·선택 재시도·재시작 복구를 검사하고 원문 Secret을 기록하지 않는다.
 - 두 새 create 필드의 생략 호환성, 원래 payload replay/reconcile/reset 보존을 확인한다.
 
-현재 PR의 검증은 OpenAPI/예시의 형식·계약 검토다. 위 런타임 수용 시험은 실제
-handler/agent/worker 구현 PR에서 수행해야 하며 문서 검증으로 통과 처리하지 않는다.
+최초 계약 PR의 검증은 OpenAPI/예시의 형식·계약 검토였다. 현재 구현 및 heavy-01의
+로컬 이미지 기동 시험 범위는 [runbook](../operations/image-preparation.md)에 기록한다.
+문서 검증이나 한 이미지 시험을 전체 release 수용 시험으로 간주하지 않는다.

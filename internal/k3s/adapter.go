@@ -137,21 +137,28 @@ func (a *Adapter) createWorkload(ctx context.Context, command provisioner.Create
 	if err != nil {
 		return provisioner.CreateWorkloadResult{}, err
 	}
-	if a.config.ReadyImageNodes != nil {
-		images := []string{}
-		for _, container := range normalizedCommandContainers(command) {
-			images = append(images, container.Image)
-		}
-		hintCtx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
-		nodes := a.config.ReadyImageNodes(hintCtx, command.TargetID, strings.ToUpper(cluster.Config.Architecture), images)
-		cancel()
-		applyImagePreference(resources, nodes)
-	}
-	if err := addSecretResources(ctx, &resources, command, a.config.Secrets); err != nil {
-		return provisioner.CreateWorkloadResult{}, a.failBeforeNamespace(command, err)
-	}
 	if cluster.Client == nil {
 		return provisioner.CreateWorkloadResult{}, newRuntimeError("K3S_UNAVAILABLE", true, nil)
+	}
+	if a.config.ReadyImageNodes == nil {
+		return provisioner.CreateWorkloadResult{}, a.failBeforeNamespace(command, newRuntimeError("IMAGE_NOT_READY", true, nil))
+	}
+	images := []string{}
+	for _, container := range normalizedCommandContainers(command) {
+		images = append(images, container.Image)
+	}
+	preparationCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	nodes := a.config.ReadyImageNodes(preparationCtx, command.TargetID, strings.ToUpper(cluster.Config.Architecture), images)
+	cancel()
+	if err := ctx.Err(); err != nil {
+		return provisioner.CreateWorkloadResult{}, a.failBeforeNamespace(command, operationCancelledError(err))
+	}
+	if len(nodes) == 0 {
+		return provisioner.CreateWorkloadResult{}, a.failBeforeNamespace(command, newRuntimeError("IMAGE_NOT_READY", true, nil))
+	}
+	restrictImagePlacement(resources, nodes)
+	if err := addSecretResources(ctx, &resources, command, a.config.Secrets); err != nil {
+		return provisioner.CreateWorkloadResult{}, a.failBeforeNamespace(command, err)
 	}
 	if err := a.validateStartupCPU(cluster, command); err != nil {
 		return provisioner.CreateWorkloadResult{}, a.failBeforeNamespace(command, err)

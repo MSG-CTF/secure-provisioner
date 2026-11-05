@@ -255,10 +255,12 @@ production 완료로 간주하지 않습니다.
 
 실행 설정 전환: [백엔드 비밀값 주입](docs/operations/backend-secret-injection.md)
 
-## Optional image preparation
+## Preloaded challenge images
 
-Runtime can prepare approved immutable images in actual K3s node caches through
-dedicated, disabled-by-default APIs and workers. See the
+New K3s challenge instances require approved immutable images in actual execution
+node caches. Their pull policy is `Never`; missing preparation returns
+`IMAGE_NOT_READY` before creating resources. Enable the dedicated preparation
+APIs/workers and verify the selected nodes before enabling new creates. See the
 [installation and verification runbook](docs/operations/image-preparation.md),
 [API contract](docs/api/image-preparation-b-contract.md), and
 [trusted node configuration](config/image-prefetch-nodes.example.json).

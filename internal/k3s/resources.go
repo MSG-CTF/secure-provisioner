@@ -165,7 +165,7 @@ func buildResourceSetForOperation(cluster Cluster, command provisioner.CreateWor
 		podContainer := corev1.Container{
 			Name:            container.Name,
 			Image:           container.Image,
-			ImagePullPolicy: corev1.PullIfNotPresent,
+			ImagePullPolicy: corev1.PullNever,
 			Ports:           containerPorts,
 			Resources: corev1.ResourceRequirements{
 				Requests: quantities,

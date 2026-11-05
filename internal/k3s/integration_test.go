@@ -209,7 +209,7 @@ func TestK3sIntegrationCreateReadyAndCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal("NamespaceForInstance() failed")
 	}
-	adapter, err := NewAdapter(registry, AdapterConfig{
+	adapter, err := NewAdapter(registry, AdapterConfig{ReadyImageNodes: livePreparedImageNodes(registry),
 		ReadyTimeout:    5 * time.Minute,
 		PollInterval:    time.Second,
 		RollbackTimeout: 30 * time.Second,
@@ -317,7 +317,7 @@ func TestK3sIntegrationPwnCreateReadyAndCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal("NamespaceForInstance() failed")
 	}
-	adapter, err := NewAdapter(registry, AdapterConfig{
+	adapter, err := NewAdapter(registry, AdapterConfig{ReadyImageNodes: livePreparedImageNodes(registry),
 		ReadyTimeout: 5 * time.Minute, PollInterval: time.Second, RollbackTimeout: 30 * time.Second,
 	})
 	if err != nil {
@@ -424,7 +424,7 @@ func TestK3sIntegrationCreateMultiContainerReadyAndDelete(t *testing.T) {
 	if err != nil {
 		t.Fatal("NamespaceForInstance() failed")
 	}
-	createAdapter, err := NewAdapter(registry, AdapterConfig{
+	createAdapter, err := NewAdapter(registry, AdapterConfig{ReadyImageNodes: livePreparedImageNodes(registry),
 		ReadyTimeout:    5 * time.Minute,
 		PollInterval:    time.Second,
 		RollbackTimeout: 30 * time.Second,

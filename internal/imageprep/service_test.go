@@ -30,11 +30,12 @@ func (p *testPolicy) Approved(string) bool { return !p.blocked }
 type testInventory struct {
 	nodes   []Node
 	enabled bool
+	err     error
 }
 
 func (i *testInventory) Known(string) bool                                     { return true }
 func (i *testInventory) Enabled(string, string) bool                           { return i.enabled }
-func (i *testInventory) Nodes(context.Context, string, string) ([]Node, error) { return i.nodes, nil }
+func (i *testInventory) Nodes(context.Context, string, string) ([]Node, error) { return i.nodes, i.err }
 
 type testRunner struct {
 	mu     sync.Mutex

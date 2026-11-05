@@ -16,7 +16,7 @@ func TestQueuedVMRequiredImageCannotCreateKubernetesResources(t *testing.T) {
 		command := validCreateCommand("aws-dev")
 		client := readyClient(t, command)
 		registry := adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "unused")}, client)
-		adapter, err := NewAdapter(registry, AdapterConfig{ReadyTimeout: time.Second, PollInterval: time.Millisecond,
+		adapter, err := NewAdapter(registry, AdapterConfig{ReadyImageNodes: testPreparedImageNodes, ReadyTimeout: time.Second, PollInterval: time.Millisecond,
 			RequiresVMImage: func(image string) bool { return image == command.Containers[0].Image },
 		})
 		if err != nil {
@@ -49,7 +49,7 @@ func TestVMPolicyStillCleansInterruptedKubernetesAttempt(t *testing.T) {
 	resources.Namespace.ResourceVersion = "17"
 	client := fake.NewSimpleClientset(resources.Namespace)
 	registry := adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "unused")}, client)
-	adapter, err := NewAdapter(registry, AdapterConfig{ReadyTimeout: time.Second, PollInterval: time.Millisecond,
+	adapter, err := NewAdapter(registry, AdapterConfig{ReadyImageNodes: testPreparedImageNodes, ReadyTimeout: time.Second, PollInterval: time.Millisecond,
 		RequiresVMImage: func(string) bool { return true },
 	})
 	if err != nil {

@@ -238,12 +238,14 @@ TCP 포트를 각각 하나만 허용하며, writable path는 `/tmp` 또는 그 
 정식 계약으로 사용한다.
 
 Kubernetes PodSpec에는 pre-pull 여부와 관계없이 정확한 image identifier가 필요하므로
-`image`는 계속 전달한다. 모든 컨테이너는 `imagePullPolicy: IfNotPresent`를 사용한다.
+`image`는 계속 전달한다. 새 문제 컨테이너는 `imagePullPolicy: Never`를 사용한다.
 tag-only 및 `latest`는 거부하며 모든 image는 lowercase 64자리 `@sha256:<digest>`로
 고정해야 한다.
-같은 digest가 노드에 있으면 캐시를 사용하고, 없으면 container runtime이 lazy pull한다.
-Pod egress 차단은 node의 image pull을 막지 않는다. 비공개 GHCR Package라면 K3s
-노드에 pull credential을 별도로 설정해야 한다.
+전체 컨테이너의 이미지가 사전 적재되고 현재 노드 identity와 일치하는 유효한 준비
+기록이 있어야 생성한다. 확인된 노드에만 required affinity로 배치하며, 준비가 없거나
+만료되거나 조회에 실패하면 Namespace 생성 전에 `IMAGE_NOT_READY`로 거절한다.
+확인 뒤 캐시가 사라져도 생성 중 GHCR로 fallback하지 않는다. 비공개 이미지를 미리
+받는 단계에 필요한 credential과 참가자 문제 생성 경로는 분리한다.
 
 ### 응답
 
@@ -747,6 +749,7 @@ Scheduler가 처리한 비동기 Operation의 최종 실패는 서로 다른 계
 | `CREATE` | `TARGET_NOT_FOUND` | 생성 target이 Registry에 없음 | 즉시 `FAILED` |
 | `CREATE` | `TARGET_DISABLED` | 생성 target이 비활성화됨 | 즉시 `FAILED` |
 | `CREATE` | `K3S_UNAVAILABLE` | K3s client를 사용할 수 없음 | 재시도 후 한도 도달 시 `FAILED` |
+| `CREATE` | `IMAGE_NOT_READY` | 전체 이미지 세트의 유효한 준비 기록 또는 일치하는 현재 실행 노드가 없음 | 리소스 생성 없이 재시도 후 한도 도달 시 `FAILED`; 사전 준비 후 생성 계약에 따라 다시 요청 |
 | `CREATE` | `INVALID_CREATE_COMMAND` | Worker가 받은 생성 명령으로 리소스를 구성할 수 없음 | 즉시 `FAILED` |
 | `CREATE` | `RESOURCE_OWNERSHIP_CONFLICT` | 생성 전에 같은 이름의 Namespace가 이미 있거나 다른 리소스의 소유권이 다름 | 즉시 `FAILED` |
 | `CREATE` | `RUNTIME_IDENTITY_MISMATCH` | 생성 성공 확인 전에 Namespace UID가 바뀜 | 즉시 `FAILED` |

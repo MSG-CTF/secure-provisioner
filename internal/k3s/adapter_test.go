@@ -413,6 +413,15 @@ func TestAdapterRejectsDeploymentSpecTamperingOnFreshReadback(t *testing.T) {
 		name   string
 		tamper func(*appsv1.Deployment)
 	}{
+		{name: "pull if missing", tamper: func(deployment *appsv1.Deployment) {
+			deployment.Spec.Template.Spec.Containers[0].ImagePullPolicy = corev1.PullIfNotPresent
+		}},
+		{name: "always pull", tamper: func(deployment *appsv1.Deployment) {
+			deployment.Spec.Template.Spec.Containers[0].ImagePullPolicy = corev1.PullAlways
+		}},
+		{name: "omitted pull policy", tamper: func(deployment *appsv1.Deployment) {
+			deployment.Spec.Template.Spec.Containers[0].ImagePullPolicy = ""
+		}},
 		{name: "init container", tamper: func(deployment *appsv1.Deployment) {
 			deployment.Spec.Template.Spec.InitContainers = []corev1.Container{{Name: "injected-init", Image: "busybox:latest"}}
 		}},
@@ -549,7 +558,7 @@ func TestAdapterAcceptsDocumentedDeploymentAPIServerDefaults(t *testing.T) {
 	}
 }
 
-func TestRenderedContainersUseIfNotPresentForPrePullAndLazyPull(t *testing.T) {
+func TestRenderedContainersUseOnlyPreloadedImages(t *testing.T) {
 	command := validMultiCreateCommand("aws-dev")
 	command.Containers[0].Image = "registry.example/challenge:latest"
 	command.Containers[1].Image = "registry.example/sidecar"
@@ -560,8 +569,8 @@ func TestRenderedContainersUseIfNotPresentForPrePullAndLazyPull(t *testing.T) {
 	}
 	for _, deployment := range resources.Deployments {
 		for _, container := range deployment.Spec.Template.Spec.Containers {
-			if container.ImagePullPolicy != corev1.PullIfNotPresent {
-				t.Fatalf("container %q pull policy = %q, want %q", container.Name, container.ImagePullPolicy, corev1.PullIfNotPresent)
+			if container.ImagePullPolicy != corev1.PullNever {
+				t.Fatalf("container %q pull policy = %q, want %q", container.Name, container.ImagePullPolicy, corev1.PullNever)
 			}
 		}
 	}
@@ -2610,7 +2619,7 @@ func TestAdapterRollbackGetIsBoundedByIndependentTimeout(t *testing.T) {
 		},
 	}
 	registry := adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client)
-	adapter, err := NewAdapter(registry, AdapterConfig{ReadyTimeout: time.Second, PollInterval: time.Millisecond, RollbackTimeout: 2 * time.Millisecond})
+	adapter, err := NewAdapter(registry, AdapterConfig{ReadyImageNodes: testPreparedImageNodes, ReadyTimeout: time.Second, PollInterval: time.Millisecond, RollbackTimeout: 2 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2629,7 +2638,7 @@ func TestAdapterRollbackGetIsBoundedByIndependentTimeout(t *testing.T) {
 
 func TestNewAdapterDefaultsAndValidatesRollbackTimeout(t *testing.T) {
 	registry := adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, fake.NewSimpleClientset())
-	adapter, err := NewAdapter(registry, AdapterConfig{ReadyTimeout: time.Second, PollInterval: time.Millisecond})
+	adapter, err := NewAdapter(registry, AdapterConfig{ReadyImageNodes: testPreparedImageNodes, ReadyTimeout: time.Second, PollInterval: time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2637,11 +2646,11 @@ func TestNewAdapterDefaultsAndValidatesRollbackTimeout(t *testing.T) {
 		t.Fatalf("default RollbackTimeout = %s, want 30s", adapter.config.RollbackTimeout)
 	}
 
-	if _, err := NewAdapter(registry, AdapterConfig{ReadyTimeout: time.Second, PollInterval: time.Millisecond, RollbackTimeout: -time.Second}); runtimeErrorCode(t, err) != "CONFIG_INVALID" {
+	if _, err := NewAdapter(registry, AdapterConfig{ReadyImageNodes: testPreparedImageNodes, ReadyTimeout: time.Second, PollInterval: time.Millisecond, RollbackTimeout: -time.Second}); runtimeErrorCode(t, err) != "CONFIG_INVALID" {
 		t.Fatalf("negative timeout code = %q, want CONFIG_INVALID", runtimeErrorCode(t, err))
 	}
 	const customTimeout = 3 * time.Second
-	adapter, err = NewAdapter(registry, AdapterConfig{ReadyTimeout: time.Second, PollInterval: time.Millisecond, RollbackTimeout: customTimeout})
+	adapter, err = NewAdapter(registry, AdapterConfig{ReadyImageNodes: testPreparedImageNodes, ReadyTimeout: time.Second, PollInterval: time.Millisecond, RollbackTimeout: customTimeout})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2673,7 +2682,7 @@ func TestAdapterRollsBackOwnedNamespaceWhenReadinessTimesOut(t *testing.T) {
 	command := validCreateCommand("aws-dev")
 	client := fake.NewSimpleClientset()
 	registry := adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client)
-	adapter, err := NewAdapter(registry, AdapterConfig{ReadyTimeout: time.Millisecond, PollInterval: time.Microsecond})
+	adapter, err := NewAdapter(registry, AdapterConfig{ReadyImageNodes: testPreparedImageNodes, ReadyTimeout: time.Millisecond, PollInterval: time.Microsecond})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2697,7 +2706,7 @@ func TestAdapterRejectsPreexistingOwnedNamespaceBeforeReadiness(t *testing.T) {
 	}
 	client := fake.NewSimpleClientset(resources.Namespace, resources.Deployment)
 	registry := adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client)
-	adapter, err := NewAdapter(registry, AdapterConfig{ReadyTimeout: time.Millisecond, PollInterval: time.Microsecond})
+	adapter, err := NewAdapter(registry, AdapterConfig{ReadyImageNodes: testPreparedImageNodes, ReadyTimeout: time.Millisecond, PollInterval: time.Microsecond})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2713,7 +2722,7 @@ func TestAdapterClassifiesParentDeadlineAsOperationCancelled(t *testing.T) {
 	command := validCreateCommand("aws-dev")
 	client := fake.NewSimpleClientset()
 	registry := adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client)
-	adapter, err := NewAdapter(registry, AdapterConfig{ReadyTimeout: time.Second, PollInterval: time.Microsecond})
+	adapter, err := NewAdapter(registry, AdapterConfig{ReadyImageNodes: testPreparedImageNodes, ReadyTimeout: time.Second, PollInterval: time.Microsecond})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2960,7 +2969,7 @@ func TestAdapterRejectsUnknownAndDisabledTargetWithoutCallingAnyClient(t *testin
 
 func newTestAdapter(t *testing.T, registry *Registry) *Adapter {
 	t.Helper()
-	adapter, err := NewAdapter(registry, AdapterConfig{ReadyTimeout: time.Second, PollInterval: time.Millisecond})
+	adapter, err := NewAdapter(registry, AdapterConfig{ReadyImageNodes: testPreparedImageNodes, ReadyTimeout: time.Second, PollInterval: time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3274,7 +3283,9 @@ func applyDocumentedDeploymentDefaults(deployment *appsv1.Deployment) {
 		if len(container.VolumeMounts) == 0 {
 			container.VolumeMounts = nil
 		}
-		container.ImagePullPolicy = corev1.PullIfNotPresent
+		if container.ImagePullPolicy == "" {
+			container.ImagePullPolicy = corev1.PullIfNotPresent
+		}
 		container.TerminationMessagePath = corev1.TerminationMessagePathDefault
 		container.TerminationMessagePolicy = corev1.TerminationMessageReadFile
 		for portIndex := range container.Ports {
@@ -3495,4 +3506,8 @@ func (n *deadlineObservingNamespaces) Get(ctx context.Context, name string, opti
 	default:
 	}
 	return nil, ctx.Err()
+}
+
+func testPreparedImageNodes(context.Context, string, string, []string) []string {
+	return []string{"prepared-test-node"}
 }

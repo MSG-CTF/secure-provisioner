@@ -50,7 +50,7 @@ func TestK3sLiveInstanceNetwork(t *testing.T) {
 	if cluster.Config.ExposureMode != ExposureModeNodePort {
 		t.Fatal("this test requires NODE_PORT exposure; INGRESS_PATH needs separate backend verification")
 	}
-	adapter, err := NewAdapter(registry, AdapterConfig{ReadyTimeout: 2 * time.Minute, PollInterval: time.Second, RollbackTimeout: time.Minute})
+	adapter, err := NewAdapter(registry, AdapterConfig{ReadyImageNodes: livePreparedImageNodes(registry), ReadyTimeout: 2 * time.Minute, PollInterval: time.Second, RollbackTimeout: time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}

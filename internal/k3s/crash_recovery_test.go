@@ -136,7 +136,7 @@ func TestReclaimedCreateCleansNamespaceBeforeFlagPolicyRejectsCommand(t *testing
 	resources.Namespace.ResourceVersion = "17"
 	client := fake.NewSimpleClientset(resources.Namespace)
 	registry := adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client)
-	adapter, err := NewAdapter(registry, AdapterConfig{
+	adapter, err := NewAdapter(registry, AdapterConfig{ReadyImageNodes: testPreparedImageNodes,
 		ReadyTimeout: time.Second, PollInterval: time.Millisecond,
 		RequiredFlagImages: []string{command.Containers[0].Image},
 	})
@@ -242,7 +242,7 @@ func TestReclaimedCreateRecordsTerminatingNamespaceWhenDeletionStalls(t *testing
 	resources.Namespace.DeletionTimestamp = &deletionTime
 	client := fake.NewSimpleClientset(resources.Namespace)
 	registry := adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "aws-kubeconfig")}, client)
-	adapter, err := NewAdapter(registry, AdapterConfig{
+	adapter, err := NewAdapter(registry, AdapterConfig{ReadyImageNodes: testPreparedImageNodes,
 		ReadyTimeout: time.Second, PollInterval: time.Millisecond, RollbackTimeout: 5 * time.Millisecond,
 	})
 	if err != nil {

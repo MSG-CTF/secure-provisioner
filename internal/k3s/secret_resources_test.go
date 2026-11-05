@@ -39,7 +39,7 @@ func TestReplayCannotRunRequiredFlagImageWithoutBackendReference(t *testing.T) {
 	client := readyClient(t, command)
 	registry := adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "unused")}, client)
 	images := []string{command.Containers[0].Image}
-	adapter, err := NewAdapter(registry, AdapterConfig{ReadyTimeout: time.Second, PollInterval: time.Millisecond, RequiredFlagImages: images})
+	adapter, err := NewAdapter(registry, AdapterConfig{ReadyImageNodes: testPreparedImageNodes, ReadyTimeout: time.Second, PollInterval: time.Millisecond, RequiredFlagImages: images})
 	if err != nil {
 		t.Fatal(err)
 	}

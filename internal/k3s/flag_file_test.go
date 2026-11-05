@@ -77,7 +77,7 @@ func TestQueuedCommandCannotSkipCurrentFlagFilePolicy(t *testing.T) {
 	client := readyClient(t, command)
 	registry := adapterRegistry(t, []ClusterConfig{validClusterConfig("aws-dev", ProviderAWS, "unused")}, client)
 	files := map[string]string{command.Containers[0].Image: "/flag"}
-	adapter, err := NewAdapter(registry, AdapterConfig{ReadyTimeout: time.Second, PollInterval: time.Millisecond, RequiredFlagImages: []string{command.Containers[0].Image}, RequiredFlagFiles: files})
+	adapter, err := NewAdapter(registry, AdapterConfig{ReadyImageNodes: testPreparedImageNodes, ReadyTimeout: time.Second, PollInterval: time.Millisecond, RequiredFlagImages: []string{command.Containers[0].Image}, RequiredFlagFiles: files})
 	if err != nil {
 		t.Fatal(err)
 	}
