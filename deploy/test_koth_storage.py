@@ -181,7 +181,7 @@ class RealWalTests(unittest.TestCase):
         self.assertIn(b'DATABASE_SCHEMA_CHANGED', result.stderr)
         self.assertFalse((self.root / 'target.db').exists())
 
-    def test_interrupted_scratch_cleanup_is_scoped_and_refuses_open_files(self):
+    def test_interrupted_scratch_cleanup_is_scoped(self):
         for game in ('jenga', 'swanopoly'):
             request, env, _, _ = self.fixture(game)
             operation = str(uuid.uuid4())

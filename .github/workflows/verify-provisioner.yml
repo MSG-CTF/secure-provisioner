@@ -49,6 +49,7 @@ jobs:
           KOTH_STORAGE_PG_CONTAINER: ${{ job.services.postgres.id }}
         run: |
           go mod verify
+          sudo install -d -m 0700 -o "$(id -u)" -g "$(id -g)" /data
           go build -o "$RUNNER_TEMP/registry-validator" ./cmd/provisioner
           RUNTIME_REGISTRY_VALIDATOR="$RUNNER_TEMP/registry-validator" python3 -m unittest discover -s deploy -p 'test_*.py' -v
           bash scripts/test-deploy-provisioner-release.sh
