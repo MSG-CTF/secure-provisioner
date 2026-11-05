@@ -47,7 +47,7 @@ def validate_request(request):
     required = {"format_version", "action", "game", "operation_id", "expected_pod_name", "data_root", "store_specs"}
     if set(request) - {'artifact_bundle'} != required or type(request.get('artifact_bundle', False)) is not bool or request["format_version"] != VERSION or request["game"] not in GAMES:
         raise StorageError("INVALID_REQUEST")
-    if request["action"] not in {"inspect", "backup", "verify", "restore", "cleanup", "artifact_meta", "artifact_backup", "artifact_verify", "artifact_restore", "artifact_check"}:
+    if request["action"] not in {"inspect", "backup", "verify", "restore", "revoke_sessions", "cleanup", "artifact_meta", "artifact_backup", "artifact_verify", "artifact_restore", "artifact_check"}:
         raise StorageError("INVALID_REQUEST")
     if str(uuid.UUID(request["operation_id"])) != request["operation_id"]:
         raise StorageError("INVALID_REQUEST")
@@ -282,12 +282,12 @@ def run(request, input_stream, output_stream):
     os.umask(0o077)
     validate_request(request)
     stores = resolve_stores(request, existing=request["action"] not in {"restore", "cleanup"})
-    check_handles([s["path"] for s in stores], reject_live=request["action"] == "restore")
+    check_handles([s["path"] for s in stores], reject_live=request["action"] in {"restore", "revoke_sessions"})
     if request['action'] == 'artifact_meta':
         write_all(output_stream, canonical({'artifact_roots': artifacts.roots(request['game'], request['data_root'])})); return
     if request['action'] == 'cleanup':
         removed = []
-        for action in ('backup', 'verify', 'restore', 'artifact_backup', 'artifact_verify', 'artifact_restore', 'artifact_check'):
+        for action in ('backup', 'verify', 'restore', 'revoke_sessions', 'artifact_backup', 'artifact_verify', 'artifact_restore', 'artifact_check'):
             folder = safe_path(Path(request['data_root']) / '.msgctf-storage' / (request['operation_id'] + '-' + action), request['data_root'], must_exist=False)
             if folder.exists():
                 if folder.stat().st_uid != os.geteuid() or folder.stat().st_mode & 0o077:
@@ -344,7 +344,34 @@ def run(request, input_stream, output_stream):
             write_bundle(output_stream, {"format_version": VERSION, "game": request["game"], "stores": info}, files)
         else:
             header, files = read_bundle(input_stream, stage, stores, request["game"], "backup", with_artifacts=request.get('artifact_bundle', False))
-            if request["action"] == "verify":
+            if request['action'] == 'revoke_sessions':
+                if input_stream.read(1): raise StorageError('INVALID_BUNDLE')
+                results = []
+                for spec in stores:
+                    before = metadata(spec['path'], spec)
+                    active = metadata(files[spec['store_id']], spec)
+                    if before['schema_sha256'] != active['schema_sha256']:
+                        raise StorageError('DATABASE_SCHEMA_CHANGED')
+                    with closing(connect(spec['path'], writable=True)) as db, closing(connect(files[spec['store_id']])) as authority_db:
+                        db.execute('BEGIN IMMEDIATE')
+                        for table in spec['session_tables']:
+                            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+                                db.execute('DELETE FROM "' + table + '"')
+                        auth = spec['auth_key_table']
+                        if auth:
+                            rows = authority_db.execute('SELECT * FROM "' + auth + '"').fetchall()
+                            columns = authority_db.execute('PRAGMA table_info("' + auth + '")').fetchall()
+                            db.execute('DELETE FROM "' + auth + '"')
+                            db.executemany('INSERT INTO "' + auth + '" VALUES(' + ','.join('?' for _ in columns) + ')', rows)
+                        db.commit()
+                    after = metadata(spec['path'], spec)
+                    if (after['business_sha256'] != before['business_sha256'] or after['auth_history_sha256'] != active['auth_history_sha256']
+                            or any(after['table_row_counts'].get(t, 0) for t in spec['session_tables'])):
+                        raise StorageError('RESTORE_VERIFICATION_FAILED')
+                    results.append(after)
+                result = {'stores': results, 'current_auth_history_preserved': True, 'restored_session_row_count': 0}
+                write_all(output_stream, canonical(result))
+            elif request["action"] == "verify":
                 if input_stream.read(1):
                     raise StorageError('INVALID_BUNDLE')
                 results = []

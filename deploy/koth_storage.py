@@ -322,6 +322,12 @@ class Storage:
             if directory.stat().st_uid != os.geteuid() or directory.stat().st_mode & 0o077:
                 raise StorageError('STATE_DIRECTORY_UNSAFE')
         self.journal = self.root / 'journals' / (operation_id + '.json')
+        self.source_override = None
+
+    def source(self):
+        # Recovery controllers use an isolated maintenance Pod only after all
+        # application writers have terminated. Normal operations still discover.
+        return self.source_override or discover(self.kube, self.game)
 
     def save(self, value):
         entry = {'format_version': VERSION, 'game': self.game, 'operation_id': self.operation_id, 'actor': self.actor,
@@ -370,7 +376,7 @@ class Storage:
             return self.execute(source, action, input_file=payload, output_file=output_file)
 
     def inspect(self):
-        source = discover(self.kube, self.game)
+        source = self.source()
         result = self.execute(source, 'inspect')
         return {'source': source, **result}
 
@@ -382,7 +388,7 @@ class Storage:
             if include_artifacts:
                 require_artifacts(header)
             return {'archive_path': str(archive), 'archive_sha256': sha256(archive), 'source': header['source'], 'stores': header['stores']}
-        source = discover(self.kube, self.game)
+        source = self.source()
         with tempfile.TemporaryDirectory(prefix='backup-', dir=self.root) as folder:
             private = Path(folder) / 'sqlite.frame'
             with private.open('xb') as output:
@@ -431,7 +437,7 @@ class Storage:
     def verify(self, archive, expected_hash):
         header, ranges = read_archive(archive, self.game, expected_hash=expected_hash)
         require_artifacts(header)
-        source = discover(self.kube, self.game)
+        source = self.source()
         if header['source']['pvc_uid'] != source['pvc_uid']:
             raise StorageError('SOURCE_VOLUME_CHANGED')
         with tempfile.TemporaryFile(dir=self.root) as payload:
@@ -552,13 +558,14 @@ def pg_command(kube, command, *, database=None, input_file=None, output_file=Non
 
 
 @contextmanager
-def postgres_clone(kube, dump, operation_id, purpose):
+def postgres_clone(kube, dump, operation_id, purpose, *, retain=False):
     name = 'msgctf_' + purpose + '_' + uuid.UUID(operation_id).hex
     if purpose not in {'backup', 'verify', 'restore'}:
         raise StorageError('POSTGRES_TARGET_FORBIDDEN')
     args = ['exec', '-i', '-n', PG_NAMESPACE, 'deployment/' + PG_DEPLOYMENT, '-c', PG_CONTAINER, '--',
             'sh', '-c', 'createdb -U "$POSTGRES_USER" -T template0 "$1"', 'sh', name]
     kube.run(args)
+    completed = False
     try:
         # Existing app roles receive no CONNECT privilege on the temporary DB.
         pg_command(kube, 'sql', data=('REVOKE CONNECT ON DATABASE "' + name + '" FROM PUBLIC;').encode())
@@ -566,9 +573,11 @@ def postgres_clone(kube, dump, operation_id, purpose):
         with Path(dump).open('rb') as stream:
             pg_command(kube, 'restore', database=name, input_file=stream)
         yield name
+        completed = True
     finally:
-        kube.run(['exec', '-i', '-n', PG_NAMESPACE, 'deployment/' + PG_DEPLOYMENT, '-c', PG_CONTAINER, '--',
-                  'sh', '-c', 'exec dropdb --force -U "$POSTGRES_USER" "$1"', 'sh', name])
+        if not retain or not completed:
+            kube.run(['exec', '-i', '-n', PG_NAMESPACE, 'deployment/' + PG_DEPLOYMENT, '-c', PG_CONTAINER, '--',
+                      'sh', '-c', 'exec dropdb --force -U "$POSTGRES_USER" "$1"', 'sh', name])
 
 
 def postgres_cleanup(kube, operation_id):
@@ -662,12 +671,12 @@ def postgres_verify(kube, archive, header, ranges, root, operation_id, *, artifa
     return result
 
 
-def postgres_restore_check(kube, archive, header, ranges, authority_archive, authority_header, authority_ranges, root, operation_id, *, artifact_callback=None):
+def postgres_restore_check(kube, archive, header, ranges, authority_archive, authority_header, authority_ranges, root, operation_id, *, artifact_callback=None, retain=False):
     artifacts = None
     with tempfile.TemporaryDirectory(dir=root) as folder:
         folder = Path(folder); historical = extract_postgres(archive, ranges, folder / 'historical.dump')
         current = extract_postgres(authority_archive, authority_ranges, folder / 'authority.dump')
-        with postgres_clone(kube, historical, operation_id, 'restore') as database:
+        with postgres_clone(kube, historical, operation_id, 'restore', retain=retain) as database:
             sql = folder / 'auth.sql'
             with sql.open('xb') as output, current.open('rb') as stream:
                 os.chmod(sql, 0o600); output.write(b'BEGIN;TRUNCATE public.sessions;TRUNCATE public.dependency_hell_snapshot_hmac_keys, public.dependency_hell_submission_transition_hmac_keys;\n')
@@ -699,8 +708,9 @@ pg_restore --file=- --data-only --table=dependency_hell_snapshot_hmac_keys --tab
         if pg_metadata(kube, PG_DATABASE)['auth_history_sha256'] != active['auth_history_sha256']:
             raise StorageError('SOURCE_AUTHORITY_CHANGED')
     result = {'business_sha256': observed['business_sha256'], 'current_auth_history_preserved': True,
-            'restored_session_row_count': 0, 'source_database_untouched': True, 'temporary_database_removed': True,
+             'restored_session_row_count': 0, 'source_database_untouched': True, 'temporary_database_removed': not retain,
             'postgres_context': 'database_pod'}
+    if retain: result['restored_database_name'] = database
     if artifacts is not None: result['artifacts'] = artifacts
     return result
 
@@ -746,7 +756,7 @@ def main():
         raise StorageError('HOST_GAME_SCOPE_MISMATCH')
     directory = Path(__file__).resolve().parent
     if (not re.fullmatch(r'[0-9a-f]{40}', config.get('source_sha', '')) or directory.name != config['source_sha']
-            or set(config.get('files', {})) != {'koth_storage.py', 'koth_storage_worker.py', 'koth_storage_worker.cjs', 'koth_core_egress.py', 'koth_storage_artifacts.py'}
+            or set(config.get('files', {})) != {'koth_storage.py', 'koth_storage_worker.py', 'koth_storage_worker.cjs', 'koth_core_egress.py', 'koth_storage_artifacts.py', 'koth_storage_cutover.py'}
             or any(sha256(directory / name) != digest for name, digest in config['files'].items())):
         raise StorageError('INSTALLED_SOURCE_CHANGED')
     storage = Storage(args.game, args.operation_id, args.actor)

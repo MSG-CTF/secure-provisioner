@@ -9,7 +9,7 @@ import re
 import stat
 import tempfile
 
-FILES = ('koth_storage.py', 'koth_storage_worker.py', 'koth_storage_worker.cjs', 'koth_core_egress.py', 'koth_storage_artifacts.py')
+FILES = ('koth_storage.py', 'koth_storage_worker.py', 'koth_storage_worker.cjs', 'koth_core_egress.py', 'koth_storage_artifacts.py', 'koth_storage_cutover.py')
 GAMES = ('jenga', 'card-battle-arena', 'grand-tour-duel', 'dependency-hell', 'pixel-smuggler', 'swanopoly')
 
 
@@ -17,6 +17,8 @@ def install(source, source_sha, game, *, prefix=Path('/')):
     if game not in GAMES or not re.fullmatch(r'[0-9a-f]{40}', source_sha):
         raise ValueError('INVALID_INSTALL_SCOPE')
     source, prefix = Path(source), Path(prefix)
+    if (prefix / 'var/lib/msgctf-koth-storage/active-cutover.json').exists():
+        raise ValueError('ACTIVE_STORAGE_CUTOVER')
     base = prefix / 'usr/local/lib/msgctf-koth-storage'
     config = prefix / 'etc/msgctf-koth-storage'
     bin_dir = prefix / 'usr/local/sbin'
@@ -60,6 +62,30 @@ def install(source, source_sha, game, *, prefix=Path('/')):
     wrapper = b'#!/bin/sh\nset -eu\numask 077\nexec /usr/bin/python3 -B /usr/local/lib/msgctf-koth-storage/current/koth_storage.py "$@"\n'
     atomic(bin_dir / 'msgctf-koth-storage', wrapper, 0o755)
     atomic(bin_dir / 'msgctf-koth-core-endpoint', wrapper.replace(b'koth_storage.py', b'koth_core_egress.py'), 0o755)
+    atomic(bin_dir / 'msgctf-koth-cutover', wrapper.replace(b'koth_storage.py', b'koth_storage_cutover.py'), 0o755)
+    units = prefix / 'etc/systemd/system'
+    units.mkdir(parents=True, exist_ok=True)
+    recovery = b'''[Unit]
+Description=Recover interrupted MSG CTF KOTH storage transaction
+After=k3s.service
+Wants=k3s.service
+Before=koth-environment-agent.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+UMask=0077
+Environment=MSGCTF_BOOT_RECOVERY=1
+ExecStart=/usr/local/sbin/msgctf-koth-cutover recover
+TimeoutStartSec=2400
+Restart=on-failure
+RestartSec=20
+[Install]
+WantedBy=multi-user.target
+'''
+    atomic(units / 'msgctf-koth-storage-recover.service', recovery, 0o644)
+    dependency = units / 'koth-environment-agent.service.d'
+    dependency.mkdir(parents=True, exist_ok=True)
+    atomic(dependency / 'storage-recovery.conf', b'[Unit]\nRequires=msgctf-koth-storage-recover.service\nAfter=msgctf-koth-storage-recover.service\n', 0o644)
     return manifest
 
 
@@ -70,4 +96,9 @@ if __name__ == '__main__':
     parser.add_argument('--game', required=True, choices=GAMES)
     args = parser.parse_args()
     if os.geteuid() != 0: raise SystemExit('ROOT_INSTALLER_REQUIRED')
-    print(json.dumps(install(args.source_dir, args.source_sha, args.game)))
+    result=install(args.source_dir, args.source_sha, args.game)
+    import subprocess
+    subprocess.run(['systemctl','daemon-reload'],check=True,capture_output=True,timeout=30)
+    subprocess.run(['systemctl','enable','msgctf-koth-storage-recover.service'],check=True,capture_output=True,timeout=30)
+    subprocess.run(['systemctl','start','msgctf-koth-storage-recover.service'],check=True,capture_output=True,timeout=60)
+    print(json.dumps(result))
