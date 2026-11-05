@@ -202,6 +202,17 @@ def stage_directory(request):
     return path
 
 
+def sqlite_spill_directory(path):
+    # The pragma is process-local. Environment changes alone do not reliably
+    # override an already selected SQLite temporary directory in every image.
+    with closing(sqlite3.connect(':memory:')) as config:
+        before = config.execute('PRAGMA temp_store_directory').fetchone()
+        config.execute("PRAGMA temp_store_directory='" + str(path).replace("'", "''") + "'")
+        if str(path) and config.execute('PRAGMA temp_store_directory').fetchone() != (str(path),):
+            raise StorageError('SQLITE_SPILL_DIRECTORY_UNSUPPORTED')
+    return before[0] if before else ''
+
+
 def cleanup_stage(path):
     for file in path.iterdir():
         if file.is_dir() and not file.is_symlink() and re.fullmatch(r'candidate-files-[a-z0-9_]+',file.name):
@@ -346,7 +357,11 @@ def run(request, input_stream, output_stream):
                   "stores": [metadata(s["path"], s) for s in stores], "deleted_sqlite_handle_count": 0}
         write_all(output_stream, canonical(result)); return
     stage = stage_directory(request)
+    # SQLite EXCEPT/index work can exceed a container's small /tmp tmpfs.
+    # This process owns a verified 0700 PVC directory for the operation.
+    previous_spill = None
     try:
+        previous_spill = sqlite_spill_directory(stage)
         if request['action'].startswith('artifact_'):
             root_map = artifacts.roots(request['game'], request['data_root'])
             line = input_stream.readline(artifacts.MAX_INDEX + 1)
@@ -465,7 +480,10 @@ def run(request, input_stream, output_stream):
                     artifacts.check_sources(refs, root_map)
                 write_all(output_stream, canonical(result))
     finally:
-        cleanup_stage(stage)
+        try:
+            if previous_spill is not None: sqlite_spill_directory(previous_spill)
+        finally:
+            cleanup_stage(stage)
 
 
 if __name__ == "__main__":
