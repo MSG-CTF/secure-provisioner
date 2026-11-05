@@ -204,6 +204,19 @@ class ControllerPolicyTests(unittest.TestCase):
             self.assertFalse(any('sqlite' in (n or '') for n in imports))
         self.assertEqual(len(controller.PROFILES), 6)
 
+    def test_postgres_exec_pins_exact_pod_and_rejects_uid_replacement(self):
+        kube = controller.Kube('k3s')
+        kube.postgres_source = {'pod_name': 'postgres-pinned', 'pod_uid': 'expected'}
+        kube.json = lambda args, **kw: {'metadata': {'uid': 'expected'}}
+        args = ['exec', '-i', '-n', controller.PG_NAMESPACE, 'deployment/postgres', '-c', 'postgres', '--', 'pg_dump']
+        with patch.object(controller.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, b'dump', b'')) as run:
+            self.assertEqual(kube.run(args), b'dump')
+            self.assertEqual(run.call_args.args[0][6], 'postgres-pinned')
+        kube.json = lambda args, **kw: {'metadata': {'uid': 'replacement'}}
+        with patch.object(controller.subprocess, 'run') as run:
+            with self.assertRaisesRegex(controller.StorageError, 'POSTGRES_SOURCE_POD_CHANGED'): kube.run(args)
+            run.assert_not_called()
+
     @unittest.skipUnless(LINUX, 'private Unix state')
     def test_archive_integrity_private_permissions_and_no_sqlite_engine(self):
         with tempfile.TemporaryDirectory() as name:

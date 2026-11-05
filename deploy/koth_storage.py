@@ -159,13 +159,37 @@ def sqlite_payload(archive, output, header, ranges):
 class Kube:
     def __init__(self, binary=None):
         self.prefix = [binary or shutil.which('k3s') or '/usr/local/bin/k3s', 'kubectl']
+        self.postgres_source = None
+
+    def pin_postgres(self):
+        if self.postgres_source is None:
+            deployment = self.json(['get', 'deployment', PG_DEPLOYMENT, '-n', PG_NAMESPACE])
+            sets = self.json(['get', 'replicasets', '-n', PG_NAMESPACE])['items']
+            owners = {s['metadata']['uid'] for s in sets if any(r.get('controller') and r['uid'] == deployment['metadata']['uid'] for r in s['metadata'].get('ownerReferences', []))}
+            pods = [p for p in self.json(['get', 'pods', '-n', PG_NAMESPACE])['items']
+                    if p['status'].get('phase') == 'Running' and not p['metadata'].get('deletionTimestamp')
+                    and any(r.get('controller') and r['uid'] in owners for r in p['metadata'].get('ownerReferences', []))
+                    and p['status'].get('containerStatuses') and all(s.get('ready') for s in p['status']['containerStatuses'])]
+            if len(pods) != 1 or deployment['status'].get('readyReplicas') != 1:
+                raise StorageError('POSTGRES_SOURCE_NOT_READY')
+            pod = pods[0]
+            self.postgres_source = {'pod_name': pod['metadata']['name'], 'pod_uid': pod['metadata']['uid']}
+        current = self.json(['get', 'pod', self.postgres_source['pod_name'], '-n', PG_NAMESPACE])
+        if current['metadata']['uid'] != self.postgres_source['pod_uid']:
+            raise StorageError('POSTGRES_SOURCE_POD_CHANGED')
+        return self.postgres_source
 
     def run(self, args, *, data=None, input_file=None, output_file=None, timeout=90):
+        pinned = args[:7] == ['exec', '-i', '-n', PG_NAMESPACE, 'deployment/' + PG_DEPLOYMENT, '-c', PG_CONTAINER]
+        if pinned:
+            source = self.pin_postgres()
+            args = [*args[:4], source['pod_name'], *args[5:]]
         result = subprocess.run(self.prefix + args, input=data, stdin=input_file,
                                 stdout=output_file if output_file is not None else subprocess.PIPE,
                                 stderr=subprocess.PIPE, timeout=timeout)
         if result.returncode:
             raise StorageError('KUBERNETES_OPERATION_FAILED')
+        if pinned: self.pin_postgres()
         return result.stdout
 
     def json(self, args, *, optional=False):
@@ -563,6 +587,18 @@ def operation_lock(root, game):
         yield
 
 
+@contextmanager
+def action_audit(storage, action):
+    try:
+        yield
+    except Exception as error:
+        previous = json.loads(storage.journal.read_text()) if storage.journal.exists() else {}
+        keep = {k: previous[k] for k in ('restore_namespace', 'restore_namespace_uid', 'source', 'restore_namespace_removed') if k in previous}
+        storage.save({'phase': 'failed', 'action': action,
+                      'error_code': str(error) if isinstance(error, StorageError) else 'STORAGE_OPERATION_FAILED', **keep})
+        raise
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=['inspect', 'backup', 'verify', 'restore', 'cleanup'])
@@ -584,7 +620,7 @@ def main():
             or any(sha256(directory / name) != digest for name, digest in config['files'].items())):
         raise StorageError('INSTALLED_SOURCE_CHANGED')
     storage = Storage(args.game, args.operation_id, args.actor)
-    with operation_lock(storage.root, args.game):
+    with operation_lock(storage.root, args.game), action_audit(storage, args.action):
         if args.action != 'cleanup': storage.save({'phase': 'started', 'action': args.action})
         if args.action in {'verify', 'restore'}:
             if not args.archive or not args.sha256 or not re.fullmatch(r'[0-9a-f]{64}', args.sha256):
