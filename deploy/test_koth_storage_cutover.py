@@ -69,6 +69,47 @@ class ContractTests(unittest.TestCase):
 
 
 @unittest.skipUnless(sys.platform=='linux','root-private state and atomic Unix fsync')
+class MaintenanceMountPermissionTests(unittest.TestCase):
+    def test_existing_original_and_candidate_remounts_preserve_private_runtime_lock_modes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);lock=root/'runtime-locks';lock.mkdir(mode=0o700)
+            source={'namespace':'koth-grand-tour-duel','pvc_name':'original','pvc_uid':'old-uid',
+                    'node_name':'node','runtime_class':None,'container_image':'image@sha256:'+('a'*64)}
+            class Kube:
+                def __init__(self):self.pods={};self.mounts=[]
+                def json(self,args,optional=False):
+                    kind,name=args[1:3]
+                    if kind=='pvc':return {'metadata':{'uid':'old-uid' if name=='original' else 'new-uid'}}
+                    if kind=='pod':return self.pods.get(name)
+                    if kind=='node':return {'metadata':{'labels':{'kubernetes.io/hostname':'node'}}}
+                    raise AssertionError(args)
+                def apply(self,value):
+                    if value['kind']=='Pod':
+                        self.mounts.append(copy.deepcopy(value))
+                        # Reproduce kubelet's observed fsGroup broadening of
+                        # existing private directories, including 0700 roots.
+                        if 'fsGroup' in value['spec']['securityContext']:lock.chmod(0o770)
+                        value=copy.deepcopy(value);value['metadata']['uid']='pod-uid';self.pods[value['metadata']['name']]=value
+                    return value
+                def run(self,*args,**kwargs):return b''
+            kube=Kube();task=c.Cutover(s.Storage('grand-tour-duel',str(uuid.uuid4()),'test',root=root,kube=kube))
+            task.state={'source':source,'phase':'rollback_capture_intent','candidate_pvc_name':'candidate','candidate_pvc_uid':'new-uid',
+                        'store_metadata':[{'database_path':'/var/lib/koth/state/game.db'},{'database_path':'/var/lib/koth/state/game.db.auth.sqlite3'}],
+                        'artifact_roots':{'sources':'/var/lib/koth/submissions','replays':'/var/lib/koth/replays'}}
+            task.worker();task.worker(True)
+            self.assertEqual(lock.stat().st_mode&0o777,0o700)
+            self.assertTrue(all('fsGroup' not in p['spec']['securityContext'] for p in kube.mounts))
+            self.assertTrue(all(not p['spec']['automountServiceAccountToken'] and p['spec']['securityContext']['runAsNonRoot'] for p in kube.mounts))
+            with self.assertRaisesRegex(s.StorageError,'ONLY_EMPTY'):task.worker(initialize=True)
+            with self.assertRaisesRegex(s.StorageError,'ONLY_EMPTY'):task.worker(True,initialize=True)
+            task.state['phase']='restore_intent';kube.pods.clear()
+            task.worker(True,initialize=True)
+            self.assertEqual(kube.mounts[-1]['spec']['securityContext']['fsGroup'],10001)
+            task.state['restore_proof']={'complete':True}
+            with self.assertRaisesRegex(s.StorageError,'ONLY_EMPTY'):task.worker(True,initialize=True)
+
+
+@unittest.skipUnless(sys.platform=='linux','root-private state and atomic Unix fsync')
 class RecoveryDecisionTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)

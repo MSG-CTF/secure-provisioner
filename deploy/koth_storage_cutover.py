@@ -275,7 +275,9 @@ class Cutover:
             old, new = (value['before'], value['after']) if forward else (value['after'], value['before'])
             self.patch('deployment', name, value['uid'], '/spec/template', old, new)
 
-    def worker(self, target=False):
+    def worker(self, target=False, *, initialize=False):
+        if initialize and (not target or self.state.get('phase')!='restore_intent' or self.state.get('restore_proof')):
+            raise s.StorageError('ONLY_EMPTY_CANDIDATE_MAY_INITIALIZE_VOLUME_GROUP')
         source = self.state['source']
         namespace = source['namespace']
         name = ('storage-target-' if target else 'storage-source-') + uuid.UUID(self.operation_id).hex[:12]
@@ -307,12 +309,17 @@ class Cutover:
             node = self.kube.json(['get', 'node', source['node_name']])
             spec = {'restartPolicy': 'Never', 'automountServiceAccountToken': False, 'terminationGracePeriodSeconds': 1,
                 'nodeSelector': {'kubernetes.io/hostname': node['metadata']['labels']['kubernetes.io/hostname']},
-                'securityContext': {'runAsNonRoot': True, 'runAsUser': 10001, 'runAsGroup': 10001, 'fsGroup': 10001, 'fsGroupChangePolicy': 'OnRootMismatch'},
+                'securityContext': {'runAsNonRoot': True, 'runAsUser': 10001, 'runAsGroup': 10001},
                 'containers': [{'name': 'worker', 'image': source['container_image'], 'imagePullPolicy': 'Never', 'command': command, 'env': env,
                     'securityContext': {'allowPrivilegeEscalation': False, 'readOnlyRootFilesystem': True, 'capabilities': {'drop': ['ALL']}, 'seccompProfile': {'type': 'RuntimeDefault'}},
                     'resources': {'requests': {'cpu': '100m', 'memory': '128Mi'}, 'limits': {'cpu': '1', 'memory': '1Gi'}},
                     'volumeMounts': [{'name': 'data', 'mountPath': self.profile['data_root']}, {'name': 'tmp', 'mountPath': '/tmp'}]}],
                 'volumes': [{'name': 'data', 'persistentVolumeClaim': {'claimName': claim}}, {'name': 'tmp', 'emptyDir': {'medium': 'Memory', 'sizeLimit': '16Mi'}}]}
+            # fsGroup mutates existing directory/file permissions on remount.
+            # OnRootMismatch still recurses when a private root is 0700. Only
+            # a newly created empty candidate needs group initialization;
+            # frozen originals and candidate authority must retain all modes.
+            if initialize: spec['securityContext'].update(fsGroup=10001,fsGroupChangePolicy='OnRootMismatch')
             if source['runtime_class']: spec['runtimeClassName'] = source['runtime_class']
             policy = {'apiVersion': 'networking.k8s.io/v1', 'kind': 'NetworkPolicy',
                 'metadata': {'name': name, 'namespace': namespace, 'labels': labels},
@@ -375,7 +382,7 @@ class Cutover:
             'metadata': {'name': name, 'namespace': self.profile['namespace'], 'labels': labels},
             'spec': {'storageClassName': 'local-path', 'accessModes': ['ReadWriteOnce'], 'resources': {'requests': {'storage': production_capacity(header,self.state['original_pvc_storage'])}}}})
         self.save(candidate_pvc_uid=pvc['metadata']['uid'])
-        target = self.worker(True)
+        target = self.worker(True,initialize=True)
         with tempfile.TemporaryFile(dir=self.root) as payload:
             s.sqlite_payload(archive, payload, header, ranges)
             _, active_ranges = s.read_archive(frozen['archive_path'], self.game)
