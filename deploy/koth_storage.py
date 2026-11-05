@@ -630,7 +630,7 @@ def main():
         raise StorageError('HOST_GAME_SCOPE_MISMATCH')
     directory = Path(__file__).resolve().parent
     if (not re.fullmatch(r'[0-9a-f]{40}', config.get('source_sha', '')) or directory.name != config['source_sha']
-            or set(config.get('files', {})) != {'koth_storage.py', 'koth_storage_worker.py', 'koth_storage_worker.cjs'}
+            or set(config.get('files', {})) != {'koth_storage.py', 'koth_storage_worker.py', 'koth_storage_worker.cjs', 'koth_core_egress.py'}
             or any(sha256(directory / name) != digest for name, digest in config['files'].items())):
         raise StorageError('INSTALLED_SOURCE_CHANGED')
     storage = Storage(args.game, args.operation_id, args.actor)

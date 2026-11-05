@@ -117,3 +117,17 @@ Linux·Node 24에서 실제 WAL을 유지하는 Python·Node 작성자로 6개 �
 WAL 커밋 포함·inode 보존·삭제 핸들 차단·원본 행 손실·잘린 프레임·해시·Pod 문맥·경로·현재 키·세션 0·잠금·실패 정리를 확인한다
 CI PostgreSQL 18 서비스에서 실제 dump·복원·HMAC 이력·점수·임시 DB 정리를 검사한다
 Core와의 정상 로그인·점수 수집은 운영에서 별도 실측한다
+
+## Core 서버 IP 이전
+
+DNS 변경 뒤에도 기존 Pod 네트워크 정책의 Core 주소가 남아 있으면 팀 토큰 검증이 시간 초과된다
+새 Core에서 도메인 TLS와 DB·캐시 건강 확인을 통과한 뒤 기존 HTTPS 전용 규칙의 정확한 이전 /32 주소만 교체한다
+
+    sudo msgctf-koth-core-endpoint plan --game jenga --previous-address 34.158.192.98 --address 136.108.97.182 --operation-id "$PLAN_ID" --actor operator
+    sudo msgctf-koth-core-endpoint apply --game jenga --previous-address 34.158.192.98 --address 136.108.97.182 --operation-id "$APPLY_ID" --actor operator
+
+계획·적용은 기존 정책의 UID·리비전·전체 spec을 검사하며 다른 정책이나 포트·DNS·수신 규칙을 바꾸지 않는다
+기존 규칙이 없는 게임에는 새 정책을 만들지 않는다
+적용 뒤 설정을 다시 읽어 확인하고 호스트에 Core 주소 핀과 감사 기록을 남긴다
+이 설정은 게임 이미지·Pod 재배포와 독립적으로 유지된다
+Core 내부 API 경로와 실제 정상 로그인은 별도로 확인하며 건강 확인 200만으로 인증 연동을 통과시키지 않는다
