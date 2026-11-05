@@ -54,7 +54,7 @@ class RealWalTests(unittest.TestCase):
         request = {'format_version': 1, 'action': 'backup', 'game': game,
                    'operation_id': str(uuid.uuid4()), 'expected_pod_name': socket.gethostname(),
                    'data_root': '/data', 'store_specs': copy.deepcopy(controller.PROFILES[game]['stores'])}
-        env = {**os.environ, 'KUBERNETES_SERVICE_HOST': 'unit-test-pod-context', 'KOTH_MATCH_ID': 'fixture'}
+        env = {**os.environ, 'PYTHONUNBUFFERED': '1', 'KUBERNETES_SERVICE_HOST': 'unit-test-pod-context', 'KOTH_MATCH_ID': 'fixture'}
         specs, paths, writers = [], [], []
         for index, spec in enumerate(request['store_specs']):
             # Keep production table/suffix contracts while using private fixture paths.
@@ -181,6 +181,15 @@ class RealWalTests(unittest.TestCase):
         self.assertIn(b'DATABASE_SCHEMA_CHANGED', result.stderr)
         self.assertFalse((self.root / 'target.db').exists())
 
+    def test_large_unbuffered_python_and_node_export_contains_every_byte(self):
+        for game in ('jenga', 'swanopoly'):
+            request, env, paths, writers = self.fixture(game)
+            self.sql(writers[0], "INSERT INTO business_rows VALUES('large',zeroblob(8*1024*1024));")
+            frame = self.call(request, env, 'backup').stdout
+            header, files = self.frames(frame)
+            self.assertGreater(header['stores'][0]['database_bytes'], 8*1024*1024)
+            self.call(request, env, 'verify', frame)
+
     def test_interrupted_scratch_cleanup_is_scoped(self):
         for game in ('jenga', 'swanopoly'):
             request, env, _, _ = self.fixture(game)
@@ -196,6 +205,19 @@ class RealWalTests(unittest.TestCase):
 
 
 class ControllerPolicyTests(unittest.TestCase):
+    def test_partial_raw_writes_preserve_header_and_payload_and_zero_write_fails(self):
+        class ShortWriter(io.BytesIO):
+            def write(self, value): return super().write(value[:31])
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / 'snapshot'; path.write_bytes(bytes(range(256))*1024)
+            stream = ShortWriter(); header = {'format_version': 1, 'database_bytes': path.stat().st_size}
+            worker.write_bundle(stream, header, [path])
+            self.assertEqual(stream.getvalue(), worker.canonical(header)+b'\n'+path.read_bytes())
+        class Blocked:
+            def write(self, value): return 0
+        with self.assertRaisesRegex(worker.StorageError, 'OUTPUT_WRITE_INCOMPLETE'):
+            worker.write_all(Blocked(), b'payload')
+
     def test_host_controller_and_installer_never_import_sqlite(self):
         for name in ('koth_storage.py', 'install_koth_storage.py'):
             tree = ast.parse((DEPLOY / name).read_text())
