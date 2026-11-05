@@ -303,11 +303,11 @@ class Cutover:
                 env += [{'name': 'KOTH_SUBMISSIONS_DIR', 'value': self.state['artifact_roots']['sources']},
                         {'name': 'KOTH_REPLAYS_DIR', 'value': self.state['artifact_roots']['replays']}]
             language = self.profile['language']
-            command = ['node', '-e', 'setInterval(()=>{},3600000)'] if language == 'node' else ['python', '-B', '-c', 'import time;time.sleep(7200)']
+            command = ['node', '-e', 'setInterval(()=>{},3600000)'] if language == 'node' else ['python', '-B', '-c', 'import time;time.sleep(14400)']
             node = self.kube.json(['get', 'node', source['node_name']])
             spec = {'restartPolicy': 'Never', 'automountServiceAccountToken': False, 'terminationGracePeriodSeconds': 1,
                 'nodeSelector': {'kubernetes.io/hostname': node['metadata']['labels']['kubernetes.io/hostname']},
-                'securityContext': {'runAsNonRoot': True, 'runAsUser': 10001, 'runAsGroup': 10001, 'fsGroup': 10001},
+                'securityContext': {'runAsNonRoot': True, 'runAsUser': 10001, 'runAsGroup': 10001, 'fsGroup': 10001, 'fsGroupChangePolicy': 'OnRootMismatch'},
                 'containers': [{'name': 'worker', 'image': source['container_image'], 'imagePullPolicy': 'Never', 'command': command, 'env': env,
                     'securityContext': {'allowPrivilegeEscalation': False, 'readOnlyRootFilesystem': True, 'capabilities': {'drop': ['ALL']}, 'seccompProfile': {'type': 'RuntimeDefault'}},
                     'resources': {'requests': {'cpu': '100m', 'memory': '128Mi'}, 'limits': {'cpu': '1', 'memory': '1Gi'}},
@@ -405,27 +405,7 @@ class Cutover:
                     or dbs.get(candidate, {}).get('database_oid') != new_oid
                     or dbs[candidate]['marker'] != 'msgctf-koth-storage:' + self.operation_id):
                 raise s.StorageError('POSTGRES_SWAP_CONFLICT')
-            original = self.state['postgres']; q = sql_identifier(candidate)
-            if any(dbs[candidate][key] != original[key] for key in ('encoding','collate','ctype')):
-                raise s.StorageError('POSTGRES_DATABASE_PROPERTIES_CHANGED')
-            sql = f'BEGIN; ALTER DATABASE {q} OWNER TO {sql_identifier(original["owner"])}; REVOKE ALL ON DATABASE {q} FROM PUBLIC; '
-            limit=original['connection_limit']
-            if type(limit) is not int or not -1<=limit<=100000: raise s.StorageError('POSTGRES_DATABASE_PROPERTIES_CHANGED')
-            sql+=f'ALTER DATABASE {q} CONNECTION LIMIT {limit}; '
-            for setting in original['settings']:
-                for config in setting['config']:
-                    key,value=config.split('=',1)
-                    prefix=f'ALTER ROLE {sql_identifier(setting["role"])} IN DATABASE {q}' if setting['role'] else f'ALTER DATABASE {q}'
-                    # SET search_path TO 'a,b' quotes a single identifier. Let the
-                    # GUC parser interpret the original raw value, then persist
-                    # FROM CURRENT without changing list-valued settings.
-                    qkey=sql_identifier(key)
-                    sql+="SELECT pg_catalog.set_config('"+key+"','"+value.replace("'","''")+"',true); "+prefix+' SET '+qkey+' FROM CURRENT; '
-            for grant in original['privileges']:
-                if grant['privilege'] not in {'CREATE','CONNECT','TEMPORARY'}: raise s.StorageError('POSTGRES_PRIVILEGE_UNSUPPORTED')
-                role = 'PUBLIC' if grant['grantee']=='PUBLIC' else sql_identifier(grant['grantee'])
-                sql += f'GRANT {grant["privilege"]} ON DATABASE {q} TO {role}' + (' WITH GRANT OPTION' if grant['grantable'] else '') + '; '
-            pg_control(self.kube, sql+'COMMIT;')
+            self.postgres_properties(candidate)
             pg_control(self.kube, pg_swap_sql(current, candidate, previous))
         else:
             if dbs.get(current, {}).get('database_oid') == old_oid:
@@ -435,6 +415,69 @@ class Cutover:
                     or dbs.get(previous, {}).get('database_oid') != old_oid):
                 raise s.StorageError('POSTGRES_SWAP_CONFLICT')
             pg_control(self.kube, pg_swap_sql(current, previous, candidate))
+
+    def postgres_properties(self, database):
+        original=self.state['postgres'];q=sql_identifier(database);actual=pg_databases(self.kube)[database]
+        if any(actual[key]!=original[key] for key in ('encoding','collate','ctype')):
+            raise s.StorageError('POSTGRES_DATABASE_PROPERTIES_CHANGED')
+        sql=f'BEGIN; ALTER DATABASE {q} OWNER TO {sql_identifier(original["owner"])}; REVOKE ALL ON DATABASE {q} FROM PUBLIC; '
+        limit=original['connection_limit']
+        if type(limit) is not int or not -1<=limit<=100000:raise s.StorageError('POSTGRES_DATABASE_PROPERTIES_CHANGED')
+        sql+=f'ALTER DATABASE {q} CONNECTION LIMIT {limit}; '
+        for setting in original['settings']:
+            for config in setting['config']:
+                key,value=config.split('=',1);qkey=sql_identifier(key)
+                prefix=f'ALTER ROLE {sql_identifier(setting["role"])} IN DATABASE {q}' if setting['role'] else f'ALTER DATABASE {q}'
+                # Preserve list-valued GUCs through the server parser.
+                sql+="SELECT pg_catalog.set_config('"+key+"','"+value.replace("'","''")+"',true); "+prefix+' SET '+qkey+' FROM CURRENT; '
+        for grant in original['privileges']:
+            if grant['privilege'] not in {'CREATE','CONNECT','TEMPORARY'}:raise s.StorageError('POSTGRES_PRIVILEGE_UNSUPPORTED')
+            role='PUBLIC' if grant['grantee']=='PUBLIC' else sql_identifier(grant['grantee'])
+            sql+=f'GRANT {grant["privilege"]} ON DATABASE {q} TO {role}'+(' WITH GRANT OPTION' if grant['grantable'] else '')+'; '
+        pg_control(self.kube,sql+'COMMIT;')
+
+    def postgres_rebase(self, archive, header, ranges):
+        """Rebase the *inactive* old OID in one restore transaction, never live."""
+        if self.game!='dependency-hell':return
+        dbs=pg_databases(self.kube);expected=next(v for v in header['stores'] if v['engine']=='postgresql')
+        if dbs.get(s.PG_DATABASE,{}).get('database_oid')==self.state['postgres_original_oid']:
+            if s.pg_metadata(self.kube,s.PG_DATABASE)['business_sha256']!=expected['business_sha256']:
+                raise s.StorageError('POSTGRES_SOURCE_BUSINESS_CHANGED')
+            return {'business_sha256':expected['business_sha256'],'original_oid_preserved':True,'inactive_restore_needed':False}
+        previous=self.state['postgres_previous_database'];q=sql_identifier(previous)
+        def pinned():
+            actual=pg_databases(self.kube)
+            if (previous==s.PG_DATABASE or actual.get(previous,{}).get('database_oid')!=self.state['postgres_original_oid']
+                    or actual.get(s.PG_DATABASE,{}).get('database_oid')!=self.state.get('postgres_candidate_oid')):
+                raise s.StorageError('POSTGRES_SWAP_CONFLICT')
+        pinned()
+        pg_control(self.kube,f"ALTER DATABASE {q} ALLOW_CONNECTIONS false; SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='{previous}' AND pid<>pg_backend_pid();")
+        deadline=time.monotonic()+30
+        while int(pg_control(self.kube,f"SELECT count(*) FROM pg_stat_activity WHERE datname='{previous}';").strip()):
+            if time.monotonic()>deadline:raise s.StorageError('POSTGRES_DRAIN_TIMEOUT')
+            time.sleep(1)
+        for grant in self.state['postgres']['privileges']:
+            if grant['privilege']=='CONNECT':
+                role='PUBLIC' if grant['grantee']=='PUBLIC' else sql_identifier(grant['grantee'])
+                pg_control(self.kube,f'REVOKE CONNECT ON DATABASE {q} FROM {role};')
+        try:
+            pg_control(self.kube,f'ALTER DATABASE {q} ALLOW_CONNECTIONS true;')
+            with tempfile.TemporaryDirectory(dir=self.root) as folder:
+                dump=s.extract_postgres(archive,ranges,Path(folder)/'latest.dump');pinned()
+                with dump.open('rb') as stream:
+                    self.kube.run(['exec','-i','-n',s.PG_NAMESPACE,'deployment/'+s.PG_DEPLOYMENT,'-c',s.PG_CONTAINER,'--',
+                        'sh','-c','exec pg_restore --clean --if-exists --single-transaction --exit-on-error -U "$POSTGRES_USER" -d "$1"','sh',previous],input_file=stream,timeout=180)
+            pinned()
+            raw=self.kube.run(['exec','-i','-n',s.PG_NAMESPACE,'deployment/'+s.PG_DEPLOYMENT,'-c',s.PG_CONTAINER,'--',
+                'sh','-c','exec psql -X -q -At -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$1"','sh',previous],data=s.PG_METADATA,timeout=120)
+            actual=json.loads(raw)
+            if actual['business_sha256']!=expected['business_sha256'] or actual['auth_history_sha256']!=expected['auth_history_sha256']:
+                raise s.StorageError('RESTORE_VERIFICATION_FAILED')
+            self.postgres_properties(previous)
+        finally:
+            pinned();pg_control(self.kube,f'ALTER DATABASE {q} ALLOW_CONNECTIONS false;')
+        return {'business_sha256':actual['business_sha256'],'auth_history_sha256':actual['auth_history_sha256'],
+                'table_row_counts':actual['table_row_counts'],'original_oid_preserved':True,'inactive_restore_needed':True}
 
     def wait_ready(self, forward):
         for name in self.state['deployments']:
@@ -446,7 +489,7 @@ class Cutover:
         return source
 
     def validate(self, source, authority=None):
-        frozen = self.state.get('frozen') or authority
+        frozen = authority or self.state.get('frozen')
         header, ranges = s.read_archive(frozen['archive_path'], self.game, expected_hash=frozen['archive_sha256'])
         active,_=s.read_archive(authority['archive_path'],self.game,expected_hash=authority['archive_sha256']) if authority else (header,None)
         has_files=any(v['engine']=='file_bundle' for v in header['stores'])
@@ -495,38 +538,50 @@ class Cutover:
         # kubectl/SSH death does not necessarily terminate an exec process. Kill
         # owned maintenance Pods before touching the original store on recovery.
         self.remove_workers()
-        # Once application startup was attempted, capture current authority from
-        # the candidate before reverting, so retirement cannot be resurrected.
+        # Capture again on EVERY recovery attempt. A previous attempt may have
+        # started the original app and generated more work before it crashed.
+        attempt=self.state.get('rollback_attempt',0)+1
+        self.save('rollback_capture_intent',rollback_attempt=attempt)
         target_live = self.resource('deployment', self.profile['deployment'])['spec']['template'] == self.state['deployments'][self.profile['deployment']]['after']
-        authority = self.capture(self.worker(target_live), 'rollback-authority', files=False)
-        header, ranges = s.read_archive(authority['archive_path'], self.game, expected_hash=authority['archive_sha256'])
         original = self.worker()
-        for purpose in ('frozen-latest','rollback-authority'):
-            child=str(uuid.uuid5(uuid.UUID(self.operation_id),purpose))
-            self.storage.execute(original,'cleanup',operation_id=child)
-        # New confirmed rows created by an autonomous worker while fenced cannot
-        # be silently discarded. Keep both stores and stay fenced on this conflict.
+        live=self.worker(True) if target_live else original
+        purposes=['frozen-latest','rollback-authority']+['rollback-latest-'+str(i) for i in range(1,attempt)]
+        for worker in [original]+([live] if target_live else []):
+            self.storage.execute(worker,'cleanup',operation_id=self.operation_id)
+            for purpose in purposes:
+                self.storage.execute(worker,'cleanup',operation_id=str(uuid.uuid5(uuid.UUID(self.operation_id),purpose)))
+        authority=self.capture(live,'rollback-latest-'+str(attempt),files=True)
+        header,ranges=s.read_archive(authority['archive_path'],self.game,expected_hash=authority['archive_sha256'])
+        self.save('rollback_latest_captured',rollback_latest_archive_sha256=authority['archive_sha256'])
+        # The active candidate must still contain all pre-cutover confirmed rows.
+        # New rows are retained by rebasing the complete latest business state.
+        baseline=self.state.get('frozen') or authority
+        old,old_ranges=s.read_archive(baseline['archive_path'],self.game,expected_hash=baseline['archive_sha256'])
         with tempfile.TemporaryFile(dir=self.root) as payload:
-            s.sqlite_payload(authority['archive_path'],payload,header,ranges,include_artifacts=False); payload.seek(0)
-            self.storage.execute(original,'verify',input_file=payload,include_artifacts=False)
-        if self.game=='dependency-hell' and target_live:
-            # The source immutable set is pinned before any swap. Full business
-            # equality protects newly committed PostgreSQL work as well.
-            latest = next(v for v in header['stores'] if v['engine']=='postgresql')
-            frozen, _ = s.read_archive(self.state['frozen']['archive_path'],self.game)
-            base = next(v for v in frozen['stores'] if v['engine']=='postgresql')
-            if latest['business_sha256'] != base['business_sha256']:
-                raise s.StorageError('ROLLBACK_WOULD_DISCARD_CURRENT_BUSINESS_ROWS')
+            s.sqlite_payload(baseline['archive_path'],payload,old,old_ranges,include_artifacts=False);payload.seek(0)
+            self.storage.execute(live,'verify',input_file=payload,include_artifacts=False)
+        if self.game=='dependency-hell':
+            s.postgres_verify(self.kube,baseline['archive_path'],old,old_ranges,self.root,
+                              str(uuid.uuid5(uuid.UUID(self.operation_id),'rollback-verify-'+str(attempt))))
+        self.save('rollback_rebase_intent')
         with tempfile.TemporaryFile(dir=self.root) as payload:
-            s.sqlite_payload(authority['archive_path'],payload,header,ranges,include_artifacts=False); payload.seek(0)
-            self.storage.execute(original,'revoke_sessions',input_file=payload,include_artifacts=False)
+            s.sqlite_payload(authority['archive_path'],payload,header,ranges)
+            s.sqlite_payload(authority['archive_path'],payload,header,ranges,include_artifacts=False);payload.seek(0)
+            rebased=self.storage.execute(original,'rebase',input_file=payload)
+        if self.game=='dependency-hell':
+            refs=s.postgres_references(self.kube,s.PG_DATABASE)
+            rebased['artifacts']=self.storage.execute_artifacts(original,'artifact_rebase',refs,archive=authority['archive_path'],header=header,ranges=ranges)
+            rebased['postgres']=self.postgres_rebase(authority['archive_path'],header,ranges)
+        self.save('rollback_rebased',rollback_rebase_proof=rebased)
         self.save('rollback_swap_intent')
         self.postgres_switch(False)
         if self.game=='dependency-hell': self.sync_pg_authority(authority)
         self.templates(False); self.remove_workers(); self.scale(False)
         source=self.wait_ready(False)
         result=self.validate(source,authority)
-        result['automatic_rollback']=True
+        result.update(automatic_rollback=True,latest_business_rebased=True,
+                      rollback_latest_archive_sha256=authority['archive_sha256'],
+                      rebased_file_count=next((v.get('reference_count',0) for v in header['stores'] if v['engine']=='file_bundle'),0))
         return self.finish(False,result)
 
     def sync_pg_authority(self, authority):
@@ -624,6 +679,15 @@ pg_restore --file=- --data-only --table=dependency_hell_snapshot_hmac_keys --tab
             self.save(error_code=str(error) if isinstance(error,s.StorageError) else 'CUTOVER_FAILED')
             return self.recover()
 
+    def dispatch(self):
+        exe='/usr/local/sbin/msgctf-koth-cutover'
+        stop=exe+' recover --game '+self.game+' --operation-id '+self.operation_id
+        command=['systemd-run','--quiet','--no-block','--collect','--unit=msgctf-koth-cutover-'+self.operation_id,
+                 '--property=Type=oneshot','--property=TimeoutStartSec=7200','--property=TimeoutStopSec=7200',
+                 '--property=ExecStopPost='+stop,exe,'run','--game',self.game,'--operation-id',self.operation_id,'--actor',self.storage.actor]
+        self.system(command)
+        return {'phase':'dispatched','game':self.game,'operation_id':self.operation_id}
+
 
 def installation():
     config_path=Path('/etc/msgctf-koth-storage/config.json');s.private_file(config_path)
@@ -662,13 +726,7 @@ def main():
         if args.action=='start':
             task.plan(args.archive,args.sha256,args.fault)
             if task.state['phase'] in TERMINAL:print(json.dumps(task.status()));return
-            exe='/usr/local/sbin/msgctf-koth-cutover'
-            stop=exe+' recover --game '+game+' --operation-id '+operation
-            command=['systemd-run','--quiet','--no-block','--collect','--unit=msgctf-koth-cutover-'+operation,
-                     '--property=Type=oneshot','--property=TimeoutStartSec=2400','--property=ExecStopPost='+stop,
-                     exe,'run','--game',game,'--operation-id',operation,'--actor',args.actor]
-            task.system(command)
-            print(json.dumps({'phase':'dispatched','game':game,'operation_id':operation}));return
+            print(json.dumps(task.dispatch()));return
         result=task.run() if args.action=='run' else task.recover() if args.action=='recover' else task.retire_failed()
         print(json.dumps({**result,'tool_source_sha':config['source_sha']}))
 

@@ -135,7 +135,7 @@ class RealWalTests(unittest.TestCase):
                         self.assertEqual(item['table_row_counts'][table], 0)
                 failed = self.call(target_request, target_env, 'restore', old + authority, ok=False)
                 self.assertIn(b'RESTORE_TARGET_NOT_EMPTY', failed.stderr)
-                self.assertFalse(list(Path('/data/.msgctf-storage').iterdir()))
+                self.assertFalse(list((Path('/data')/('.msgctf-storage-'+str(os.geteuid()))).iterdir()))
 
     def test_deleted_wal_detected_before_engine_open_python_and_node(self):
         for game in ['card-battle-arena', 'swanopoly']:

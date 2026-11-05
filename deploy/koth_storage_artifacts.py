@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import shutil
 import stat
+import tempfile
 import uuid
 import zlib
 
@@ -318,3 +319,25 @@ def check_pack(path, refs, root_map, restore=False, check_live=False):
         check_sources(refs, root_map)
     return {'file_count': count, 'uncompressed_bytes': total, 'references_sha256': reference_hash(refs),
             'database_file_consistency_verified': True, 'files_restored': restore, 'live_source_files_verified': check_live}
+
+
+def rebase_pack(path, refs, root_map):
+    """Stage a complete verified copy, then atomically publish into an OFFLINE PVC.
+
+    Only the controller may call this after draining all writers. No existing
+    file is opened writable, and a restarted operation can replay the same copy.
+    """
+    with tempfile.TemporaryDirectory(prefix='candidate-files-',dir=Path(path).parent) as folder:
+        temporary={key:str(Path(folder)/key) for key in root_map}
+        proof=check_pack(path,refs,temporary,restore=True)
+        for ref in refs:
+            source=Path(temporary[ref['root']])/ref['path']
+            with parent_fd(root_map[ref['root']],ref['path'],create=True) as (directory,name):
+                try: info=os.stat(name,dir_fd=directory,follow_symlinks=False)
+                except FileNotFoundError: info=None
+                if info and (not stat.S_ISREG(info.st_mode) or info.st_nlink!=1 or info.st_uid!=os.geteuid()):
+                    raise ArtifactError('ARTIFACT_REBASE_TARGET_UNSAFE')
+                os.replace(source,name,dst_dir_fd=directory)
+                os.fsync(directory)
+        check_sources(refs,root_map)
+        return {**proof,'offline_rebase':True,'restored_file_readback_verified':True}

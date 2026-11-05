@@ -32,7 +32,7 @@ function safePath(file, root, existing = true) {
 function validateRequest(request) {
   const required = ['format_version', 'action', 'game', 'operation_id', 'expected_pod_name', 'data_root', 'store_specs'];
   if (Object.keys(request).sort().join() !== required.sort().join() || request.format_version !== VERSION
-      || request.game !== 'swanopoly' || !['inspect', 'backup', 'verify', 'restore', 'revoke_sessions', 'cleanup'].includes(request.action)
+      || request.game !== 'swanopoly' || !['inspect', 'backup', 'verify', 'restore', 'rebase', 'revoke_sessions', 'cleanup'].includes(request.action)
       || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(request.operation_id)) fail('INVALID_REQUEST');
   if (!process.env.KUBERNETES_SERVICE_HOST || os.hostname() !== request.expected_pod_name) fail('NOT_IN_EXPECTED_POD');
   if (request.data_root !== '/data' || !Array.isArray(request.store_specs) || request.store_specs.length !== 1) fail('INVALID_REQUEST');
@@ -108,10 +108,20 @@ async function backupDatabase(source, destination, deadline) {
   const fd = fs.openSync(destination, 'r'); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
 }
 
+function privateDirectory(parent, create=false) {
+  if (create && !fs.existsSync(parent)) fs.mkdirSync(parent, { mode: 0o700 });
+  const fd = fs.openSync(parent, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
+  try {
+    const stat = fs.fstatSync(fd);
+    if (stat.uid !== process.geteuid() || stat.mode & 0o007 || (stat.mode & 0o070) && !new Set([process.getegid(),...process.getgroups()]).has(stat.gid)) fail('SCRATCH_PERMISSIONS_INVALID');
+    fs.fchmodSync(fd, 0o700); fs.fsyncSync(fd);
+  } finally { fs.closeSync(fd); }
+  return parent;
+}
+
+function scratchRoot(request) {return safePath(path.join(request.data_root,'.msgctf-storage-'+process.geteuid()),request.data_root,false);}
 function stageDirectory(request) {
-  const parent = safePath(path.join(request.data_root, '.msgctf-storage'), request.data_root, false);
-  if (!fs.existsSync(parent)) fs.mkdirSync(parent, { mode: 0o700 });
-  const stat = fs.statSync(parent); if (stat.uid !== process.geteuid() || stat.mode & 0o077) fail('SCRATCH_PERMISSIONS_INVALID');
+  const parent=privateDirectory(scratchRoot(request),true);
   const folder = path.join(parent, request.operation_id + '-' + request.action); fs.mkdirSync(folder, { mode: 0o700 }); return folder;
 }
 
@@ -158,7 +168,7 @@ function readBundle(fd, folder, specs, game, prefix) {
   return { header, files };
 }
 
-function restoreDatabase(snapshot, authority, target, spec) {
+function restoreDatabase(snapshot, authority, target, spec, rebase = false) {
   const original = metadata(snapshot, spec, true), current = metadata(authority, spec, true);
   if (original.schema_sha256 !== current.schema_sha256) fail('DATABASE_SCHEMA_CHANGED');
   const candidate = connect(snapshot, true), authorityDb = connect(authority);
@@ -172,23 +182,38 @@ function restoreDatabase(snapshot, authority, target, spec) {
   const result = metadata(snapshot, spec, true);
   if (result.business_sha256 !== original.business_sha256 || result.auth_history_sha256 !== current.auth_history_sha256
       || spec.session_tables.some(t => result.table_row_counts[t])) fail('RESTORE_VERIFICATION_FAILED');
-  if (fs.existsSync(target)) fail('RESTORE_TARGET_NOT_EMPTY');
+  if (fs.existsSync(target) && !rebase) fail('RESTORE_TARGET_NOT_EMPTY');
+  if (rebase) {
+    if (metadata(target,spec).schema_sha256 !== current.schema_sha256) fail('DATABASE_SCHEMA_CHANGED');
+    checkHandles([target],true);
+    for (const item of [target,...['-wal','-shm','-journal'].map(s=>target+s)]) {
+      let info; try { info=fs.lstatSync(item); } catch(e) { if(e.code==='ENOENT')continue;throw e; }
+      if (!info.isFile() || info.nlink!==1 || info.uid!==process.geteuid()) fail('OFFLINE_REBASE_TARGET_UNSAFE');
+      if (item!==target)fs.unlinkSync(item);
+    }
+  }
   fs.mkdirSync(path.dirname(target), { recursive: true }); fs.chmodSync(snapshot, 0o600); fs.renameSync(snapshot, target);
   const fd = fs.openSync(target, 'r'); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+  const directory=fs.openSync(path.dirname(target),fs.constants.O_RDONLY|fs.constants.O_DIRECTORY);try{fs.fsyncSync(directory);}finally{fs.closeSync(directory);}
   return result;
 }
 
 async function run(request, inputFd = 0, output = process.stdout) {
   process.umask(0o077); validateRequest(request);
-  const stores = resolveStores(request, !['restore', 'cleanup'].includes(request.action)); checkHandles(stores.map(s => s.path), ['restore', 'revoke_sessions'].includes(request.action));
+  const stores = resolveStores(request, !['restore', 'cleanup'].includes(request.action)); checkHandles(stores.map(s => s.path), ['restore', 'rebase', 'revoke_sessions'].includes(request.action));
   const json = value => output.write(canonical(value));
   if (request.action === 'cleanup') {
     const removed = [];
-    for (const action of ['backup', 'verify', 'restore', 'revoke_sessions']) {
-      const folder = safePath(path.join(request.data_root, '.msgctf-storage', request.operation_id + '-' + action), request.data_root, false);
-      if (!fs.existsSync(folder)) continue;
-      const info = fs.statSync(folder); if (info.uid !== process.geteuid() || info.mode & 0o077) fail('SCRATCH_PERMISSIONS_INVALID');
-      checkHandles(fs.readdirSync(folder).map(p => path.join(folder, p)), true); cleanupStage(folder); removed.push(action);
+    const parents=[scratchRoot(request)],legacy=safePath(path.join(request.data_root,'.msgctf-storage'),request.data_root,false);
+    if(fs.existsSync(legacy) && fs.statSync(legacy).uid===process.geteuid())parents.push(legacy);
+    for(const parent of parents) {
+      if(!fs.existsSync(parent))continue;privateDirectory(parent);
+      for (const action of ['backup', 'verify', 'restore', 'rebase', 'revoke_sessions']) {
+        const folder = safePath(path.join(parent, request.operation_id + '-' + action), request.data_root, false);
+        if (!fs.existsSync(folder)) continue;
+        privateDirectory(folder);
+        checkHandles(fs.readdirSync(folder).map(p => path.join(folder, p)), true); cleanupStage(folder); removed.push(action);
+      }
     }
     return json({ removed_scratch_actions: removed });
   }
@@ -234,8 +259,8 @@ async function run(request, inputFd = 0, output = process.stdout) {
       } else {
         const authority = readBundle(inputFd, folder, stores, request.game, 'authority').files;
         if (fs.readSync(inputFd, Buffer.alloc(1)) !== 0) fail('INVALID_BUNDLE');
-        const results = stores.map(spec => restoreDatabase(files[spec.store_id], authority[spec.store_id], spec.path, spec));
-        json({ game: request.game, sqlite_context: 'isolated_restore_pod', stores: results, current_auth_history_preserved: true, restored_session_row_count: 0 });
+        const results = stores.map(spec => restoreDatabase(files[spec.store_id], authority[spec.store_id], spec.path, spec,request.action==='rebase'));
+        json({ game: request.game, sqlite_context: request.action==='rebase'?'offline_rebase_pod':'isolated_restore_pod', stores: results, current_auth_history_preserved: true, restored_session_row_count: 0 });
       }
     }
   } finally { cleanupStage(folder); }

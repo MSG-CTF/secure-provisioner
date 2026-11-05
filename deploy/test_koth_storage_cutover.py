@@ -14,6 +14,7 @@ from unittest.mock import patch
 import uuid
 
 import koth_storage as s
+import koth_storage_artifacts as artifacts
 import koth_storage_cutover as c
 import test_koth_storage as fixtures
 import install_koth_storage as installer
@@ -161,6 +162,16 @@ class RecoveryDecisionTests(unittest.TestCase):
             system.assert_called_once_with(['systemctl','--no-block','start',c.AGENT])
         self.assertEqual(self.task.state['phase'],'committed')
 
+    def test_detached_job_stop_recovery_has_large_archive_budget_and_does_not_block_dispatch(self):
+        with patch.object(self.task,'system') as system:
+            result=self.task.dispatch()
+        command=system.call_args.args[0]
+        self.assertEqual(result['phase'],'dispatched')
+        self.assertIn('--no-block',command)
+        self.assertIn('--property=TimeoutStopSec=7200',command)
+        self.assertIn('--property=TimeoutStartSec=7200',command)
+        self.assertTrue(any('ExecStopPost=' in a and self.storage.operation_id in a for a in command))
+
     def test_failed_volume_retirement_refuses_active_transactions_and_referenced_claim(self):
         self.task.save('committed')
         with self.assertRaisesRegex(s.StorageError,'ONLY_INACTIVE'):self.task.retire_failed()
@@ -199,6 +210,73 @@ class OfflineSessionTests(unittest.TestCase):
                     self.assertEqual(before['auth_history_sha256'],after['auth_history_sha256'])
                     self.assertTrue(all(after['table_row_counts'][t]==0 for t in spec['session_tables']))
                 self.fixture.call(request,env,'revoke_sessions',frame)  # idempotent recovery
+
+    def test_python_and_node_fsgroup_remount_narrows_owned_scratch_but_rejects_world_access(self):
+        parent=Path('/data')/('.msgctf-storage-'+str(os.geteuid()));parent.mkdir(mode=0o700,exist_ok=True)
+        try:
+            for game in ['card-battle-arena','swanopoly']:
+                with self.subTest(game=game):
+                    request,env,_,_=self.fixture.fixture(game)
+                    parent.chmod(0o2770)  # kubelet fsGroup recursion on an existing PVC
+                    self.fixture.call(request,env,'backup')
+                    self.assertEqual(parent.stat().st_mode&0o7777,0o700)
+                    parent.chmod(0o777)
+                    rejected=self.fixture.call(request,env,'backup',ok=False)
+                    self.assertIn(b'SCRATCH_PERMISSIONS_INVALID',rejected.stderr)
+                    self.assertEqual(parent.stat().st_mode&0o777,0o777)
+                    parent.chmod(0o700)
+        finally:parent.chmod(0o700)
+
+    def test_offline_rebase_retains_new_confirmed_rows_and_current_keys_python_and_node(self):
+        for game in ['jenga','card-battle-arena','swanopoly']:
+            with self.subTest(game=game):
+                request,env,paths,writers=self.fixture.fixture(game)
+                old=self.fixture.call(request,env,'backup').stdout;_,old_files=self.fixture.frames(old)
+                for spec,writer in zip(request['store_specs'],writers):
+                    self.fixture.sql(writer,"INSERT INTO business_rows VALUES('candidate-work',X'99');")
+                    if spec['immutable_tables']:
+                        self.fixture.sql(writer,'INSERT INTO "'+spec['immutable_tables'][0]+'" VALUES(\'new-confirmed\',X\'98\');')
+                    if spec['auth_key_table']:
+                        self.fixture.sql(writer,'UPDATE "'+spec['auth_key_table']+'" SET retired_at=99;INSERT INTO "'+spec['auth_key_table']+'" VALUES(\'newest\',NULL);')
+                latest=self.fixture.call(request,env,'backup').stdout;head,_=self.fixture.frames(latest)
+                inodes=[Path(str(v)+'-wal').stat().st_ino for v in paths]
+                denied=self.fixture.call(request,env,'rebase',latest+latest,ok=False)
+                self.assertIn(b'RESTORE_TARGET_IN_USE',denied.stderr)
+                self.assertEqual(inodes,[Path(str(v)+'-wal').stat().st_ino for v in paths])
+                target_env=dict(env)
+                for spec in request['store_specs']:
+                    target=self.fixture.root/(game+'-old-volume-'+spec['store_id']+'.db')
+                    target.write_bytes(old_files[spec['store_id']]);target.chmod(0o600);target_env[spec['path_env']]=str(target)
+                result=json.loads(self.fixture.call(request,target_env,'rebase',latest+latest).stdout)
+                for before,after,spec in zip(head['stores'],result['stores'],request['store_specs']):
+                    self.assertEqual(before['business_sha256'],after['business_sha256']);self.assertEqual(before['auth_history_sha256'],after['auth_history_sha256'])
+                    self.assertEqual(after['table_row_counts']['business_rows'],3)
+                    self.assertTrue(all(after['table_row_counts'][t]==0 for t in spec['session_tables']))
+                self.fixture.call(request,target_env,'verify',old)
+                self.fixture.call(request,target_env,'verify',latest)
+                self.fixture.call(request,target_env,'rebase',latest+latest)  # replay after interrupted controller
+
+    def test_file_rebase_stages_verifies_replaces_existing_files_and_rejects_links(self):
+        root=self.fixture.root;candidate=root/'candidate';candidate.mkdir();original=root/'old-volume';original.mkdir()
+        payloads={'old.py':b'old committed nonexecuted bytes','new.py':b'new background nonexecuted bytes'*1000}
+        refs=[]
+        for name,data in payloads.items():
+            (candidate/name).write_bytes(data)
+            refs.append({'root':'sources','path':name,'sha256':hashlib.sha256(data).hexdigest(),'size_bytes':len(data)})
+        (original/'old.py').write_bytes(payloads['old.py'])
+        pack=root/'snapshot.pack';artifacts.pack(pack,refs,{'sources':str(candidate)})
+        for _ in range(2):
+            proof=artifacts.rebase_pack(pack,refs,{'sources':str(original)})
+            self.assertTrue(proof['restored_file_readback_verified']);self.assertEqual(proof['file_count'],2)
+            for name,data in payloads.items():self.assertEqual((original/name).read_bytes(),data)
+        outside=root/'outside';outside.write_bytes(b'unchanged outside fixture')
+        for hard in [False,True]:
+            (original/'new.py').unlink()
+            if hard:os.link(outside,original/'new.py')
+            else:(original/'new.py').symlink_to(outside)
+            with self.assertRaisesRegex(artifacts.ArtifactError,'TARGET_UNSAFE'):artifacts.rebase_pack(pack,refs,{'sources':str(original)})
+            self.assertEqual(outside.read_bytes(),b'unchanged outside fixture')
+            self.assertFalse(list(root.glob('candidate-files-*')))
 
 
 @unittest.skipUnless(os.environ.get('KOTH_STORAGE_PG_CONTAINER'),'real PostgreSQL 18 service required')
@@ -253,6 +331,17 @@ class ProductionPostgresSwapTests(unittest.TestCase):
             with self.assertRaisesRegex(s.StorageError,'SWAP_CONFLICT'):self.task.postgres_switch(True)
             self.assertEqual(c.pg_databases(self.kube)[s.PG_DATABASE]['database_oid'],self.task.state['postgres_original_oid'])
         finally:self.task.state['postgres_candidate_oid']=real
+
+    def test_reverse_swap_rebases_new_confirmed_business_and_retirements_into_original_oid(self):
+        self.task.postgres_switch(True)
+        s.pg_command(self.kube,'sql',data=b"INSERT INTO period_results VALUES('new-sealed',17); INSERT INTO submissions VALUES('new-background','PASS','preserved'); UPDATE dependency_hell_snapshot_hmac_keys SET active=false; INSERT INTO dependency_hell_snapshot_hmac_keys VALUES('current',decode(repeat('cd',32),'hex'),true); UPDATE dependency_hell_submission_transition_hmac_keys SET active=false; INSERT INTO dependency_hell_submission_transition_hmac_keys SELECT * FROM dependency_hell_snapshot_hmac_keys WHERE key_id='current';")
+        folder=self.fixture.root/'latest';folder.mkdir();dump,meta=s.postgres_backup(self.kube,folder,str(uuid.uuid4()))
+        self.task.postgres_rebase(dump,{'stores':[meta]},{'postgres':(0,dump.stat().st_size)})
+        self.task.postgres_switch(False)
+        self.assertEqual(c.pg_databases(self.kube)[s.PG_DATABASE]['database_oid'],self.task.state['postgres_original_oid'])
+        actual=s.pg_metadata(self.kube,s.PG_DATABASE)
+        self.assertEqual(actual['business_sha256'],meta['business_sha256']);self.assertEqual(actual['auth_history_sha256'],meta['auth_history_sha256'])
+        self.assertEqual(actual['table_row_counts']['period_results'],2);self.assertEqual(actual['table_row_counts']['sessions'],0)
 
 
 if __name__=='__main__':unittest.main()
