@@ -189,15 +189,25 @@ def cleanup_stage(path):
     path.rmdir()
 
 
+def write_all(stream, data):
+    """Raw unbuffered Pod stdout may legally accept only part of a write."""
+    remaining = memoryview(data)
+    while remaining:
+        count = stream.write(remaining)
+        if type(count) is not int or not 0 < count <= len(remaining):
+            raise StorageError('OUTPUT_WRITE_INCOMPLETE')
+        remaining = remaining[count:]
+
+
 def write_bundle(stream, header, files):
     line = canonical(header) + b"\n"
     if len(line) > MAX_HEADER:
         raise StorageError("INVALID_BUNDLE")
-    stream.write(line)
+    write_all(stream, line)
     for file in files:
         with Path(file).open("rb") as source:
             for block in iter(lambda: source.read(1024 * 1024), b""):
-                stream.write(block)
+                write_all(stream, block)
     stream.flush()
 
 
@@ -279,11 +289,11 @@ def run(request, input_stream, output_stream):
                     raise StorageError('SCRATCH_PERMISSIONS_INVALID')
                 check_handles(list(folder.iterdir()), reject_live=True)
                 cleanup_stage(folder); removed.append(action)
-        output_stream.write(canonical({'removed_scratch_actions': removed})); return
+        write_all(output_stream, canonical({'removed_scratch_actions': removed})); return
     if request["action"] == "inspect":
         result = {"format_version": VERSION, "game": request["game"], "sqlite_context": "service_pod",
                   "stores": [metadata(s["path"], s) for s in stores], "deleted_sqlite_handle_count": 0}
-        output_stream.write(canonical(result)); return
+        write_all(output_stream, canonical(result)); return
     stage = stage_directory(request)
     try:
         if request["action"] == "backup":
@@ -311,13 +321,13 @@ def run(request, input_stream, output_stream):
                                 raise StorageError("ORIGINAL_ROWS_CHANGED")
                             counts[table] = missing
                         results.append({"store_id": spec["store_id"], "missing_or_changed_row_counts": counts})
-                output_stream.write(canonical({"game": request["game"], "sqlite_context": "service_pod", "stores": results}))
+                write_all(output_stream, canonical({"game": request["game"], "sqlite_context": "service_pod", "stores": results}))
             else:
                 _, authority = read_bundle(input_stream, stage, stores, request["game"], "authority")
                 if input_stream.read(1):
                     raise StorageError("INVALID_BUNDLE")
                 results = [restore_database(files[s["store_id"]], authority[s["store_id"]], s["path"], s) for s in stores]
-                output_stream.write(canonical({"game": request["game"], "sqlite_context": "isolated_restore_pod", "stores": results,
+                write_all(output_stream, canonical({"game": request["game"], "sqlite_context": "isolated_restore_pod", "stores": results,
                                                "current_auth_history_preserved": True, "restored_session_row_count": 0}))
     finally:
         cleanup_stage(stage)

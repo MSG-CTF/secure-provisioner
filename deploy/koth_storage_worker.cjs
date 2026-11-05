@@ -132,6 +132,15 @@ function readLine(fd) {
   fail('INVALID_BUNDLE');
 }
 
+function writeFileAll(fd, data) {
+  let offset = 0;
+  while (offset < data.length) {
+    const count = fs.writeSync(fd, data, offset, data.length - offset);
+    if (count <= 0) fail('OUTPUT_WRITE_INCOMPLETE');
+    offset += count;
+  }
+}
+
 function readBundle(fd, folder, specs, game, prefix) {
   const header = JSON.parse(readLine(fd));
   if (header.format_version !== VERSION || header.game !== game || !Array.isArray(header.stores)
@@ -142,7 +151,7 @@ function readBundle(fd, folder, specs, game, prefix) {
     const target = path.join(folder, prefix + '-' + item.store_id + '.sqlite'), out = fs.openSync(target, 'wx', 0o600), buffer = Buffer.alloc(1024 * 1024);
     try {
       let remaining = item.database_bytes;
-      while (remaining) { const size = fs.readSync(fd, buffer, 0, Math.min(remaining, buffer.length)); if (!size) fail('BUNDLE_TRUNCATED'); fs.writeSync(out, buffer.subarray(0, size)); remaining -= size; }
+      while (remaining) { const size = fs.readSync(fd, buffer, 0, Math.min(remaining, buffer.length)); if (!size) fail('BUNDLE_TRUNCATED'); writeFileAll(out, buffer.subarray(0, size)); remaining -= size; }
     } finally { fs.closeSync(out); }
     if (fileDigest(target) !== item.database_sha256) fail('BUNDLE_HASH_MISMATCH'); files[item.store_id] = target;
   }
