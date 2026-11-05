@@ -303,7 +303,7 @@ class Cutover:
                 env += [{'name': 'KOTH_SUBMISSIONS_DIR', 'value': self.state['artifact_roots']['sources']},
                         {'name': 'KOTH_REPLAYS_DIR', 'value': self.state['artifact_roots']['replays']}]
             language = self.profile['language']
-            command = ['node', '-e', 'setInterval(()=>{},3600000)'] if language == 'node' else ['python', '-B', '-c', 'import time;time.sleep(7200)']
+            command = ['node', '-e', 'setInterval(()=>{},3600000)'] if language == 'node' else ['python', '-B', '-c', 'import time;time.sleep(14400)']
             node = self.kube.json(['get', 'node', source['node_name']])
             spec = {'restartPolicy': 'Never', 'automountServiceAccountToken': False, 'terminationGracePeriodSeconds': 1,
                 'nodeSelector': {'kubernetes.io/hostname': node['metadata']['labels']['kubernetes.io/hostname']},
@@ -679,6 +679,15 @@ pg_restore --file=- --data-only --table=dependency_hell_snapshot_hmac_keys --tab
             self.save(error_code=str(error) if isinstance(error,s.StorageError) else 'CUTOVER_FAILED')
             return self.recover()
 
+    def dispatch(self):
+        exe='/usr/local/sbin/msgctf-koth-cutover'
+        stop=exe+' recover --game '+self.game+' --operation-id '+self.operation_id
+        command=['systemd-run','--quiet','--no-block','--collect','--unit=msgctf-koth-cutover-'+self.operation_id,
+                 '--property=Type=oneshot','--property=TimeoutStartSec=7200','--property=TimeoutStopSec=7200',
+                 '--property=ExecStopPost='+stop,exe,'run','--game',self.game,'--operation-id',self.operation_id,'--actor',self.storage.actor]
+        self.system(command)
+        return {'phase':'dispatched','game':self.game,'operation_id':self.operation_id}
+
 
 def installation():
     config_path=Path('/etc/msgctf-koth-storage/config.json');s.private_file(config_path)
@@ -717,13 +726,7 @@ def main():
         if args.action=='start':
             task.plan(args.archive,args.sha256,args.fault)
             if task.state['phase'] in TERMINAL:print(json.dumps(task.status()));return
-            exe='/usr/local/sbin/msgctf-koth-cutover'
-            stop=exe+' recover --game '+game+' --operation-id '+operation
-            command=['systemd-run','--quiet','--no-block','--collect','--unit=msgctf-koth-cutover-'+operation,
-                     '--property=Type=oneshot','--property=TimeoutStartSec=2400','--property=ExecStopPost='+stop,
-                     exe,'run','--game',game,'--operation-id',operation,'--actor',args.actor]
-            task.system(command)
-            print(json.dumps({'phase':'dispatched','game':game,'operation_id':operation}));return
+            print(json.dumps(task.dispatch()));return
         result=task.run() if args.action=='run' else task.recover() if args.action=='recover' else task.retire_failed()
         print(json.dumps({**result,'tool_source_sha':config['source_sha']}))
 

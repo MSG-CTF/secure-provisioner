@@ -76,7 +76,7 @@ RemainAfterExit=yes
 UMask=0077
 Environment=MSGCTF_BOOT_RECOVERY=1
 ExecStart=/usr/local/sbin/msgctf-koth-cutover recover
-TimeoutStartSec=2400
+TimeoutStartSec=7200
 Restart=on-failure
 RestartSec=20
 [Install]

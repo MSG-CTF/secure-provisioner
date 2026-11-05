@@ -162,6 +162,16 @@ class RecoveryDecisionTests(unittest.TestCase):
             system.assert_called_once_with(['systemctl','--no-block','start',c.AGENT])
         self.assertEqual(self.task.state['phase'],'committed')
 
+    def test_detached_job_stop_recovery_has_large_archive_budget_and_does_not_block_dispatch(self):
+        with patch.object(self.task,'system') as system:
+            result=self.task.dispatch()
+        command=system.call_args.args[0]
+        self.assertEqual(result['phase'],'dispatched')
+        self.assertIn('--no-block',command)
+        self.assertIn('--property=TimeoutStopSec=7200',command)
+        self.assertIn('--property=TimeoutStartSec=7200',command)
+        self.assertTrue(any('ExecStopPost=' in a and self.storage.operation_id in a for a in command))
+
     def test_failed_volume_retirement_refuses_active_transactions_and_referenced_claim(self):
         self.task.save('committed')
         with self.assertRaisesRegex(s.StorageError,'ONLY_INACTIVE'):self.task.retire_failed()
