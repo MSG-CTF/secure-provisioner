@@ -9,7 +9,7 @@ import re
 import stat
 import tempfile
 
-FILES = ('koth_storage.py', 'koth_storage_worker.py', 'koth_storage_worker.cjs', 'koth_core_egress.py')
+FILES = ('koth_storage.py', 'koth_storage_worker.py', 'koth_storage_worker.cjs', 'koth_core_egress.py', 'koth_storage_artifacts.py')
 GAMES = ('jenga', 'card-battle-arena', 'grand-tour-duel', 'dependency-hell', 'pixel-smuggler', 'swanopoly')
 
 

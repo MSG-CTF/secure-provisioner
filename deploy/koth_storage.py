@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shutil
 import stat
@@ -30,7 +30,10 @@ except ImportError:  # Controller policy/format tests also run on Windows.
 VERSION = 1
 MAX_HEADER = 65536
 MAX_STORE = 512 * 1024 * 1024
-MAX_BUNDLE = 1024 * 1024 * 1024
+MAX_BUNDLE = 10 * 1024 ** 3
+MAX_ARTIFACT_PACK = 8 * 1024 ** 3
+MAX_ARTIFACT_RAW = 16 * 1024 ** 3
+FILE_GAMES = {'grand-tour-duel', 'dependency-hell'}
 ROOT = Path('/var/lib/msgctf-koth-storage')
 IDENTIFIER = re.compile(r'[a-z_][a-z0-9_]*\Z')
 
@@ -102,7 +105,7 @@ def private_file(path):
     return info
 
 
-def read_archive(path, game, *, expected_hash=None, sqlite_only=False):
+def read_archive(path, game, *, expected_hash=None, sqlite_only=False, artifact_only=False):
     info = private_file(path)
     if info.st_size > MAX_BUNDLE + MAX_HEADER or expected_hash and sha256(path) != expected_hash:
         raise StorageError('ARCHIVE_HASH_MISMATCH')
@@ -111,19 +114,37 @@ def read_archive(path, game, *, expected_hash=None, sqlite_only=False):
         if len(line) > MAX_HEADER or not line.endswith(b'\n'):
             raise StorageError('INVALID_ARCHIVE')
         header = json.loads(line)
-        if header.get('format_version') != VERSION or header.get('game') != game:
+        if header.get('format_version') not in {1, 2} or header.get('game') != game:
             raise StorageError('INVALID_ARCHIVE')
         expected = [s['store_id'] for s in PROFILES[game]['stores']] + (['postgres'] if game == 'dependency-hell' and not sqlite_only else [])
+        has_files = isinstance(header.get('stores'), list) and any(s.get('store_id') == 'artifacts' for s in header['stores'])
+        if artifact_only:
+            expected = ['artifacts']
+        elif has_files:
+            expected += ['artifacts']
+        if has_files and game not in FILE_GAMES or header.get('format_version') == 2 and not has_files:
+            raise StorageError('INVALID_ARCHIVE')
         if not isinstance(header.get('stores'), list) or [s.get('store_id') for s in header['stores']] != expected:
             raise StorageError('INVALID_ARCHIVE')
         ranges, total = {}, 0
         for item in header['stores']:
             size, digest = item.get('database_bytes'), item.get('database_sha256')
-            if type(size) is not int or not 512 <= size <= MAX_STORE or not isinstance(digest, str) or not re.fullmatch(r'[0-9a-f]{64}', digest):
+            is_files = item['store_id'] == 'artifacts'
+            valid_size = type(size) is int and (1 <= size <= MAX_ARTIFACT_PACK if is_files else 512 <= size <= MAX_STORE)
+            if not valid_size or not isinstance(digest, str) or not re.fullmatch(r'[0-9a-f]{64}', digest):
                 raise StorageError('INVALID_ARCHIVE')
-            wanted_engine = 'postgresql' if item['store_id'] == 'postgres' else 'sqlite'
+            wanted_engine = 'file_bundle' if is_files else 'postgresql' if item['store_id'] == 'postgres' else 'sqlite'
             if item.get('engine') != wanted_engine:
                 raise StorageError('INVALID_ARCHIVE')
+            if is_files:
+                roots = item.get('artifact_roots')
+                keys = {'sources', 'replays'} if game == 'grand-tour-duel' else {'artifacts'}
+                raw_size, count = item.get('uncompressed_bytes'), item.get('reference_count')
+                if (not isinstance(roots, dict) or set(roots) != keys
+                        or any(not isinstance(v, str) or not PurePosixPath(v).is_absolute() or PurePosixPath(v) == PurePosixPath(PROFILES[game]['data_root']) or not PurePosixPath(v).is_relative_to(PROFILES[game]['data_root']) or PurePosixPath(v).as_posix() != v or '..' in PurePosixPath(v).parts for v in roots.values())
+                        or type(raw_size) is not int or not 0 <= raw_size <= MAX_ARTIFACT_RAW or type(count) is not int or not 0 <= count <= 100000
+                        or item.get('compression') != 'zlib_per_file_v1' or not re.fullmatch(r'[a-f0-9]{64}', item.get('references_sha256', ''))):
+                    raise StorageError('INVALID_ARTIFACT_METADATA')
             ranges[item['store_id']] = (stream.tell(), size)
             h, remaining = hashlib.sha256(), size
             while remaining:
@@ -148,12 +169,38 @@ def copy_range(source, output, offset, size):
         output.write(block); size -= len(block)
 
 
-def sqlite_payload(archive, output, header, ranges):
-    sqlite_stores = [s for s in header['stores'] if s['engine'] == 'sqlite']
+def sqlite_payload(archive, output, header, ranges, *, include_artifacts=True):
+    sqlite_stores = [s for s in header['stores'] if s['engine'] == 'sqlite' or include_artifacts and header['game'] == 'grand-tour-duel' and s['engine'] == 'file_bundle']
     output.write(canonical({'format_version': VERSION, 'game': header['game'], 'stores': sqlite_stores}) + b'\n')
     with Path(archive).open('rb') as source:
         for item in sqlite_stores:
             copy_range(source, output, *ranges[item['store_id']])
+
+
+def artifact_payload(archive, output, header, ranges):
+    items = [s for s in header['stores'] if s['engine'] == 'file_bundle']
+    if len(items) != 1:
+        raise StorageError('COMPLETE_ARTIFACT_BACKUP_REQUIRED')
+    output.write(canonical({'format_version': VERSION, 'game': header['game'], 'stores': items}) + b'\n')
+    with Path(archive).open('rb') as source:
+        copy_range(source, output, *ranges['artifacts'])
+
+
+def require_artifacts(header):
+    if header['game'] in FILE_GAMES and not any(s['engine'] == 'file_bundle' for s in header['stores']):
+        raise StorageError('COMPLETE_ARTIFACT_BACKUP_REQUIRED')
+
+
+def restore_capacity(header):
+    raw = sum(s.get('uncompressed_bytes', s['database_bytes']) for s in header['stores'])
+    packed = sum(s['database_bytes'] for s in header['stores'])
+    needed = raw + packed + 512 * 1024 ** 2
+    size = 2
+    while size * 1024 ** 3 < needed:
+        size *= 2
+    if size > 32:
+        raise StorageError('RESTORE_CAPACITY_LIMIT')
+    return str(size) + 'Gi'
 
 
 class Kube:
@@ -257,7 +304,9 @@ def worker_command(game, request, directory=None):
         source = (directory / 'koth_storage_worker.cjs').read_text(encoding='utf-8')
         source += '\nrun(JSON.parse(process.argv[1])).catch(e=>{console.error(JSON.stringify({error_code:e.storageCode||"STORAGE_WORKER_FAILED"}));process.exitCode=1;});'
         return ['node', '-e', source, canonical(request).decode()]
-    return ['python', '-B', '-c', (directory / 'koth_storage_worker.py').read_text(encoding='utf-8'), canonical(request).decode()]
+    helper = (directory / 'koth_storage_artifacts.py').read_text(encoding='utf-8')
+    bootstrap = 'import sys,types\na=types.ModuleType("koth_storage_artifacts")\nexec(' + repr(helper) + ',a.__dict__)\nsys.modules[a.__name__]=a\n'
+    return ['python', '-B', '-c', bootstrap + (directory / 'koth_storage_worker.py').read_text(encoding='utf-8').replace('from __future__ import annotations', ''), canonical(request).decode()]
 
 
 class Storage:
@@ -289,46 +338,73 @@ class Storage:
             target.unlink(missing_ok=True)
         return entry
 
-    def request(self, source, action, *, operation_id=None):
-        return {'format_version': VERSION, 'action': action, 'game': self.game,
+    def request(self, source, action, *, operation_id=None, include_artifacts=True):
+        result = {'format_version': VERSION, 'action': action, 'game': self.game,
                 'operation_id': operation_id or self.operation_id, 'expected_pod_name': source['pod_name'],
                 'data_root': PROFILES[self.game]['data_root'], 'store_specs': copy.deepcopy(PROFILES[self.game]['stores'])}
+        if self.game == 'grand-tour-duel':
+            result['artifact_bundle'] = include_artifacts and action in {'backup', 'verify', 'restore'}
+        return result
 
-    def execute(self, source, action, *, input_file=None, output_file=None, operation_id=None):
+    def execute(self, source, action, *, input_file=None, output_file=None, operation_id=None, include_artifacts=True):
         before = self.kube.json(['get', 'pod', source['pod_name'], '-n', source['namespace']])
         if before['metadata']['uid'] != source['pod_uid']:
             raise StorageError('SOURCE_POD_CHANGED')
         result = self.kube.run(['exec', '-i', '-n', source['namespace'], source['pod_name'], '-c', source['container'], '--',
-                               *worker_command(self.game, self.request(source, action, operation_id=operation_id))],
-                              input_file=input_file, output_file=output_file, timeout=140)
+                               *worker_command(self.game, self.request(source, action, operation_id=operation_id, include_artifacts=include_artifacts))],
+                              input_file=input_file, output_file=output_file, timeout=1200 if self.game in FILE_GAMES else 140)
         after = self.kube.json(['get', 'pod', source['pod_name'], '-n', source['namespace']])
         if after['metadata']['uid'] != source['pod_uid']:
             raise StorageError('SOURCE_POD_CHANGED')
         return json.loads(result) if output_file is None else None
+
+    def execute_artifacts(self, source, action, references, *, archive=None, header=None, ranges=None, output_file=None):
+        line = canonical({'references': references}) + b'\n'
+        if len(line) > 32 * 1024 ** 2:
+            raise StorageError('ARTIFACT_REFERENCE_LIMIT')
+        with tempfile.TemporaryFile(dir=self.root) as payload:
+            payload.write(line)
+            if archive:
+                artifact_payload(archive, payload, header, ranges)
+            payload.seek(0)
+            return self.execute(source, action, input_file=payload, output_file=output_file)
 
     def inspect(self):
         source = discover(self.kube, self.game)
         result = self.execute(source, 'inspect')
         return {'source': source, **result}
 
-    def backup(self, *, operation_id=None):
+    def backup(self, *, operation_id=None, include_artifacts=True):
         operation = operation_id or self.operation_id
         archive = self.root / 'archives' / (self.game + '-' + operation + '.msgkoth')
         if archive.exists():
             header, _ = read_archive(archive, self.game)
+            if include_artifacts:
+                require_artifacts(header)
             return {'archive_path': str(archive), 'archive_sha256': sha256(archive), 'source': header['source'], 'stores': header['stores']}
         source = discover(self.kube, self.game)
         with tempfile.TemporaryDirectory(prefix='backup-', dir=self.root) as folder:
             private = Path(folder) / 'sqlite.frame'
             with private.open('xb') as output:
                 os.chmod(private, 0o600)
-                self.execute(source, 'backup', output_file=output, operation_id=operation)
+                self.execute(source, 'backup', output_file=output, operation_id=operation, include_artifacts=include_artifacts)
                 output.flush(); os.fsync(output.fileno())
             # The SQLite-only frame is parsed without importing an engine.
             if self.game == 'dependency-hell':
                 sqlite_header, sqlite_ranges = read_archive(private, self.game, sqlite_only=True)
-                pg_file, pg_meta = postgres_backup(self.kube, Path(folder), operation)
+                pg_file, pg_meta = postgres_backup(self.kube, Path(folder), operation, include_references=include_artifacts)
+                references = pg_meta.pop('_artifact_references', [])
                 stores = sqlite_header['stores'] + [pg_meta]
+                if include_artifacts:
+                    artifact_file = Path(folder) / 'artifacts.frame'
+                    with artifact_file.open('xb') as output:
+                        os.chmod(artifact_file, 0o600)
+                        self.execute_artifacts(source, 'artifact_backup', references, output_file=output)
+                        output.flush(); os.fsync(output.fileno())
+                    artifact_header, artifact_ranges = read_archive(artifact_file, self.game, artifact_only=True)
+                    if artifact_header['stores'][0].get('database_references_sha256') != pg_meta['artifact_database_references_sha256']:
+                        raise StorageError('ARTIFACT_DATABASE_REFERENCES_MISMATCH')
+                    stores += artifact_header['stores']
             else:
                 sqlite_header, sqlite_ranges = read_archive(private, self.game)
                 stores = sqlite_header['stores']
@@ -336,13 +412,17 @@ class Storage:
             fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
             try:
                 with os.fdopen(fd, 'wb') as output, private.open('rb') as stream:
-                    output.write(canonical({'format_version': VERSION, 'game': self.game, 'source': source, 'stores': stores}) + b'\n')
+                    output.write(canonical({'format_version': 2 if any(s['engine']=='file_bundle' for s in stores) else VERSION, 'game': self.game, 'source': source, 'stores': stores, 'scope': 'databases_and_referenced_files' if include_artifacts and self.game in FILE_GAMES else 'databases_only'}) + b'\n')
                     for item in sqlite_header['stores']:
                         copy_range(stream, output, *sqlite_ranges[item['store_id']])
                     if self.game == 'dependency-hell':
                         with pg_file.open('rb') as pg: shutil.copyfileobj(pg, output)
+                        if include_artifacts:
+                            with artifact_file.open('rb') as files: copy_range(files, output, *artifact_ranges['artifacts'])
                     output.flush(); os.fsync(output.fileno())
                 read_archive(temporary, self.game)
+                if include_artifacts:
+                    require_artifacts({'game': self.game, 'stores': stores})
                 os.chmod(temporary, 0o400); os.replace(temporary, archive)
             finally:
                 temporary.unlink(missing_ok=True)
@@ -350,6 +430,7 @@ class Storage:
 
     def verify(self, archive, expected_hash):
         header, ranges = read_archive(archive, self.game, expected_hash=expected_hash)
+        require_artifacts(header)
         source = discover(self.kube, self.game)
         if header['source']['pvc_uid'] != source['pvc_uid']:
             raise StorageError('SOURCE_VOLUME_CHANGED')
@@ -357,20 +438,28 @@ class Storage:
             sqlite_payload(archive, payload, header, ranges); payload.seek(0)
             result = self.execute(source, 'verify', input_file=payload)
         if self.game == 'dependency-hell':
-            result['postgres'] = postgres_verify(self.kube, archive, header, ranges, self.root, self.operation_id)
+            callback = lambda refs: self.execute_artifacts(source, 'artifact_verify', refs, archive=archive, header=header, ranges=ranges)
+            result['postgres'] = postgres_verify(self.kube, archive, header, ranges, self.root, self.operation_id, artifact_callback=callback)
+            result['artifacts'] = result['postgres']['artifacts']
+            result['live_artifacts'] = self.execute_artifacts(source, 'artifact_check', postgres_references(self.kube, PG_DATABASE))
         return {'source': source, **result}
 
     def restore(self, archive, expected_hash):
         """Restore to a new network-isolated namespace/PVC; never promote it."""
         historical, ranges = read_archive(archive, self.game, expected_hash=expected_hash)
+        require_artifacts(historical)
         authority_operation = str(uuid.uuid5(uuid.UUID(self.operation_id), 'current-authority'))
-        current = self.backup(operation_id=authority_operation)
+        current = self.backup(operation_id=authority_operation, include_artifacts=False)
         authority, authority_ranges = read_archive(current['archive_path'], self.game, expected_hash=current['archive_sha256'])
         source = discover(self.kube, self.game)
         if authority['source']['pod_uid'] != source['pod_uid']:
             raise StorageError('SOURCE_POD_CHANGED')
-        if historical['source']['pvc_uid'] != source['pvc_uid'] or [s.get('database_path') for s in historical['stores']] != [s.get('database_path') for s in authority['stores']]:
+        database_paths = lambda h: [s.get('database_path') for s in h['stores'] if s['engine'] != 'file_bundle']
+        if historical['source']['pvc_uid'] != source['pvc_uid'] or database_paths(historical) != database_paths(authority):
             raise StorageError('SOURCE_VOLUME_OR_SCOPE_CHANGED')
+        artifact_store = next((s for s in historical['stores'] if s['engine']=='file_bundle'), None)
+        if artifact_store and self.execute(source, 'artifact_meta')['artifact_roots'] != artifact_store['artifact_roots']:
+            raise StorageError('ARTIFACT_ROOT_SCOPE_CHANGED')
         ns_name = 'msgctf-storage-' + uuid.UUID(self.operation_id).hex
         labels = {'msgctf.io/storage-operation': self.operation_id, 'msgctf.io/storage-role': 'restore'}
         namespace = self.kube.apply({'apiVersion': 'v1', 'kind': 'Namespace', 'metadata': {'name': ns_name, 'labels': labels}})
@@ -383,10 +472,12 @@ class Storage:
                 'metadata': {'name': 'deny-all', 'namespace': ns_name},
                 'spec': {'podSelector': {}, 'policyTypes': ['Ingress', 'Egress'], 'ingress': [], 'egress': []}})
             self.kube.apply({'apiVersion': 'v1', 'kind': 'PersistentVolumeClaim', 'metadata': {'name': 'restore-data', 'namespace': ns_name, 'labels': labels},
-                'spec': {'accessModes': ['ReadWriteOnce'], 'resources': {'requests': {'storage': '2Gi'}}}})
+                'spec': {'accessModes': ['ReadWriteOnce'], 'resources': {'requests': {'storage': restore_capacity(historical)}}}})
             node = self.kube.json(['get', 'node', source['node_name']])
             hostname = node['metadata']['labels']['kubernetes.io/hostname']
             env = []
+            if artifact_store and self.game == 'grand-tour-duel':
+                env += [{'name':'KOTH_SUBMISSIONS_DIR','value':artifact_store['artifact_roots']['sources']}, {'name':'KOTH_REPLAYS_DIR','value':artifact_store['artifact_roots']['replays']}]
             for spec, item in zip(PROFILES[self.game]['stores'], [s for s in authority['stores'] if s['engine'] == 'sqlite']):
                 database = item['database_path']
                 if self.game == 'swanopoly':
@@ -421,16 +512,18 @@ class Storage:
                       'pvc_name': 'restore-data', 'pvc_uid': pvc['metadata']['uid']}
             with tempfile.TemporaryFile(dir=self.root) as payload:
                 sqlite_payload(archive, payload, historical, ranges)
-                sqlite_payload(current['archive_path'], payload, authority, authority_ranges)
+                sqlite_payload(current['archive_path'], payload, authority, authority_ranges, include_artifacts=False)
                 payload.seek(0); result = self.execute(target, 'restore', input_file=payload)
             if self.game == 'dependency-hell':
+                callback = lambda refs: self.execute_artifacts(target, 'artifact_restore', refs, archive=archive, header=historical, ranges=ranges)
                 result['postgres'] = postgres_restore_check(self.kube, archive, historical, ranges,
-                    current['archive_path'], authority, authority_ranges, self.root, self.operation_id)
+                    current['archive_path'], authority, authority_ranges, self.root, self.operation_id, artifact_callback=callback)
+                result['artifacts'] = result['postgres']['artifacts']
             observed = self.execute(source, 'inspect')
             if [s['auth_history_sha256'] for s in observed['stores']] != [s['auth_history_sha256'] for s in authority['stores'] if s['engine'] == 'sqlite']:
                 raise StorageError('SOURCE_AUTHORITY_CHANGED')
             result.update({'source': source, 'restore_pvc_uid': pvc['metadata']['uid'], 'source_pvc_untouched': True,
-                           'restore_namespace': ns_name, 'network_isolated': True, 'participant_service_created': False})
+                           'restore_namespace': ns_name, 'network_isolated': True, 'participant_service_created': False, 'restore_pvc_storage': restore_capacity(historical)})
             completed = True
         finally:
             self.kube.delete_owned_namespace(ns_name, ns_uid, self.operation_id)
@@ -513,7 +606,17 @@ SELECT json_build_object(
 """
 PG_IMMUTABLE = b"""SELECT json_build_object(
 'period_results',(SELECT COALESCE(json_object_agg(period_id,encode(sha256(convert_to(row_to_json(t)::text,'UTF8')),'hex')),'{}'::json) FROM period_results t),
-'terminal_submissions',(SELECT COALESCE(json_object_agg(id,encode(sha256(convert_to(row_to_json(t)::text,'UTF8')),'hex')),'{}'::json) FROM submissions t WHERE verdict<>'PENDING'));"""
+'terminal_submissions',(SELECT COALESCE(json_object_agg(id,encode(sha256(convert_to((to_jsonb(t)-'artifact_path')::text,'UTF8')),'hex')),'{}'::json) FROM submissions t WHERE verdict<>'PENDING'));"""
+PG_REFERENCES = b"""SELECT COALESCE(json_agg(row_to_json(t)),'[]'::json) FROM (
+SELECT DISTINCT artifact_path,sha256,size_bytes FROM submissions WHERE artifact_path IS NOT NULL
+ORDER BY artifact_path,sha256,size_bytes) t;"""
+
+
+def postgres_references(kube, database):
+    rows = json.loads(pg_command(kube, 'sql', database=database, data=PG_REFERENCES))
+    if not isinstance(rows, list) or len(canonical({'references': rows})) + 1 > 32 * 1024 ** 2:
+        raise StorageError('ARTIFACT_REFERENCE_LIMIT')
+    return rows
 
 
 def pg_metadata(kube, database):
@@ -523,12 +626,15 @@ def pg_metadata(kube, database):
     return result
 
 
-def postgres_backup(kube, folder, operation_id):
+def postgres_backup(kube, folder, operation_id, *, include_references=False):
     dump = folder / 'postgres.dump'
     with dump.open('xb') as output:
         os.chmod(dump, 0o600); pg_command(kube, 'dump', output_file=output); output.flush(); os.fsync(output.fileno())
     with postgres_clone(kube, dump, operation_id, 'backup') as database:
         meta = pg_metadata(kube, database)
+        if include_references:
+            meta['_artifact_references'] = postgres_references(kube, database)
+            meta['artifact_database_references_sha256'] = hashlib.sha256(canonical(meta['_artifact_references'])).hexdigest()
     return dump, {'store_id': 'postgres', 'engine': 'postgresql', 'database_bytes': dump.stat().st_size,
                   'database_sha256': sha256(dump), 'database_name': PG_DATABASE, **meta}
 
@@ -539,19 +645,25 @@ def extract_postgres(archive, ranges, target):
     return target
 
 
-def postgres_verify(kube, archive, header, ranges, root, operation_id):
+def postgres_verify(kube, archive, header, ranges, root, operation_id, *, artifact_callback=None):
+    artifacts = None
     with tempfile.TemporaryDirectory(dir=root) as folder:
         dump = extract_postgres(archive, ranges, Path(folder) / 'postgres.dump')
         with postgres_clone(kube, dump, operation_id, 'verify') as database:
             original = json.loads(pg_command(kube, 'sql', database=database, data=PG_IMMUTABLE))
+            if artifact_callback:
+                artifacts = artifact_callback(postgres_references(kube, database))
         current = json.loads(pg_command(kube, 'sql', data=PG_IMMUTABLE))
     if not all(current[table].get(key) == value for table in original for key, value in original[table].items()):
         raise StorageError('ORIGINAL_ROWS_CHANGED')
-    return {'immutable_original_row_counts': {t: len(v) for t, v in original.items()}, 'missing_or_changed_row_count': 0,
-            'postgres_context': 'database_pod', 'temporary_database_removed': True}
+    result = {'immutable_original_row_counts': {t: len(v) for t, v in original.items()}, 'missing_or_changed_row_count': 0,
+              'postgres_context': 'database_pod', 'temporary_database_removed': True}
+    if artifacts is not None: result['artifacts'] = artifacts
+    return result
 
 
-def postgres_restore_check(kube, archive, header, ranges, authority_archive, authority_header, authority_ranges, root, operation_id):
+def postgres_restore_check(kube, archive, header, ranges, authority_archive, authority_header, authority_ranges, root, operation_id, *, artifact_callback=None):
+    artifacts = None
     with tempfile.TemporaryDirectory(dir=root) as folder:
         folder = Path(folder); historical = extract_postgres(archive, ranges, folder / 'historical.dump')
         current = extract_postgres(authority_archive, authority_ranges, folder / 'authority.dump')
@@ -582,11 +694,15 @@ pg_restore --file=- --data-only --table=dependency_hell_snapshot_hmac_keys --tab
             active = next(s for s in authority_header['stores'] if s['store_id'] == 'postgres')
             if observed['business_sha256'] != old['business_sha256'] or observed['auth_history_sha256'] != active['auth_history_sha256'] or observed['table_row_counts'].get('sessions', 0):
                 raise StorageError('RESTORE_VERIFICATION_FAILED')
+            if artifact_callback:
+                artifacts = artifact_callback(postgres_references(kube, database))
         if pg_metadata(kube, PG_DATABASE)['auth_history_sha256'] != active['auth_history_sha256']:
             raise StorageError('SOURCE_AUTHORITY_CHANGED')
-    return {'business_sha256': observed['business_sha256'], 'current_auth_history_preserved': True,
+    result = {'business_sha256': observed['business_sha256'], 'current_auth_history_preserved': True,
             'restored_session_row_count': 0, 'source_database_untouched': True, 'temporary_database_removed': True,
             'postgres_context': 'database_pod'}
+    if artifacts is not None: result['artifacts'] = artifacts
+    return result
 
 
 @contextmanager
@@ -630,7 +746,7 @@ def main():
         raise StorageError('HOST_GAME_SCOPE_MISMATCH')
     directory = Path(__file__).resolve().parent
     if (not re.fullmatch(r'[0-9a-f]{40}', config.get('source_sha', '')) or directory.name != config['source_sha']
-            or set(config.get('files', {})) != {'koth_storage.py', 'koth_storage_worker.py', 'koth_storage_worker.cjs', 'koth_core_egress.py'}
+            or set(config.get('files', {})) != {'koth_storage.py', 'koth_storage_worker.py', 'koth_storage_worker.cjs', 'koth_core_egress.py', 'koth_storage_artifacts.py'}
             or any(sha256(directory / name) != digest for name, digest in config['files'].items())):
         raise StorageError('INSTALLED_SOURCE_CHANGED')
     storage = Storage(args.game, args.operation_id, args.actor)

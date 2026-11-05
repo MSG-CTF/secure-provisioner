@@ -17,11 +17,12 @@ import stat
 import sys
 import time
 import uuid
+import koth_storage_artifacts as artifacts
 
 VERSION = 1
 MAX_HEADER = 65536
 MAX_DATABASE = 512 * 1024 * 1024
-MAX_TOTAL = 1024 * 1024 * 1024
+MAX_TOTAL = 10 * 1024 ** 3
 IDENTIFIER = re.compile(r"[a-z_][a-z0-9_]*\Z")
 GAMES = {"jenga", "card-battle-arena", "grand-tour-duel", "dependency-hell", "pixel-smuggler", "swanopoly"}
 
@@ -44,9 +45,9 @@ def file_digest(path):
 
 def validate_request(request):
     required = {"format_version", "action", "game", "operation_id", "expected_pod_name", "data_root", "store_specs"}
-    if set(request) != required or request["format_version"] != VERSION or request["game"] not in GAMES:
+    if set(request) - {'artifact_bundle'} != required or type(request.get('artifact_bundle', False)) is not bool or request["format_version"] != VERSION or request["game"] not in GAMES:
         raise StorageError("INVALID_REQUEST")
-    if request["action"] not in {"inspect", "backup", "verify", "restore", "cleanup"}:
+    if request["action"] not in {"inspect", "backup", "verify", "restore", "cleanup", "artifact_meta", "artifact_backup", "artifact_verify", "artifact_restore", "artifact_check"}:
         raise StorageError("INVALID_REQUEST")
     if str(uuid.UUID(request["operation_id"])) != request["operation_id"]:
         raise StorageError("INVALID_REQUEST")
@@ -183,7 +184,7 @@ def stage_directory(request):
 
 def cleanup_stage(path):
     for file in path.iterdir():
-        if file.is_symlink() or not file.is_file() or not re.fullmatch(r"(?:backup|authority|candidate)-(?:game|auth)\.sqlite(?:-wal|-shm|-journal)?", file.name):
+        if file.is_symlink() or not file.is_file() or not re.fullmatch(r"(?:backup|authority|candidate)-(?:(?:game|auth)\.sqlite(?:-wal|-shm|-journal)?|artifacts\.(?:pack|part))", file.name):
             raise StorageError("SCRATCH_CONTENT_UNEXPECTED")
         file.unlink()
     path.rmdir()
@@ -211,7 +212,7 @@ def write_bundle(stream, header, files):
     stream.flush()
 
 
-def read_bundle(stream, stage, specs, game, prefix):
+def read_bundle(stream, stage, specs, game, prefix, with_artifacts=False):
     line = stream.readline(MAX_HEADER + 1)
     if len(line) > MAX_HEADER or not line.endswith(b"\n"):
         raise StorageError("INVALID_BUNDLE")
@@ -219,17 +220,19 @@ def read_bundle(stream, stage, specs, game, prefix):
     if header.get("format_version") != VERSION or header.get("game") != game or not isinstance(header.get("stores"), list):
         raise StorageError("INVALID_BUNDLE")
     items = header["stores"]
-    if [v.get("store_id") for v in items] != [s["store_id"] for s in specs]:
+    if [v.get("store_id") for v in items] != [s["store_id"] for s in specs] + (['artifacts'] if with_artifacts else []):
         raise StorageError("INVALID_BUNDLE")
     total, files = 0, {}
     for item in items:
         count = item.get("database_bytes")
-        if item.get('engine') != 'sqlite' or type(count) is not int or not 512 <= count <= MAX_DATABASE or not re.fullmatch(r"[0-9a-f]{64}", item.get("database_sha256", "")):
+        is_files = item.get('store_id') == 'artifacts'
+        valid = item.get('engine') == ('file_bundle' if is_files else 'sqlite') and type(count) is int and (1 <= count <= artifacts.MAX_PACK if is_files else 512 <= count <= MAX_DATABASE)
+        if not valid or not re.fullmatch(r"[0-9a-f]{64}", item.get("database_sha256", "")):
             raise StorageError("INVALID_BUNDLE")
         total += count
         if total > MAX_TOTAL:
             raise StorageError("INVALID_BUNDLE")
-        target = stage / (prefix + "-" + item["store_id"] + ".sqlite")
+        target = stage / (prefix + "-" + item["store_id"] + ('.pack' if is_files else '.sqlite'))
         with target.open("xb") as output:
             remaining = count
             while remaining:
@@ -280,9 +283,11 @@ def run(request, input_stream, output_stream):
     validate_request(request)
     stores = resolve_stores(request, existing=request["action"] not in {"restore", "cleanup"})
     check_handles([s["path"] for s in stores], reject_live=request["action"] == "restore")
+    if request['action'] == 'artifact_meta':
+        write_all(output_stream, canonical({'artifact_roots': artifacts.roots(request['game'], request['data_root'])})); return
     if request['action'] == 'cleanup':
         removed = []
-        for action in ('backup', 'verify', 'restore'):
+        for action in ('backup', 'verify', 'restore', 'artifact_backup', 'artifact_verify', 'artifact_restore', 'artifact_check'):
             folder = safe_path(Path(request['data_root']) / '.msgctf-storage' / (request['operation_id'] + '-' + action), request['data_root'], must_exist=False)
             if folder.exists():
                 if folder.stat().st_uid != os.geteuid() or folder.stat().st_mode & 0o077:
@@ -296,15 +301,49 @@ def run(request, input_stream, output_stream):
         write_all(output_stream, canonical(result)); return
     stage = stage_directory(request)
     try:
+        if request['action'].startswith('artifact_'):
+            root_map = artifacts.roots(request['game'], request['data_root'])
+            line = input_stream.readline(artifacts.MAX_INDEX + 1)
+            if len(line) > artifacts.MAX_INDEX or not line.endswith(b'\n'):
+                raise StorageError('ARTIFACT_REFERENCE_LIMIT')
+            expected = json.loads(line)
+            if not isinstance(expected, dict) or set(expected) != {'references'} or request['game'] != 'dependency-hell':
+                raise StorageError('INVALID_REQUEST')
+            refs = artifacts.dependency_references(expected['references'], root_map['artifacts'])
+            if request['action'] == 'artifact_backup':
+                if input_stream.read(1): raise StorageError('INVALID_BUNDLE')
+                path = stage / 'backup-artifacts.pack'
+                info = artifacts.pack(path, refs, root_map)
+                info['database_references_sha256'] = hashlib.sha256(canonical(expected['references'])).hexdigest()
+                write_bundle(output_stream, {'format_version': VERSION, 'game': request['game'], 'stores': [info]}, [path])
+            elif request['action'] == 'artifact_check':
+                if input_stream.read(1): raise StorageError('INVALID_BUNDLE')
+                write_all(output_stream, canonical(artifacts.check_sources(refs, root_map)))
+            else:
+                header, files = read_bundle(input_stream, stage, [], request['game'], 'backup', with_artifacts=True)
+                if input_stream.read(1): raise StorageError('INVALID_BUNDLE')
+                if header['stores'][0]['artifact_roots'] != root_map:
+                    raise StorageError('ARTIFACT_ROOT_SCOPE_CHANGED')
+                proof = artifacts.check_pack(files['artifacts'], refs, root_map, restore=request['action']=='artifact_restore')
+                artifacts.check_metadata(header['stores'][0], refs, proof)
+                if request['action']=='artifact_restore': artifacts.check_sources(refs, root_map)
+                write_all(output_stream, canonical(proof))
+            return
         if request["action"] == "backup":
             files, info = [], []
             for spec in stores:
                 path = stage / ("backup-" + spec["store_id"] + ".sqlite")
                 backup_database(spec["path"], path, time.monotonic() + 45)
                 info.append(metadata(path, spec, closed_snapshot=True)); files.append(path)
+            if request.get('artifact_bundle'):
+                if request['game'] != 'grand-tour-duel': raise StorageError('INVALID_REQUEST')
+                with closing(connect(files[0])) as db:
+                    refs = artifacts.grand_references(db)
+                path = stage / 'backup-artifacts.pack'
+                info.append(artifacts.pack(path, refs, artifacts.roots(request['game'], request['data_root']))); files.append(path)
             write_bundle(output_stream, {"format_version": VERSION, "game": request["game"], "stores": info}, files)
         else:
-            header, files = read_bundle(input_stream, stage, stores, request["game"], "backup")
+            header, files = read_bundle(input_stream, stage, stores, request["game"], "backup", with_artifacts=request.get('artifact_bundle', False))
             if request["action"] == "verify":
                 if input_stream.read(1):
                     raise StorageError('INVALID_BUNDLE')
@@ -321,14 +360,29 @@ def run(request, input_stream, output_stream):
                                 raise StorageError("ORIGINAL_ROWS_CHANGED")
                             counts[table] = missing
                         results.append({"store_id": spec["store_id"], "missing_or_changed_row_counts": counts})
-                write_all(output_stream, canonical({"game": request["game"], "sqlite_context": "service_pod", "stores": results}))
+                result = {"game": request["game"], "sqlite_context": "service_pod", "stores": results}
+                if request.get('artifact_bundle'):
+                    with closing(connect(files['game'])) as db: refs = artifacts.grand_references(db)
+                    root_map = artifacts.roots(request['game'], request['data_root'])
+                    if header['stores'][-1]['artifact_roots'] != root_map: raise StorageError('ARTIFACT_ROOT_SCOPE_CHANGED')
+                    result['artifacts'] = artifacts.check_pack(files['artifacts'], refs, root_map, check_live=True)
+                    artifacts.check_metadata(header['stores'][-1], refs, result['artifacts'])
+                write_all(output_stream, canonical(result))
             else:
                 _, authority = read_bundle(input_stream, stage, stores, request["game"], "authority")
                 if input_stream.read(1):
                     raise StorageError("INVALID_BUNDLE")
                 results = [restore_database(files[s["store_id"]], authority[s["store_id"]], s["path"], s) for s in stores]
-                write_all(output_stream, canonical({"game": request["game"], "sqlite_context": "isolated_restore_pod", "stores": results,
-                                               "current_auth_history_preserved": True, "restored_session_row_count": 0}))
+                result = {"game": request["game"], "sqlite_context": "isolated_restore_pod", "stores": results,
+                          "current_auth_history_preserved": True, "restored_session_row_count": 0}
+                if request.get('artifact_bundle'):
+                    with closing(connect(stores[0]['path'])) as db: refs = artifacts.grand_references(db)
+                    root_map = artifacts.roots(request['game'], request['data_root'])
+                    if header['stores'][-1]['artifact_roots'] != root_map: raise StorageError('ARTIFACT_ROOT_SCOPE_CHANGED')
+                    result['artifacts'] = artifacts.check_pack(files['artifacts'], refs, root_map, restore=True)
+                    artifacts.check_metadata(header['stores'][-1], refs, result['artifacts'])
+                    artifacts.check_sources(refs, root_map)
+                write_all(output_stream, canonical(result))
     finally:
         cleanup_stage(stage)
 
@@ -337,6 +391,6 @@ if __name__ == "__main__":
     try:
         run(json.loads(sys.argv[1]), sys.stdin.buffer, sys.stdout.buffer)
     except Exception as error:
-        code = str(error) if isinstance(error, StorageError) else "STORAGE_WORKER_FAILED"
+        code = str(error) if isinstance(error, (StorageError, artifacts.ArtifactError)) else "STORAGE_WORKER_FAILED"
         sys.stderr.write(json.dumps({"error_code": code}) + "\n")
         raise SystemExit(1) from None
