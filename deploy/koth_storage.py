@@ -560,8 +560,20 @@ def postgres_restore_check(kube, archive, header, ranges, authority_archive, aut
             with sql.open('xb') as output, current.open('rb') as stream:
                 os.chmod(sql, 0o600); output.write(b'BEGIN;TRUNCATE public.sessions;TRUNCATE public.dependency_hell_snapshot_hmac_keys, public.dependency_hell_submission_transition_hmac_keys;\n')
                 output.flush()
+                # SQL-only pg_restore may need seek/EOF while selecting tables.
+                # Stage the bounded, hash-checked dump inside the database Pod.
+                script = '''set -eu
+umask 077
+folder=$(mktemp -d /tmp/msgctf-storage-auth-XXXXXX)
+trap 'rm -f -- "$folder/archive.dump"; rmdir -- "$folder"' EXIT HUP INT TERM
+head -c "$1" > "$folder/archive.dump"
+actual=$(sha256sum "$folder/archive.dump")
+test "${actual%% *}" = "$2"
+pg_restore --file=- --data-only --table=dependency_hell_snapshot_hmac_keys --table=dependency_hell_submission_transition_hmac_keys "$folder/archive.dump"
+'''
                 kube.run(['exec', '-i', '-n', PG_NAMESPACE, 'deployment/' + PG_DEPLOYMENT, '-c', PG_CONTAINER, '--',
-                    'pg_restore', '--file=-', '--data-only', '--table=' + PG_AUTH_TABLES[0], '--table=' + PG_AUTH_TABLES[1]], input_file=stream, output_file=output)
+                    'timeout', '-k', '5', '90', 'sh', '-c', script, 'sh', str(current.stat().st_size), sha256(current)],
+                    input_file=stream, output_file=output, timeout=105)
                 output.write(b'\nCOMMIT;\n')
             with sql.open('rb') as input_file:
                 pg_command(kube, 'sql', database=database, input_file=input_file)
@@ -570,6 +582,8 @@ def postgres_restore_check(kube, archive, header, ranges, authority_archive, aut
             active = next(s for s in authority_header['stores'] if s['store_id'] == 'postgres')
             if observed['business_sha256'] != old['business_sha256'] or observed['auth_history_sha256'] != active['auth_history_sha256'] or observed['table_row_counts'].get('sessions', 0):
                 raise StorageError('RESTORE_VERIFICATION_FAILED')
+        if pg_metadata(kube, PG_DATABASE)['auth_history_sha256'] != active['auth_history_sha256']:
+            raise StorageError('SOURCE_AUTHORITY_CHANGED')
     return {'business_sha256': observed['business_sha256'], 'current_auth_history_preserved': True,
             'restored_session_row_count': 0, 'source_database_untouched': True, 'temporary_database_removed': True,
             'postgres_context': 'database_pod'}

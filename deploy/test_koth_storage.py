@@ -385,6 +385,14 @@ INSERT INTO submissions VALUES('new','PASS','newer');''')
         self.assertTrue(result['current_auth_history_preserved'])
         self.assertEqual(result['restored_session_row_count'], 0)
         self.assertEqual(controller.pg_metadata(self.kube, controller.PG_DATABASE), before)
+        original_metadata = controller.pg_metadata
+        def rotate_during_check(kube, database):
+            if database == controller.PG_DATABASE:
+                controller.pg_command(kube, 'sql', data=b"UPDATE dependency_hell_snapshot_hmac_keys SET key_bytes=decode(repeat('12',32),'hex') WHERE active;")
+            return original_metadata(kube, database)
+        with patch.object(controller, 'pg_metadata', side_effect=rotate_during_check):
+            with self.assertRaisesRegex(controller.StorageError, 'SOURCE_AUTHORITY_CHANGED'):
+                controller.postgres_restore_check(self.kube, old_file, header, ranges, current_file, authority, active_ranges, self.root, str(uuid.uuid4()))
         controller.pg_command(self.kube, 'sql', data=b"UPDATE period_results SET score=999;")
         with self.assertRaisesRegex(controller.StorageError, 'ORIGINAL_ROWS_CHANGED'):
             controller.postgres_verify(self.kube, old_file, header, ranges, self.root, str(uuid.uuid4()))
