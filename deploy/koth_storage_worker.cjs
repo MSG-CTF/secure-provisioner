@@ -75,7 +75,9 @@ function connect(file, writable = false) {
 
 function rowsDigest(db, table) {
   const statement = db.prepare(`SELECT * FROM "${table}"`); statement.setReturnArrays(true); statement.setReadBigInts(true);
-  return digest(statement.all().map(row => canonical(row.map(v => v instanceof Uint8Array ? { blob_hex: Buffer.from(v).toString('hex') } : v))).sort().join('\n'));
+  const hashes = [];
+  for (const row of statement.iterate()) hashes.push(digest(canonical(row.map(v => v instanceof Uint8Array ? { blob_hex: Buffer.from(v).toString('hex') } : v))));
+  return digest(hashes.sort().join('\n'));
 }
 
 function metadata(file, spec, closedSnapshot = false) {

@@ -127,8 +127,9 @@ def normalize(value):
 
 
 def rows_digest(db, table):
-    rows = [canonical([normalize(v) for v in row]) for row in db.execute('SELECT * FROM "' + table + '"')]
-    return hashlib.sha256(b"\n".join(sorted(rows))).hexdigest()
+    rows = [hashlib.sha256(canonical([normalize(v) for v in row])).hexdigest()
+            for row in db.execute('SELECT * FROM "' + table + '"')]
+    return hashlib.sha256('\n'.join(sorted(rows)).encode()).hexdigest()
 
 
 def metadata(path, spec, *, closed_snapshot=False):
