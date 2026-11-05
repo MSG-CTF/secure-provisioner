@@ -187,7 +187,7 @@ class GrandArtifactWorkerTests(unittest.TestCase):
         path.write_bytes(b'X'*len(self.source))
         p=self.call('backup',success=False);self.assertEqual(p.stdout,b'');self.assertIn(b'ARTIFACT_FILE_HASH_MISMATCH',p.stderr)
         path.unlink();p=self.call('backup',success=False);self.assertEqual(p.stdout,b'')
-        self.assertFalse(list(Path('/data/.msgctf-storage').iterdir()))
+        self.assertFalse(list((Path('/data')/('.msgctf-storage-'+str(os.geteuid()))).iterdir()))
 
     def test_verify_detects_changed_live_file_and_mixed_database_file_snapshot(self):
         old=self.call('backup').stdout
