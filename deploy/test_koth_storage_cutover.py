@@ -154,6 +154,13 @@ class RecoveryDecisionTests(unittest.TestCase):
             self.assertEqual(self.task.recover()['phase'],'committed')
         self.assertFalse(self.task.active.exists())
 
+    def test_boot_recovery_queues_agent_start_without_waiting_on_its_own_dependency(self):
+        self.task.save('ready',agent_was_active=True)
+        with patch.dict(os.environ,{'MSGCTF_BOOT_RECOVERY':'1'}),patch.object(self.task,'fence'),patch.object(self.task,'autoscale'),patch.object(self.task,'system') as system:
+            self.task.finish(True,{'live_pvc_uid':'new'})
+            system.assert_called_once_with(['systemctl','--no-block','start',c.AGENT])
+        self.assertEqual(self.task.state['phase'],'committed')
+
     def test_failed_volume_retirement_refuses_active_transactions_and_referenced_claim(self):
         self.task.save('committed')
         with self.assertRaisesRegex(s.StorageError,'ONLY_INACTIVE'):self.task.retire_failed()

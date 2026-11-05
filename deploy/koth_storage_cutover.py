@@ -474,8 +474,11 @@ class Cutover:
         # cannot distinguish a request accepted between two API calls otherwise.
         self.save('publishing', decision='commit' if forward else 'rollback_publish', result=result)
         self.fence(False); self.autoscale(False)
-        if self.state['agent_was_active'] and not os.environ.get('MSGCTF_BOOT_RECOVERY'):
-            self.system(['systemctl','start',AGENT])
+        if self.state['agent_was_active']:
+            # A boot recovery unit is itself a dependency of the agent. Queue
+            # agent startup after this unit completes instead of waiting on it.
+            command=['systemctl','--no-block','start',AGENT] if os.environ.get('MSGCTF_BOOT_RECOVERY') else ['systemctl','start',AGENT]
+            self.system(command)
         self.save('committed' if forward else 'rolled_back', result=result)
         if self.active.exists():
             if self.read(self.active).get('operation_id') != self.operation_id: raise s.StorageError('CUTOVER_RESOURCE_CONFLICT')
