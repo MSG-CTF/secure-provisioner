@@ -146,7 +146,8 @@ class Cutover:
         allowed = ('format_version', 'game', 'operation_id', 'actor', 'phase', 'decision', 'recorded_at', 'fault',
                    'archive_sha256', 'original_pvc_uid', 'candidate_pvc_uid', 'candidate_pvc_name', 'error_code',
                    'restored_file_count', 'current_auth_history_preserved', 'restored_session_row_count',
-                   'postgres_original_oid', 'postgres_candidate_oid', 'postgres_previous_database', 'failed_candidate_retired', 'result')
+                   'postgres_original_oid', 'postgres_candidate_oid', 'postgres_previous_database', 'failed_candidate_retired',
+                   'ready_pod_uid', 'ready_pvc_uid', 'ready_replica_count', 'result')
         return {key: self.state[key] for key in allowed if key in self.state}
 
     def plan(self, archive=None, expected_hash=None, fault='none'):
@@ -611,7 +612,9 @@ pg_restore --file=- --data-only --table=dependency_hell_snapshot_hmac_keys --tab
             self.save('pvc_switch_intent'); self.templates(True); self.fail('after_pvc_switch')
             self.save('postgres_swap_intent'); self.postgres_switch(True); self.fail('after_pg_swap')
             self.remove_workers(); self.save('application_start_intent'); self.scale(False)
-            source=self.wait_ready(True); self.save('ready'); self.fail('after_ready')
+            source=self.wait_ready(True)
+            self.save('ready',ready_pod_uid=source['pod_uid'],ready_pvc_uid=source['pvc_uid'],ready_replica_count=source['replica_count'])
+            self.fail('after_ready')
             result=self.validate(source)
             return self.finish(True,result)
         except Exception as error:
