@@ -125,6 +125,17 @@ function stageDirectory(request) {
   const folder = path.join(parent, request.operation_id + '-' + request.action); fs.mkdirSync(folder, { mode: 0o700 }); return folder;
 }
 
+function sqliteSpillDirectory(folder) {
+  const config = new DatabaseSync(':memory:');
+  try {
+    const before = config.prepare('PRAGMA temp_store_directory').get();
+    config.exec("PRAGMA temp_store_directory='" + folder.replaceAll("'", "''") + "'");
+    const after = config.prepare('PRAGMA temp_store_directory').get();
+    if (folder && after?.temp_store_directory !== folder) fail('SQLITE_SPILL_DIRECTORY_UNSUPPORTED');
+    return before?.temp_store_directory || '';
+  } finally { config.close(); }
+}
+
 function cleanupStage(folder) {
   for (const file of fs.readdirSync(folder)) {
     if (!/^(backup|authority|candidate)-(game|auth)\.sqlite(-wal|-shm|-journal)?$/.test(file) || !fs.lstatSync(path.join(folder, file)).isFile()) fail('SCRATCH_CONTENT_UNEXPECTED');
@@ -219,7 +230,10 @@ async function run(request, inputFd = 0, output = process.stdout) {
   }
   if (request.action === 'inspect') return json({ format_version: VERSION, game: request.game, sqlite_context: 'service_pod', stores: stores.map(s => metadata(s.path, s)), deleted_sqlite_handle_count: 0 });
   const folder = stageDirectory(request);
+  // Keep disk-backed SQLite spill inside the verified private PVC stage.
+  let previousSpill;
   try {
+    previousSpill = sqliteSpillDirectory(folder);
     if (request.action === 'backup') {
       const info = [], files = [];
       for (const spec of stores) { const file = path.join(folder, 'backup-' + spec.store_id + '.sqlite'); await backupDatabase(spec.path, file, Date.now() + 45000); info.push(metadata(file, spec, true)); files.push(file); }
@@ -263,7 +277,7 @@ async function run(request, inputFd = 0, output = process.stdout) {
         json({ game: request.game, sqlite_context: request.action==='rebase'?'offline_rebase_pod':'isolated_restore_pod', stores: results, current_auth_history_preserved: true, restored_session_row_count: 0 });
       }
     }
-  } finally { cleanupStage(folder); }
+  } finally { try { if (previousSpill !== undefined) sqliteSpillDirectory(previousSpill); } finally { cleanupStage(folder); } }
 }
 
 module.exports = { run, metadata, backupDatabase, restoreDatabase, checkHandles, safePath, validateRequest, resolveStores, fileDigest };

@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -66,6 +67,19 @@ class ContractTests(unittest.TestCase):
         changed=kube.template(kube.current,desired)
         self.assertEqual(changed['spec']['volumes'],kube.current['spec']['volumes'])
         self.assertEqual(changed['spec']['containers'][0]['image'],desired['settings']['containers'][0]['image'])
+
+
+@unittest.skipUnless(sys.platform=='linux' and os.environ.get('KOTH_STORAGE_SMALL_TMP_PROBE')=='1','private mount namespace small-tmp integration required')
+class LargeSQLiteSpillTests(unittest.TestCase):
+    def test_python_and_node_large_immutable_comparison_survives_16_mib_tmp(self):
+        command=['unshare','--mount','--propagation','private',sys.executable,str(Path(__file__).with_name('koth_storage_spill_probe.py')),shutil.which('node')]
+        if os.geteuid()!=0:command=['sudo','-n',*command]
+        result=subprocess.run(command,capture_output=True,text=True,timeout=180)
+        self.assertEqual(result.returncode,0,result.stderr)
+        proof=json.loads(result.stdout)
+        self.assertEqual({v['game'] for v in proof['actual_python_and_node_small_tmp_regressions']},{'jenga','swanopoly'})
+        self.assertTrue(next(v for v in proof['actual_python_and_node_small_tmp_regressions'] if v['game']=='jenga')['default_sqlite_spill_failed'])
+        self.assertTrue(all(v['private_pvc_stage_verify_passed'] and v['scratch_cleaned'] for v in proof['actual_python_and_node_small_tmp_regressions']))
 
 
 @unittest.skipUnless(sys.platform=='linux','root-private state and atomic Unix fsync')
