@@ -304,7 +304,7 @@ class ControllerPolicyTests(unittest.TestCase):
                     def run(self, *a, **kw): pass
                     def delete_owned_namespace(self, *args): self.deleted.append(args)
                 kube = Kube(); storage = controller.Storage('jenga', operation, 'test', root=root, kube=kube)
-                item = {'store_id': 'game', 'engine': 'sqlite', 'database_path': '/data/jenga.db', 'auth_history_sha256': 'current'}
+                item = {'store_id': 'game', 'engine': 'sqlite', 'database_path': '/data/jenga.db', 'database_bytes': 512, 'auth_history_sha256': 'current'}
                 header = {'source': source, 'stores': [item], 'game': 'jenga'}
                 def execute(target, action, **kwargs):
                     if action == 'restore':
