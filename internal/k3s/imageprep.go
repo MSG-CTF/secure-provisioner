@@ -75,7 +75,7 @@ func imageNodeEligible(n corev1.Node, arch string) bool {
 	return false
 }
 
-func applyImagePreference(resources ResourceSet, names []string) {
+func restrictImagePlacement(resources ResourceSet, names []string) {
 	if len(names) == 0 {
 		return
 	}
@@ -87,6 +87,18 @@ func applyImagePreference(resources ResourceSet, names []string) {
 		if pod.Affinity.NodeAffinity == nil {
 			pod.Affinity.NodeAffinity = &corev1.NodeAffinity{}
 		}
-		pod.Affinity.NodeAffinity.PreferredDuringSchedulingIgnoredDuringExecution = append(pod.Affinity.NodeAffinity.PreferredDuringSchedulingIgnoredDuringExecution, corev1.PreferredSchedulingTerm{Weight: 100, Preference: corev1.NodeSelectorTerm{MatchFields: []corev1.NodeSelectorRequirement{{Key: "metadata.name", Operator: corev1.NodeSelectorOpIn, Values: names}}}})
+		required := pod.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+		constraint := corev1.NodeSelectorRequirement{Key: "metadata.name", Operator: corev1.NodeSelectorOpIn, Values: names}
+		if required == nil {
+			required = &corev1.NodeSelector{NodeSelectorTerms: []corev1.NodeSelectorTerm{{MatchFields: []corev1.NodeSelectorRequirement{constraint}}}}
+			pod.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution = required
+			continue
+		}
+		for index := range required.NodeSelectorTerms {
+			term := &required.NodeSelectorTerms[index]
+			if len(term.MatchExpressions) != 0 || len(term.MatchFields) != 0 {
+				term.MatchFields = append(term.MatchFields, constraint)
+			}
+		}
 	}
 }

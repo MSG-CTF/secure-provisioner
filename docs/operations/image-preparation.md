@@ -1,9 +1,10 @@
 # Automatic image preparation
 
-The implementation is disabled by default. Preparation changes only the actual
-node's K3s image cache. It does not approve digests, start challenge containers,
-reserve capacity, or make readiness a prerequisite for ordinary instance creation.
-Backend may separately choose staged release activation policy.
+Preparation changes only the actual node's K3s image cache. It does not approve
+digests, start challenge containers or reserve capacity. New K3s challenge creates
+require fresh preparation evidence and use only preloaded images. Preparation is
+disabled by default; leaving it disabled blocks new K3s creates with
+`IMAGE_NOT_READY`. Backend may separately choose staged release activation policy.
 
 ## Runtime installation
 
@@ -176,8 +177,10 @@ and time separately using approved node telemetry before calling a run a cold pu
 
 Historical operation status and current readiness are separate. The report keeps
 server `observed_at`/`valid_until` exactly and marks expired/future observations
-not currently ready. Runtime readiness is advisory: one ready node among several
-eligible nodes can legitimately set `ready:true`; both counts are retained.
+not currently ready. One ready node among several eligible nodes can legitimately
+set `ready:true`; both counts are retained. At create time Runtime also matches
+observed node identities against live eligible inventory and restricts placement
+to the prepared nodes. Query responses alone do not authorize workload creation.
 Missing or partial frozen target coverage is explicitly unverified.
 `operation_target_scope` describes only frozen node results. The API does not
 expose the original request's complete target list, so
@@ -188,7 +191,8 @@ It does not enable Backend generation-receipt consumption or deliver credentials
 
 ### Preparation rollout
 
-Enable Runtime, then Backend's preparation worker and Scheduler's advisory query.
+Prepare trusted agents, cache content and observations before rolling out the
+local-only create path. Enable Backend's preparation worker and Scheduler's query.
 Submit the complete approved release containers to `POST /v1/image-preparations`.
 Poll Location until terminal; inspect per-node/per-image classified failures.
 `SUCCEEDED` is historical. Check `POST /v1/image-readiness/query` for current hints.
@@ -253,7 +257,39 @@ operation/watch retention is currently operator-managed; no automatic pruning ex
 Create requests accept optional non-null UUID `release_id` and AMD64/ARM64
 `architecture`, preserve them in durable commands/fingerprints, and keep omission
 compatible. Every K3s workload requires Linux and the trusted target architecture
-through node selectors. K3s performs actual manifest selection at lazy pull; the
-preparation agent verifies manifest platform before declaring readiness. Fresh whole
-image-set nodes add only preferred node affinity. Hint failures leave lazy pull and
-the existing mandatory security checks in place.
+through node selectors. The preparation agent verifies complete content and
+manifest platform before declaring readiness. Runtime requires fresh whole
+image-set observations matching the current Node UID, boot ID, machine ID and
+architecture, and ANDs those node names into required node affinity. Missing,
+expired or unavailable preparation returns retryable `IMAGE_NOT_READY` before
+creating a Namespace; existing isolation, image approval and cleanup rules apply.
+
+Challenge containers use `imagePullPolicy: Never`. Even if a cached image is
+removed between observation and startup, the kubelet cannot download a replacement;
+the attempt fails through the existing readiness/cleanup path. API-default
+normalization still treats an omitted pull policy as Kubernetes' `IfNotPresent`,
+so it cannot conceal a changed or missing `Never` during resource verification.
+
+Keep the approved full image reference, including its digest, when importing into
+the execution VM's K3s/containerd `k8s.io` store. A tar file merely copied onto the
+VM or loaded into a separate Docker daemon is not sufficient. Use the existing
+preparation agent to verify the exact reference, platform and content. Preparation
+may fetch missing images ahead of time; instance creation never does. Preserve
+rollback images and re-verify after garbage collection, reboot or node replacement.
+Running instances are not restarted by this change; status/delete remain usable.
+
+The first selected pilot is heavy-01 at `34.135.180.218`, Runtime target
+`3243bc60-2285-4553-a20e-032abe567f69`, for the user's 17 dynamic challenges.
+Do not substitute another heavy-01 or treat historical catalog versions as the
+current 17 releases. Verify their current release digests before bulk preparation.
+The user excluded web-notebook from these 17 challenges. The
+[scoped canary record](../testing/results/2026-11-05-k3s-preloaded-heavy01.json)
+records one approved crypto-nerves image becoming Ready with `Never`, a missing
+digest refusing startup with `ErrImageNeverPull`, no `Pulling` events for either
+Pod, and removal of the test Namespace. It uses a synthetic QA flag and does not
+replace the production Runtime or establish readiness of all 17 challenges.
+Live Go fixtures require their exact test image references already cached on
+eligible nodes; their test-only Node status lookup is not production agent evidence.
+
+References: [K3s image import](https://docs.k3s.io/add-ons/import-images) and
+[Kubernetes image pull policy](https://v1-36.docs.kubernetes.io/docs/concepts/containers/images/).

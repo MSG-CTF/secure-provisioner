@@ -178,7 +178,7 @@ func validEvidence(n Node, ref string, e Evidence) bool {
 	return e.Complete && e.NodeUID == n.UID && e.BootID != "" && e.BootID == n.BootID && e.OS == "linux" && e.Architecture == n.Architecture && e.Image == ref && DigestPattern.MatchString(e.ResolvedDigest)
 }
 
-// ReadyNodes is advisory: store failures and stale evidence return no preference.
+// ReadyNodes authorizes placement only against fresh evidence and current node identities.
 func (s *Service) ReadyNodes(ctx context.Context, target, arch string, images []string) []string {
 	if s == nil || !s.Inventory.Enabled(target, arch) {
 		return nil
@@ -193,8 +193,15 @@ func (s *Service) ReadyNodes(ctx context.Context, target, arch string, images []
 	if err != nil || !found || !obs.Complete || obs.PolicyRevision != s.Policy.Revision() || obs.ObservedAt.After(now) || !obs.ValidUntil.After(now) {
 		return nil
 	}
+	current, err := s.Inventory.Nodes(ctx, target, arch)
+	if err != nil || ctx.Err() != nil || !obs.ValidUntil.After(s.Now()) {
+		return nil
+	}
 	names := []string{}
 	for _, n := range obs.Nodes {
+		if !slices.Contains(current, n.Node) {
+			continue
+		}
 		ready := true
 		for _, image := range images {
 			if !validEvidence(n.Node, image, n.Images[image]) {

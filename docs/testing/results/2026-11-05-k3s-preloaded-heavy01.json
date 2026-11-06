@@ -1,0 +1,116 @@
+{
+  "scope": {
+    "public_ip": "34.135.180.218",
+    "runtime_target_id": "3243bc60-2285-4553-a20e-032abe567f69",
+    "challenge_count": 17,
+    "challenge_slugs": [
+      "crypto-nerves",
+      "crypto-reused-seal",
+      "misc-cashout",
+      "misc-reqr",
+      "osint-the-past-has-an-address",
+      "pwn-ghost-file",
+      "pwn-note",
+      "pwn-price-tag",
+      "pwn-random6",
+      "rev-tinyvm",
+      "web-afterimage",
+      "web-daily-point",
+      "web-grade-tampering",
+      "web-logout-please",
+      "web-open-house",
+      "web3-infinite-pack",
+      "web3-split-brain-oracle"
+    ],
+    "excluded": [
+      "web-notebook"
+    ],
+    "scope_source": "Slugs from the selected Runtime policy file, excluding web-notebook at the user's request; not a Backend active-release digest snapshot.",
+    "user_confirmed_count_and_notebook_exclusion": true,
+    "all_17_live_executed": false
+  },
+  "validation": {
+    "kind": "K3s preloaded-image smoke test; patched Runtime API not deployed",
+    "trusted_agent_cache_inspection": true,
+    "positive_ready": true,
+    "negative_no_pull": true,
+    "production_runtime_replaced": false
+  },
+  "first_attempt": {
+    "test_id": "1e0810a3-3f9a-4a50-ac67-5eb2708be0ba",
+    "status": "FAILED",
+    "error_code": "CACHED_IMAGE_DID_NOT_SERVE",
+    "namespace_removed": true,
+    "cause": "The synthetic QA flag did not satisfy the application's required format; corrected only the synthetic test input."
+  },
+  "successful_attempt": {
+    "test_id": "287eba9d-dac0-44e5-b69c-c1ab31fe54c5",
+    "target_id": "3243bc60-2285-4553-a20e-032abe567f69",
+    "server": "https://34.135.180.218:6443",
+    "image": "ghcr.io/msg-ctf/challenges/crypto-nerves/web@sha256:c6882b9a5cf92b42948ea1bc6d04de0e6bde218e6cc39f3aca49c2f19224df06",
+    "namespace": "ctf-local-cache-287eba9d-dac",
+    "pulls_requested": false,
+    "production_runtime_replaced": false,
+    "cache_evidence": {
+      "machine_id": "ce34c02701b2444a9d0884b5ce05ef3f",
+      "node_uid": "3243bc60-2285-4553-a20e-032abe567f69",
+      "boot_id": "e663cfe0-7c42-40aa-bccf-3db67351e3cf",
+      "os": "linux",
+      "architecture": "AMD64",
+      "image": "ghcr.io/msg-ctf/challenges/crypto-nerves/web@sha256:c6882b9a5cf92b42948ea1bc6d04de0e6bde218e6cc39f3aca49c2f19224df06",
+      "resolved_manifest_digest": "sha256:c6882b9a5cf92b42948ea1bc6d04de0e6bde218e6cc39f3aca49c2f19224df06",
+      "complete": true
+    },
+    "positive": {
+      "ready": true,
+      "node": "msg-problem-heavy-01.us-central1-a.c.msg-602221513-2.internal",
+      "image": "ghcr.io/msg-ctf/challenges/crypto-nerves/web@sha256:c6882b9a5cf92b42948ea1bc6d04de0e6bde218e6cc39f3aca49c2f19224df06",
+      "image_id": "ghcr.io/msg-ctf/challenges/crypto-nerves/web@sha256:c6882b9a5cf92b42948ea1bc6d04de0e6bde218e6cc39f3aca49c2f19224df06",
+      "pod_uid": "f73f7006-e103-4c98-abad-55135fee41f5"
+    },
+    "negative": {
+      "reason": "ErrImageNeverPull",
+      "image_pull_policy": "Never"
+    },
+    "events": [
+      {
+        "pod": "cached-image",
+        "reason": "Scheduled",
+        "message": "Successfully assigned ctf-local-cache-287eba9d-dac/cached-image to msg-problem-heavy-01.us-central1-a.c.msg-602221513-2.internal"
+      },
+      {
+        "pod": "cached-image",
+        "reason": "Pulled",
+        "message": "Container image \"ghcr.io/msg-ctf/challenges/crypto-nerves/web@sha256:c6882b9a5cf92b42948ea1bc6d04de0e6bde218e6cc39f3aca49c2f19224df06\" already present on machine and can be accessed by the pod"
+      },
+      {
+        "pod": "cached-image",
+        "reason": "Created",
+        "message": "Container created"
+      },
+      {
+        "pod": "cached-image",
+        "reason": "Started",
+        "message": "Container started"
+      },
+      {
+        "pod": "missing-image",
+        "reason": "Scheduled",
+        "message": "Successfully assigned ctf-local-cache-287eba9d-dac/missing-image to msg-problem-heavy-01.us-central1-a.c.msg-602221513-2.internal"
+      },
+      {
+        "pod": "missing-image",
+        "reason": "ErrImageNeverPull",
+        "message": "Container image \"ghcr.io/msg-ctf/challenges/crypto-nerves/web@sha256:0000000000000000000000000000000000000000000000000000000000000000\" is not present with pull policy of Never"
+      },
+      {
+        "pod": "missing-image",
+        "reason": "Failed",
+        "message": "Error: ErrImageNeverPull"
+      }
+    ],
+    "status": "PASSED",
+    "namespace_removed": true,
+    "completed_at": "2026-11-05T14:52:31.033117+00:00"
+  }
+}
