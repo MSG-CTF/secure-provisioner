@@ -37,7 +37,8 @@
     "ghcr.io/msg-ctf/challenges/rev-tinyvm/tinyvm",
     "ghcr.io/msg-ctf/challenges/crypto-nerves/web",
     "ghcr.io/msg-ctf/challenges/misc-cashout/web",
-    "ghcr.io/msg-ctf/challenges/osint-the-past-has-an-address/web"
+    "ghcr.io/msg-ctf/challenges/osint-the-past-has-an-address/web",
+    "ghcr.io/msg-ctf/challenges/misc-reqr/web"
   ],
   "images": [
     {
@@ -572,6 +573,31 @@
       "readiness_http": {
         "path": "/healthz",
         "port": 9090
+      }
+    },
+    {
+      "image": "ghcr.io/msg-ctf/challenges/misc-reqr/web@sha256:c4746aba3babb8225a927dd42a0392e9f083c66a76b899c627ce64160e289b6e",
+      "container": "web",
+      "isolation_profile": "WEB",
+      "status": "create_enabled",
+      "ci_smoke_enabled": false,
+      "requires_flag": false,
+      "run_as_user": 10001,
+      "ports": [
+        8000
+      ],
+      "exposed_ports": [
+        8000
+      ],
+      "writable_paths": [
+        {
+          "path": "/tmp",
+          "size_mib": 16
+        }
+      ],
+      "readiness_http": {
+        "path": "/healthz",
+        "port": 8000
       }
     }
   ]

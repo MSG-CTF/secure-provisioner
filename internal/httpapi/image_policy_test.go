@@ -309,3 +309,26 @@ func TestPublishedWebImagePoliciesKeepUnverifiedChallengesBlocked(t *testing.T) 
 		t.Fatal("stale Logout Please image was accepted")
 	}
 }
+
+func TestMiscReqrWebRepositoryIsManaged(t *testing.T) {
+	catalog, err := LoadImagePolicies("../../config/web-image-policies.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const repository = "ghcr.io/msg-ctf/challenges/misc-reqr/web"
+	if _, managed := catalog.managed[repository]; !managed {
+		t.Fatal("misc-reqr web repository must be managed")
+	}
+	request := validCreateWorkloadRequest()
+	request.Workload.Containers = []RuntimeContainer{{
+		Name: "web", Image: repository + "@sha256:c4746aba3babb8225a927dd42a0392e9f083c66a76b899c627ce64160e289b6e",
+		Ports: []int{8000}, Expose: true, RunAsUser: 10001,
+	}}
+	if err := catalog.Apply(&request); err != nil {
+		t.Fatalf("approved misc-reqr image rejected: %v", err)
+	}
+	request.Workload.Containers[0].Image = repository + "@sha256:" + strings.Repeat("0", 64)
+	if err := catalog.Apply(&request); err == nil {
+		t.Fatal("unreviewed misc-reqr digest was accepted")
+	}
+}
