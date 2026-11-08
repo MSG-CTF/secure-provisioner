@@ -1,20 +1,33 @@
-# MSG CTF Secure Provisioner
+<div align="center">
+<h1>MSG CTF · Runtime</h1>
+<p>문제를 실행하고 네트워크 격리·비밀값 주입·접속·삭제를 처리하는 런타임</p>
+<p><a href="https://msg-ctf.github.io/platform.html">플랫폼</a> · <a href="#development">개발 문서</a></p>
+</div>
 
-스케줄러가 선택한 실행 대상에 문제를 띄우고 격리·접속·삭제를 처리하는 Go 런타임입니다
-K3s 컨테이너 실행과 전용 VM·Windows 연동을 구분하고, 작업 상태와 정리 결과를 API로 돌려줍니다
+<h2 align="center">Overview</h2>
 
-[플랫폼 전체 소개](https://github.com/MSG-CTF/msg-ctf.github.io)
+<table align="center">
+<tr><th width="260">실행·격리</th><th width="260">접속</th><th width="260">정리·복구</th></tr>
+<tr><td align="center">K3s · 전용 VM · Windows</td><td align="center">환경변수·비밀값·Gateway</td><td align="center">자원 삭제·재시작 복구·CPU 원복</td></tr>
+</table>
 
-## 맡은 일
+<h2 align="center">Contributors</h2>
 
-- 단일·다중 컨테이너의 Namespace·Deployment·Service 생성과 준비 확인
-- 네트워크·프로세스·자원 격리와 승인된 이미지별 실행 정책
-- 백엔드 비밀값 조회와 컨테이너별 플래그·환경변수 주입
-- HTTP·TCP Gateway, 접속 경로 회수와 실제 Kubernetes 자원 삭제
-- 영속 작업·체크포인트·재시도와 재시작 후 생성·정리 복구
-- 이미지 사전 준비·기동 CPU 복귀, KOTH 저장소 백업·복구와 Windows 실행 연결
+<table align="center">
+<tr><th align="center" colspan="6"><a href="https://github.com/MSG-CTF/secure-provisioner/tree/dev">Runtime</a></th><th align="center" colspan="6"><a href="https://github.com/MSG-CTF">PM</a></th></tr>
+<tr>
+<td align="center" valign="top" colspan="6" width="390"><a href="https://github.com/goldsimchoi"><img src="https://avatars.githubusercontent.com/u/173701392?v=4&amp;s=128" width="52" height="52" alt="goldsimchoi"></a><br><a href="https://github.com/goldsimchoi"><b>goldsimchoi</b></a><br><sub>Runtime API · K3s 격리<br>Gateway · Windows 실행</sub></td>
+<td align="center" valign="top" colspan="6" width="390"><a href="https://github.com/jongcoding"><img src="https://avatars.githubusercontent.com/u/128033808?v=4&amp;s=128" width="52" height="52" alt="jongcoding"></a><br><a href="https://github.com/jongcoding"><b>jongcoding</b></a><br><sub>운영 QA·기동·삭제 개선<br>KOTH 저장·복구</sub></td>
+</tr>
+<tr><th align="center" colspan="6"><a href="https://github.com/MSG-CTF/resource-broker">Resource Broker</a></th><th align="center" colspan="6"><a href="https://github.com/MSG-CTF/msg-backend">Backend</a></th></tr>
+<tr>
+<td align="center" valign="top" colspan="6" width="390"><a href="https://github.com/gonas0919"><img src="https://avatars.githubusercontent.com/u/143320324?v=4&amp;s=128" width="52" height="52" alt="gonas0919"></a><br><a href="https://github.com/gonas0919"><b>gonas0919</b></a><br><sub>Windows 실행기<br>mTLS 설정 연결</sub></td>
+<td align="center" valign="top" colspan="6" width="390"><a href="https://github.com/dnehdx"><img src="https://avatars.githubusercontent.com/u/178199953?v=4&amp;s=128" width="52" height="52" alt="dnehdx"></a><br><a href="https://github.com/dnehdx"><b>dnehdx</b></a><br><sub>RE:QR 이미지<br>실행 정책 수정</sub></td>
+</tr>
+</table>
 
-## 함께 만든 사람들
+<details>
+<summary>기여 기록 · 관련 PR</summary>
 
 | 기여자 | 기여 내용 | 관련 PR |
 | --- | --- | --- |
@@ -23,16 +36,18 @@ K3s 컨테이너 실행과 전용 VM·Windows 연동을 구분하고, 작업 상
 | [gonas0919](https://github.com/gonas0919) | Windows 실행기 mTLS 설정 연동 | [#88](https://github.com/MSG-CTF/secure-provisioner/pull/88) |
 | [dnehdx](https://github.com/dnehdx) | RE:QR 문제 이미지 실행 정책 수정 | [#135](https://github.com/MSG-CTF/secure-provisioner/pull/135) |
 
-2026-11-09까지 병합된 PR과 커밋을 기준으로 정리했습니다
+</details>
 
-## 기술 구성
+<h2 align="center">Tech Stack</h2>
 
-Go · Kubernetes/K3s · PostgreSQL · Docker · Nginx
+<p align="center"><img src="https://raw.githubusercontent.com/MSG-CTF/msg-ctf.github.io/67e93a09ce630910f98ae56fb118ca1317af78e0/assets/tech/go.svg" width="44" height="44" alt="Go" title="Go"> &nbsp; <img src="https://raw.githubusercontent.com/MSG-CTF/msg-ctf.github.io/67e93a09ce630910f98ae56fb118ca1317af78e0/assets/tech/k3s.svg" width="44" height="44" alt="K3s" title="K3s"> &nbsp; <img src="https://raw.githubusercontent.com/MSG-CTF/msg-ctf.github.io/67e93a09ce630910f98ae56fb118ca1317af78e0/assets/tech/postgresql.svg" width="44" height="44" alt="PostgreSQL" title="PostgreSQL"> &nbsp; <img src="https://raw.githubusercontent.com/MSG-CTF/msg-ctf.github.io/67e93a09ce630910f98ae56fb118ca1317af78e0/assets/tech/docker.svg" width="44" height="44" alt="Docker" title="Docker"> &nbsp; <img src="https://raw.githubusercontent.com/MSG-CTF/msg-ctf.github.io/67e93a09ce630910f98ae56fb118ca1317af78e0/assets/tech/nginx.svg" width="44" height="44" alt="Nginx" title="Nginx"><br><sub>Go · K3s · PostgreSQL · Docker · Nginx</sub></p>
 
-## 개발·운영 문서
+## Development
 
 - [런타임 API](docs/api/runtime-operations.md)
 - [백엔드 비밀값 주입](docs/operations/backend-secret-injection.md)
 - [이미지 사전 준비](docs/operations/image-preparation.md)
 - [K3s 삭제 대기 개선](docs/operations/sqlite-namespace-cache.md)
-- [기존 개발·설정 참고 문서](README.reference.md)
+- [설치·실행 안내](README.reference.md)
+
+<p align="center"><sub><a href="https://github.com/MSG-CTF/msg-ctf.github.io/blob/67e93a09ce630910f98ae56fb118ca1317af78e0/docs/tech-icons.md">아이콘 출처</a></sub></p>
