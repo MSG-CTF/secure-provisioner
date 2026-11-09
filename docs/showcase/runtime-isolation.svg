@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="660" viewBox="0 0 1000 660" role="img" aria-labelledby="title desc"><title id="title">Runtime 실행 경로와 K3s 격리</title><desc id="desc">Linux x86_64 ARM64는 아키텍처가 맞는 K3s 대상에서 실행하며 Windows는 별도 VM executor 경로를 사용합니다. 인스턴스별 Namespace와 NetworkPolicy, SecurityContext, 자원 제한을 적용합니다.</desc>
+<defs><marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M1 1 7 4 1 7" fill="none" stroke="#bd955f" stroke-width="1.5"/></marker></defs>
+<rect width="1000" height="660" rx="16" fill="#201b16"/>
+<g font-family="Segoe UI, Malgun Gothic, Apple SD Gothic Neo, sans-serif" fill="#f4ede0">
+<text x="30" y="46" font-size="27" font-weight="650" fill="#f4ede0" text-anchor="start">RUNTIME / EXECUTION &amp; ISOLATION</text>
+<rect x="30" y="78" width="285" height="80" rx="9" fill="#2b251e" stroke="#655442"/>
+<text x="172.5" y="110" font-size="22" font-weight="600" fill="#f4ede0" text-anchor="middle">Backend / Scheduler</text>
+<text x="172.5" y="139" font-size="17" font-weight="400" fill="#c7bbae" text-anchor="middle">실행 대상 · 이미지 · 환경 설정</text>
+<rect x="365" y="78" width="270" height="80" rx="9" fill="#3c2d1d" stroke="#c7a46c"/>
+<text x="500.0" y="110" font-size="22" font-weight="600" fill="#f4ede0" text-anchor="middle">Runtime API</text>
+<text x="500.0" y="139" font-size="17" font-weight="400" fill="#c7bbae" text-anchor="middle">작업 ID · 상태 · 재시도</text>
+<path d="M315 118H365" fill="none" stroke="#bd955f" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="30" y="218" width="600" height="95" rx="9" fill="#3c2d1d" stroke="#c7a46c"/>
+<text x="330.0" y="250" font-size="22" font-weight="600" fill="#f4ede0" text-anchor="middle">Linux / K3s</text>
+<text x="330.0" y="279" font-size="17" font-weight="400" fill="#c7bbae" text-anchor="middle">x86_64 (amd64) · ARM64</text>
+<rect x="680" y="218" width="290" height="95" rx="9" fill="#2b251e" stroke="#655442"/>
+<text x="825.0" y="250" font-size="22" font-weight="600" fill="#f4ede0" text-anchor="middle">Windows VM</text>
+<text x="825.0" y="279" font-size="17" font-weight="400" fill="#c7bbae" text-anchor="middle">HTTPS · mTLS · EXE 실행</text>
+<path d="M500 158V188H330V218" fill="none" stroke="#bd955f" stroke-width="2" marker-end="url(#arrow)"/>
+<path d="M500 188H825V218" fill="none" stroke="#bd955f" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="30" y="349" font-size="19" font-weight="400" fill="#e0bc86" text-anchor="start">이미지와 실행 노드의 CPU 아키텍처를 맞춰 배정</text>
+<rect x="30" y="378" width="290" height="130" rx="10" fill="#2b251e" stroke="#c7a46c" stroke-dasharray="6 4"/>
+<text x="175" y="410" font-size="20" font-weight="600" fill="#f4ede0" text-anchor="middle">INSTANCE A</text>
+<text x="175" y="444" font-size="18" font-weight="400" fill="#d7c4a7" text-anchor="middle">Namespace · Pod · Secret</text>
+<text x="175" y="478" font-size="19" font-weight="400" fill="#e0bc86" text-anchor="middle">NetworkPolicy</text>
+<rect x="340" y="378" width="290" height="130" rx="10" fill="#2b251e" stroke="#c7a46c" stroke-dasharray="6 4"/>
+<text x="485" y="410" font-size="20" font-weight="600" fill="#f4ede0" text-anchor="middle">INSTANCE B</text>
+<text x="485" y="444" font-size="18" font-weight="400" fill="#d7c4a7" text-anchor="middle">Namespace · Pod · Secret</text>
+<text x="485" y="478" font-size="19" font-weight="400" fill="#e0bc86" text-anchor="middle">NetworkPolicy</text>
+<text x="680" y="396" font-size="22" font-weight="600" fill="#f4ede0" text-anchor="start">K3s 실행 정책</text>
+<text x="680" y="432" font-size="17" font-weight="400" fill="#c7bbae" text-anchor="start">기본 통신 차단 · 필요한 경로 허용</text>
+<text x="680" y="464" font-size="17" font-weight="400" fill="#c7bbae" text-anchor="start">비루트 실행 · 권한 제한</text>
+<text x="680" y="496" font-size="17" font-weight="400" fill="#c7bbae" text-anchor="start">CPU · 메모리 · 임시 디스크 제한</text>
+<rect x="30" y="552" width="940" height="75" rx="9" fill="#2b251e" stroke="#655442"/>
+<text x="500.0" y="584" font-size="22" font-weight="600" fill="#f4ede0" text-anchor="middle">생성 → 환경변수·비밀값 주입 → 접속 → 삭제 확인</text>
+<text x="500.0" y="613" font-size="17" font-weight="400" fill="#c7bbae" text-anchor="middle">준비 후 기동 CPU 원복 · 실제 자원 정리 뒤 스케줄러에 결과 전달</text>
+</g></svg>

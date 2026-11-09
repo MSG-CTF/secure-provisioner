@@ -6,10 +6,23 @@
 
 <h2 align="center">Overview</h2>
 
-<table align="center">
-<tr><th width="260">실행·격리</th><th width="260">접속</th><th width="260">정리·복구</th></tr>
-<tr><td align="center">K3s · 전용 VM · Windows</td><td align="center">환경변수·비밀값·Gateway</td><td align="center">자원 삭제·재시작 복구·CPU 원복</td></tr>
-</table>
+![K3s Linux와 Windows 실행 경로, 인스턴스별 격리 구조](docs/showcase/runtime-isolation.svg)
+
+| 실행 대상 | 구성 |
+| --- | --- |
+| **Linux x86_64 · ARM64** | 이미지와 노드 아키텍처를 맞춘 K3s 실행 |
+| **Dedicated VM** | 별도 네트워크·권한이 필요한 문제의 전용 VM 실행 |
+| **Windows** | Windows VM의 HTTPS executor로 EXE 전달·실행·결과 회수 |
+
+| K3s 격리 | 적용 내용 |
+| --- | --- |
+| **Namespace · NetworkPolicy** | 인스턴스별 공간 분리, 기본 통신 차단 후 DNS·공개 포트·승인된 내부 경로 허용 |
+| **SecurityContext · Resources** | 비루트·권한 제한, CPU·메모리·임시 디스크 제한 |
+| **Secret · Lifecycle** | 컨테이너별 비밀값 주입, 기동 CPU 원복, 생성 실패·종료 후 실제 자원 정리 |
+
+Windows는 K3s 컨테이너와 별도 경로이며, 실행 뒤 VM 초기화는 브로커가 담당합니다
+
+[K3s 격리 구현](internal/k3s/security_resources.go) · [네트워크 정책](internal/k3s/network_policies.go) · [Windows 실행](docs/windows-executor.md)
 
 <h2 align="center">Contributors</h2>
 
