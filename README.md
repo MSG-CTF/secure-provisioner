@@ -20,7 +20,7 @@
 | **SecurityContext · Resources** | 비루트·권한 제한, CPU·메모리·임시 디스크 제한 |
 | **Secret · Lifecycle** | 컨테이너별 비밀값 주입, 기동 CPU 원복, 생성 실패·종료 후 실제 자원 정리 |
 
-Windows는 K3s 컨테이너와 별도 경로이며, 실행 뒤 VM 초기화는 브로커가 담당합니다
+Windows는 K3s와 별도 실행 · 실행 후 VM 초기화는 브로커 담당
 
 [K3s 격리 구현](https://github.com/MSG-CTF/secure-provisioner/blob/dev/internal/k3s/security_resources.go) · [네트워크 정책](https://github.com/MSG-CTF/secure-provisioner/blob/dev/internal/k3s/network_policies.go) · [Windows 실행](https://github.com/MSG-CTF/secure-provisioner/blob/dev/docs/windows-executor.md)
 
