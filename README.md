@@ -1,6 +1,6 @@
 <div align="center">
 <h1>MSG CTF · Runtime</h1>
-<p>문제를 실행하고 네트워크 격리·비밀값 주입·접속·삭제를 처리하는 런타임</p>
+<p>문제 실행 · K3s 격리 · 비밀값 주입</p>
 <p><a href="https://msg-ctf.github.io/platform.html">플랫폼</a> · <a href="#development">개발 문서</a></p>
 </div>
 
